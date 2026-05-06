@@ -31,13 +31,14 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(CLI11 nlohmann_json cpp_httplib)
 
 set(KISEKI_CORE_SOURCES
+    src/core/config/config_model.cpp
     src/core/version.cpp
 )
 
 add_library(kiseki_core STATIC ${KISEKI_CORE_SOURCES})
 target_compile_features(kiseki_core PUBLIC cxx_std_20)
 target_include_directories(kiseki_core PUBLIC src)
-target_link_libraries(kiseki_core PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(kiseki_core PUBLIC nlohmann_json::nlohmann_json)
 set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(kiseki src/cli/main.cpp)
@@ -55,6 +56,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
     include(Catch)
 
     set(KISEKI_TEST_SOURCES
+        test/config/config_model_test.cpp
         test/smoke_test.cpp
     )
 
