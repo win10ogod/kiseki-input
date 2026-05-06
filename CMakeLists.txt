@@ -44,9 +44,17 @@ target_include_directories(kiseki_core PUBLIC src)
 target_link_libraries(kiseki_core PUBLIC nlohmann_json::nlohmann_json)
 set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 
+add_library(kiseki_cli STATIC
+    src/cli/app.cpp
+)
+target_compile_features(kiseki_cli PUBLIC cxx_std_20)
+target_include_directories(kiseki_cli PUBLIC src)
+target_link_libraries(kiseki_cli PUBLIC kiseki_core CLI11::CLI11)
+set_target_properties(kiseki_cli PROPERTIES CXX_EXTENSIONS OFF)
+
 add_executable(kiseki src/cli/main.cpp)
 target_compile_features(kiseki PRIVATE cxx_std_20)
-target_link_libraries(kiseki PRIVATE kiseki_core CLI11::CLI11)
+target_link_libraries(kiseki PRIVATE kiseki_cli)
 set_target_properties(kiseki PROPERTIES CXX_EXTENSIONS OFF)
 
 if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
@@ -60,6 +68,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
 
     set(KISEKI_TEST_SOURCES
         test/capabilities/capabilities_model_test.cpp
+        test/cli/cli_app_test.cpp
         test/config/config_model_test.cpp
         test/config/config_store_test.cpp
         test/config/config_validation_test.cpp
@@ -68,7 +77,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
 
     add_executable(kiseki_tests ${KISEKI_TEST_SOURCES})
     target_compile_features(kiseki_tests PRIVATE cxx_std_20)
-    target_link_libraries(kiseki_tests PRIVATE kiseki_core Catch2::Catch2WithMain)
+    target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core Catch2::Catch2WithMain)
     set_target_properties(kiseki_tests PROPERTIES CXX_EXTENSIONS OFF)
     catch_discover_tests(kiseki_tests)
 endif()

@@ -1,19 +1,16 @@
-#include <CLI/CLI.hpp>
-
 #include <iostream>
+#include <string>
+#include <vector>
 
-#include "core/version.hpp"
+#include "cli/app.hpp"
 
 int main(int argc, char** argv) {
-    CLI::App app{"Kiseki Input"};
-    app.set_version_flag("--version", std::string{kiseki::core::version()});
+    std::vector<std::string> args;
+    args.reserve(static_cast<std::size_t>(argc > 0 ? argc - 1 : 0));
 
-    try {
-        app.parse(argc, argv);
-    } catch (const CLI::ParseError& error) {
-        return app.exit(error);
+    for (int index = 1; index < argc; ++index) {
+        args.emplace_back(argv[index]);
     }
 
-    std::cout << "Kiseki Input " << kiseki::core::version() << '\n';
-    return 0;
+    return kiseki::cli::run(args, {}, kiseki::cli::Io{std::cout, std::cerr});
 }
