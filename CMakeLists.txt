@@ -31,6 +31,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(CLI11 nlohmann_json cpp_httplib)
 
 set(KISEKI_CORE_SOURCES
+    src/core/config/config_validation.cpp
     src/core/config/config_model.cpp
     src/core/version.cpp
 )
@@ -57,6 +58,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
 
     set(KISEKI_TEST_SOURCES
         test/config/config_model_test.cpp
+        test/config/config_validation_test.cpp
         test/smoke_test.cpp
     )
 
