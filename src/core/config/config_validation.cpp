@@ -73,7 +73,10 @@ ValidationResult validate_config(const AppConfig& config) {
         "MouClassInputInjection",
     };
     if (!one_of(config.input.windows_driver, windows_drivers)) {
-        add_issue(result, "input.windowsDriver", "windowsDriver is not supported");
+        add_issue(
+            result,
+            "input.windowsDriver",
+            "windowsDriver must be AnyDriver, SendInput, Logitech, LogitechGHubNew, Razer, DD, or MouClassInputInjection");
     }
 
     if (config.input.linux_driver != "uinput") {
