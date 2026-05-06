@@ -94,6 +94,18 @@ TEST_CASE("missing config values use defaults") {
 TEST_CASE("invalid unsigned integer config values throw") {
     require_invalid_config_message(
         nlohmann::json{
+            {"schemaVersion", 4294967297},
+        },
+        "Invalid config field 'schemaVersion': expected integer in range 0..4294967295");
+
+    require_invalid_config_message(
+        nlohmann::json{
+            {"schemaVersion", -1},
+        },
+        "Invalid config field 'schemaVersion': expected integer in range 0..4294967295");
+
+    require_invalid_config_message(
+        nlohmann::json{
             {"webui", {
                 {"port", 70000},
             }},

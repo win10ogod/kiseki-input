@@ -117,7 +117,7 @@ nlohmann::json to_json(const AppConfig& config) {
 AppConfig config_from_json(const nlohmann::json& json) {
     AppConfig config = default_config();
 
-    config.schema_version = json.value("schemaVersion", config.schema_version);
+    config.schema_version = read_unsigned_integer_field(json, "schemaVersion", "schemaVersion", config.schema_version);
 
     const auto webui = json.value("webui", nlohmann::json::object());
     config.webui.host = webui.value("host", config.webui.host);
