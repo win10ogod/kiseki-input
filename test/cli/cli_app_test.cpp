@@ -348,11 +348,13 @@ TEST_CASE("input commands call injected backend") {
     kiseki::cli::Dependencies dependencies;
     dependencies.input_key = [&](const kiseki::cli::InputKeyOptions& options, kiseki::cli::Io) {
         REQUIRE(options.key == "shift");
+        REQUIRE(options.backend == "auto");
         ++calls;
         return 0;
     };
     dependencies.input_combo = [&](const kiseki::cli::InputComboOptions& options, kiseki::cli::Io) {
         REQUIRE(options.keys == "ctrl+shift+esc");
+        REQUIRE(options.backend == "auto");
         ++calls;
         return 0;
     };
@@ -364,6 +366,10 @@ TEST_CASE("input commands call injected backend") {
     dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions& options, kiseki::cli::Io) {
         REQUIRE(options.dx == 0);
         REQUIRE(options.dy == 0);
+        REQUIRE(options.x == 0);
+        REQUIRE(options.y == 0);
+        REQUIRE(options.absolute == false);
+        REQUIRE(options.backend == "auto");
         REQUIRE(options.click == "none");
         ++calls;
         return 0;
@@ -375,6 +381,144 @@ TEST_CASE("input commands call injected backend") {
     REQUIRE(kiseki::cli::run({"input", "mouse", "--dx", "0", "--dy", "0"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(calls == 4);
     REQUIRE(err.str().empty());
+}
+
+TEST_CASE("input mouse command supports absolute coordinates and button transitions") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.dx == 0);
+        REQUIRE(options.dy == 0);
+        REQUIRE(options.x == 640);
+        REQUIRE(options.y == 360);
+        REQUIRE(options.absolute == true);
+        REQUIRE(options.backend == "auto");
+        REQUIRE(options.click == "left-down");
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"input", "mouse", "--x", "640", "--y", "360", "--click", "left-down"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("input combo command accepts explicit backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_combo = [&](const kiseki::cli::InputComboOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.keys == "win+r");
+        REQUIRE(options.backend == "system");
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"input", "combo", "--keys", "win+r", "--backend", "system"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("input drag command passes path and backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto points_path = temp.file("points.txt");
+    write_text(points_path, "10 20\n30 40\n");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_drag = [&](const kiseki::cli::InputDragOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.path == points_path);
+        REQUIRE(options.backend == "system");
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"input", "drag", "--file", points_path.string(), "--backend", "system"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("input mouse command requires complete absolute coordinates") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions&, kiseki::cli::Io) {
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"input", "mouse", "--x", "640"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 2);
+    REQUIRE_FALSE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().find("requires both --x and --y") != std::string::npos);
+}
+
+TEST_CASE("input mouse command requires coordinates when absolute flag is present") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions&, kiseki::cli::Io) {
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"input", "mouse", "--absolute"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 2);
+    REQUIRE_FALSE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().find("requires both --x and --y") != std::string::npos);
 }
 
 TEST_CASE("input text command reads utf8 text from file") {

@@ -32,10 +32,12 @@ struct ScreenshotBurstOptions {
 
 struct InputKeyOptions {
     std::string key;
+    std::string backend;
 };
 
 struct InputComboOptions {
     std::string keys;
+    std::string backend;
 };
 
 struct InputTextOptions {
@@ -46,7 +48,16 @@ struct InputTextOptions {
 struct InputMouseOptions {
     int dx;
     int dy;
+    int x;
+    int y;
+    bool absolute;
+    std::string backend;
     std::string click;
+};
+
+struct InputDragOptions {
+    std::filesystem::path path;
+    std::string backend;
 };
 
 struct DaemonOptions {
@@ -61,6 +72,7 @@ struct Dependencies {
     std::function<int(const InputComboOptions&, Io)> input_combo;
     std::function<int(const InputTextOptions&, Io)> input_text;
     std::function<int(const InputMouseOptions&, Io)> input_mouse;
+    std::function<int(const InputDragOptions&, Io)> input_drag;
     std::function<int(const DaemonOptions&, const std::filesystem::path&, Io)> run_daemon;
 };
 

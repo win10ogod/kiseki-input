@@ -87,6 +87,35 @@ std::string read_text_file(const std::filesystem::path& path) {
     return stream.str();
 }
 
+std::vector<kiseki::platform::input::MousePoint> read_mouse_points_file(const std::filesystem::path& path) {
+    std::ifstream file{path};
+    if (!file) {
+        throw std::runtime_error{"failed to open mouse path file: " + path.string()};
+    }
+
+    std::vector<kiseki::platform::input::MousePoint> points;
+    std::string line;
+    int line_number = 0;
+    while (std::getline(file, line)) {
+        ++line_number;
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        std::istringstream stream{line};
+        int x = 0;
+        int y = 0;
+        if (!(stream >> x >> y)) {
+            throw std::runtime_error{"invalid mouse path line " + std::to_string(line_number) + ": " + line};
+        }
+        points.push_back(kiseki::platform::input::MousePoint{.x = x, .y = y});
+    }
+
+    if (points.size() < 2) {
+        throw std::runtime_error{"mouse path file requires at least two points"};
+    }
+    return points;
+}
+
 }
 
 Dependencies default_dependencies() {
@@ -111,10 +140,10 @@ Dependencies default_dependencies() {
                 io);
         },
         .input_key = [](const InputKeyOptions& options, Io io) {
-            return print_operation_result(kiseki::platform::input::tap_key(options.key), io);
+            return print_operation_result(kiseki::platform::input::tap_key(options.key, options.backend), io);
         },
         .input_combo = [](const InputComboOptions& options, Io io) {
-            return print_operation_result(kiseki::platform::input::key_combo(options.keys), io);
+            return print_operation_result(kiseki::platform::input::key_combo(options.keys, options.backend), io);
         },
         .input_text = [](const InputTextOptions& options, Io io) {
             return print_operation_result(kiseki::platform::input::type_text(options.text), io);
@@ -124,9 +153,23 @@ Dependencies default_dependencies() {
                 kiseki::platform::input::mouse_action(kiseki::platform::input::MouseOptions{
                     .dx = options.dx,
                     .dy = options.dy,
+                    .x = options.x,
+                    .y = options.y,
+                    .absolute = options.absolute,
+                    .backend = options.backend,
                     .click = options.click,
                 }),
                 io);
+        },
+        .input_drag = [](const InputDragOptions& options, Io io) {
+            try {
+                return print_operation_result(
+                    kiseki::platform::input::mouse_drag_absolute(read_mouse_points_file(options.path), options.backend),
+                    io);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                return 2;
+            }
         },
         .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
             return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
@@ -170,9 +213,11 @@ int run(
     };
     InputKeyOptions key_options{
         .key = "",
+        .backend = "auto",
     };
     InputComboOptions combo_options{
         .keys = "",
+        .backend = "auto",
     };
     InputTextOptions text_options{
         .text = "",
@@ -181,7 +226,15 @@ int run(
     InputMouseOptions mouse_options{
         .dx = 0,
         .dy = 0,
+        .x = 0,
+        .y = 0,
+        .absolute = false,
+        .backend = "auto",
         .click = "none",
+    };
+    InputDragOptions drag_options{
+        .path = {},
+        .backend = "auto",
     };
     DaemonOptions daemon_options{
         .once = false,
@@ -280,6 +333,7 @@ int run(
     input->require_subcommand(1);
     auto* input_key = input->add_subcommand("key", "Tap a key");
     input_key->add_option("--key", key_options.key, "Key name")->required();
+    input_key->add_option("--backend", key_options.backend, "auto, driver, or system");
     input_key->callback([&]() {
         if (!dependencies.input_key) {
             io.err << "input backend is not configured\n";
@@ -291,6 +345,7 @@ int run(
 
     auto* input_combo = input->add_subcommand("combo", "Press a key combo such as win+r");
     input_combo->add_option("--keys", combo_options.keys, "Key combo joined by +")->required();
+    input_combo->add_option("--backend", combo_options.backend, "auto, driver, or system");
     input_combo->callback([&]() {
         if (!dependencies.input_combo) {
             io.err << "input backend is not configured\n";
@@ -329,14 +384,45 @@ int run(
     auto* input_mouse = input->add_subcommand("mouse", "Move and optionally click the mouse");
     input_mouse->add_option("--dx", mouse_options.dx, "Relative X movement");
     input_mouse->add_option("--dy", mouse_options.dy, "Relative Y movement");
-    input_mouse->add_option("--click", mouse_options.click, "none, left, right, or middle");
+    auto* mouse_x = input_mouse->add_option("--x", mouse_options.x, "Absolute virtual-screen X position");
+    auto* mouse_y = input_mouse->add_option("--y", mouse_options.y, "Absolute virtual-screen Y position");
+    input_mouse->add_flag("--absolute", mouse_options.absolute, "Use --x/--y as absolute virtual-screen coordinates");
+    input_mouse->add_option("--backend", mouse_options.backend, "auto, driver, or system");
+    input_mouse->add_option("--click", mouse_options.click, "none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
     input_mouse->callback([&]() {
         if (!dependencies.input_mouse) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
             return;
         }
+        const bool has_x = mouse_x->count() > 0;
+        const bool has_y = mouse_y->count() > 0;
+        if (has_x != has_y) {
+            io.err << "absolute mouse movement requires both --x and --y\n";
+            exit_code = 2;
+            return;
+        }
+        if (mouse_options.absolute && !(has_x && has_y)) {
+            io.err << "absolute mouse movement requires both --x and --y\n";
+            exit_code = 2;
+            return;
+        }
+        if (has_x && has_y) {
+            mouse_options.absolute = true;
+        }
         exit_code = dependencies.input_mouse(mouse_options, io);
+    });
+
+    auto* input_drag = input->add_subcommand("drag", "Drag the left mouse button through absolute points from a text file");
+    input_drag->add_option("--file", drag_options.path, "Mouse path file: one 'x y' point per line")->required();
+    input_drag->add_option("--backend", drag_options.backend, "auto, driver, or system");
+    input_drag->callback([&]() {
+        if (!dependencies.input_drag) {
+            io.err << "input drag backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.input_drag(drag_options, io);
     });
 
     auto* daemon = app.add_subcommand("daemon", "Background daemon commands");

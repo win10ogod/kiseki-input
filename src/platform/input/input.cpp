@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -69,6 +70,29 @@ std::vector<std::string> split_keys(std::string_view keys) {
     return result;
 }
 
+bool supported_mouse_click(const std::string& click) {
+    return click == "none" ||
+           click == "left" ||
+           click == "right" ||
+           click == "middle" ||
+           click == "left-down" ||
+           click == "left-up" ||
+           click == "right-down" ||
+           click == "right-up" ||
+           click == "middle-down" ||
+           click == "middle-up";
+}
+
+bool supported_backend(const std::string& backend) {
+    return backend == "auto" || backend == "driver" || backend == "system";
+}
+
+bool combo_contains_system_hotkey(const std::vector<std::string>& keys) {
+    return std::find(keys.begin(), keys.end(), "win") != keys.end() ||
+           std::find(keys.begin(), keys.end(), "super") != keys.end() ||
+           std::find(keys.begin(), keys.end(), "meta") != keys.end();
+}
+
 #ifdef _WIN32
 
 using IbSendInitFn = unsigned long(__stdcall*)(unsigned long, unsigned long, void*);
@@ -122,9 +146,9 @@ public:
         return key_up_ != nullptr && key_up_(vk);
     }
 
-    bool mouse_move(int dx, int dy) const {
+    bool mouse_move(int x, int y, unsigned int mode) const {
         return mouse_move_ != nullptr &&
-               mouse_move_(static_cast<unsigned int>(dx), static_cast<unsigned int>(dy), 1);
+               mouse_move_(static_cast<unsigned int>(x), static_cast<unsigned int>(y), mode);
     }
 
     bool mouse_click(unsigned int button) const {
@@ -233,6 +257,52 @@ bool send_unicode_code_unit(wchar_t c) {
     inputs[1] = inputs[0];
     inputs[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
     return SendInput(2, inputs, sizeof(INPUT)) == 2;
+}
+
+int normalized_absolute_coordinate(int value, int origin, int size) {
+    if (size <= 1) {
+        return 0;
+    }
+    const int clamped = std::clamp(value, origin, origin + size - 1);
+    const long long relative = static_cast<long long>(clamped - origin) * 65535LL;
+    return static_cast<int>(relative / static_cast<long long>(size - 1));
+}
+
+std::pair<int, int> normalized_absolute_position(int x, int y) {
+    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    return {
+        normalized_absolute_coordinate(x, left, width),
+        normalized_absolute_coordinate(y, top, height),
+    };
+}
+
+unsigned int ib_mouse_button_for_click(const std::string& click) {
+    if (click == "left") return 0x06;
+    if (click == "right") return 0x18;
+    if (click == "middle") return 0x60;
+    if (click == "left-down") return 0x02;
+    if (click == "left-up") return 0x04;
+    if (click == "right-down") return 0x08;
+    if (click == "right-up") return 0x10;
+    if (click == "middle-down") return 0x20;
+    if (click == "middle-up") return 0x40;
+    return 0;
+}
+
+DWORD sendinput_mouse_flags_for_click(const std::string& click) {
+    if (click == "left") return MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP;
+    if (click == "right") return MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_RIGHTUP;
+    if (click == "middle") return MOUSEEVENTF_MIDDLEDOWN | MOUSEEVENTF_MIDDLEUP;
+    if (click == "left-down") return MOUSEEVENTF_LEFTDOWN;
+    if (click == "left-up") return MOUSEEVENTF_LEFTUP;
+    if (click == "right-down") return MOUSEEVENTF_RIGHTDOWN;
+    if (click == "right-up") return MOUSEEVENTF_RIGHTUP;
+    if (click == "middle-down") return MOUSEEVENTF_MIDDLEDOWN;
+    if (click == "middle-up") return MOUSEEVENTF_MIDDLEUP;
+    return 0;
 }
 
 #else
@@ -371,17 +441,24 @@ bool driver_input_available() {
 #endif
 }
 
-OperationResult tap_key(const std::string& key) {
-    return key_combo(key);
+OperationResult tap_key(const std::string& key, const std::string& backend) {
+    return key_combo(key, backend);
 }
 
-OperationResult key_combo(const std::string& keys) {
+OperationResult key_combo(const std::string& keys, const std::string& backend) {
     const auto key_list = split_keys(keys);
     if (key_list.empty()) {
         return fail("no key specified");
     }
+    const std::string selected_backend = lower_copy(backend.empty() ? "auto" : backend);
+    if (!supported_backend(selected_backend)) {
+        return fail("backend must be auto, driver, or system");
+    }
 
 #ifdef _WIN32
+    if (selected_backend == "system" || (selected_backend == "auto" && combo_contains_system_hotkey(key_list))) {
+        return send_combo_with_sendinput(key_list);
+    }
     IbInputSimulator simulator;
     if (simulator.available()) {
         std::vector<unsigned short> vks;
@@ -404,9 +481,15 @@ OperationResult key_combo(const std::string& keys) {
         }
         return ok("input sent through IbInputSimulator");
     }
+    if (selected_backend == "driver") {
+        return fail("IbInputSimulator is not available");
+    }
     return send_combo_with_sendinput(key_list);
 #else
 #ifdef KISEKI_HAS_X11
+    if (selected_backend == "driver") {
+        return fail("Linux driver backend is not available; system X11/XTest input is available when DISPLAY permits it");
+    }
     return send_combo_with_xtest(key_list);
 #else
     return fail("Linux X11/XTest input support was not compiled in");
@@ -442,31 +525,136 @@ OperationResult type_text(const std::string& text) {
 #endif
 }
 
-OperationResult mouse_action(const MouseOptions& options) {
-    const std::string click = lower_copy(options.click);
-    if (!(click == "none" || click == "left" || click == "right" || click == "middle")) {
-        return fail("click must be none, left, right, or middle");
+OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const std::string& backend) {
+    if (points.size() < 2) {
+        return fail("mouse drag requires at least two points");
+    }
+    const std::string selected_backend = lower_copy(backend.empty() ? "auto" : backend);
+    if (!supported_backend(selected_backend)) {
+        return fail("backend must be auto, driver, or system");
     }
 
 #ifdef _WIN32
-    IbInputSimulator simulator;
-    if (simulator.available()) {
-        if ((options.dx != 0 || options.dy != 0) && !simulator.mouse_move(options.dx, options.dy)) {
-            return fail("IbInputSimulator mouse move failed");
+    if (selected_backend != "system") {
+        IbInputSimulator simulator;
+        if (!simulator.available() && selected_backend == "driver") {
+            return fail("IbInputSimulator is not available");
         }
-        if (click != "none") {
-            unsigned int button = 0x06;
-            if (click == "right") button = 0x18;
-            if (click == "middle") button = 0x60;
-            if (!simulator.mouse_click(button)) {
-                return fail("IbInputSimulator mouse click failed");
+        if (simulator.available()) {
+            const auto first = normalized_absolute_position(points.front().x, points.front().y);
+            if (!simulator.mouse_move(first.first, first.second, 0) || !simulator.mouse_click(0x02)) {
+                return fail("IbInputSimulator drag start failed");
             }
+            for (const auto& point : points) {
+                const auto [x, y] = normalized_absolute_position(point.x, point.y);
+                if (!simulator.mouse_move(x, y, 0)) {
+                    simulator.mouse_click(0x04);
+                    return fail("IbInputSimulator drag move failed");
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            if (!simulator.mouse_click(0x04)) {
+                return fail("IbInputSimulator drag release failed");
+            }
+            return ok("mouse drag sent through IbInputSimulator");
         }
-        return ok("mouse input sent through IbInputSimulator");
+    }
+
+    const auto send_absolute_move = [](int x, int y) {
+        const auto [nx, ny] = normalized_absolute_position(x, y);
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dx = nx;
+        input.mi.dy = ny;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    };
+    const auto send_button = [](DWORD flags) {
+        INPUT input{};
+        input.type = INPUT_MOUSE;
+        input.mi.dwFlags = flags;
+        return SendInput(1, &input, sizeof(INPUT)) == 1;
+    };
+
+    if (!send_absolute_move(points.front().x, points.front().y) || !send_button(MOUSEEVENTF_LEFTDOWN)) {
+        return fail("SendInput drag start failed");
+    }
+    for (const auto& point : points) {
+        if (!send_absolute_move(point.x, point.y)) {
+            send_button(MOUSEEVENTF_LEFTUP);
+            return fail("SendInput drag move failed");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!send_button(MOUSEEVENTF_LEFTUP)) {
+        return fail("SendInput drag release failed");
+    }
+    return ok("mouse drag sent");
+#else
+#ifdef KISEKI_HAS_X11
+    if (selected_backend == "driver") {
+        return fail("Linux driver backend is not available; system X11/XTest input is available when DISPLAY permits it");
+    }
+    return with_display([&](Display* display, const XTestApi& xtest) {
+        XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, points.front().x, points.front().y);
+        xtest.fake_button(display, 1, True, CurrentTime);
+        for (const auto& point : points) {
+            XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, point.x, point.y);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        xtest.fake_button(display, 1, False, CurrentTime);
+        return ok("mouse drag sent");
+    });
+#else
+    return fail("Linux X11/XTest input support was not compiled in");
+#endif
+#endif
+}
+
+OperationResult mouse_action(const MouseOptions& options) {
+    const std::string click = lower_copy(options.click);
+    if (!supported_mouse_click(click)) {
+        return fail("click must be none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    }
+    const std::string selected_backend = lower_copy(options.backend.empty() ? "auto" : options.backend);
+    if (!supported_backend(selected_backend)) {
+        return fail("backend must be auto, driver, or system");
+    }
+
+#ifdef _WIN32
+    if (selected_backend != "system") {
+        IbInputSimulator simulator;
+        if (!simulator.available() && selected_backend == "driver") {
+            return fail("IbInputSimulator is not available");
+        }
+        if (simulator.available()) {
+            if (options.absolute) {
+                const auto [x, y] = normalized_absolute_position(options.x, options.y);
+                if (!simulator.mouse_move(x, y, 0)) {
+                    return fail("IbInputSimulator mouse absolute move failed");
+                }
+            } else if ((options.dx != 0 || options.dy != 0) && !simulator.mouse_move(options.dx, options.dy, 1)) {
+                return fail("IbInputSimulator mouse relative move failed");
+            }
+            if (click != "none") {
+                if (!simulator.mouse_click(ib_mouse_button_for_click(click))) {
+                    return fail("IbInputSimulator mouse click failed");
+                }
+            }
+            return ok("mouse input sent through IbInputSimulator");
+        }
     }
 
     std::vector<INPUT> inputs;
-    if (options.dx != 0 || options.dy != 0) {
+    if (options.absolute) {
+        const auto [x, y] = normalized_absolute_position(options.x, options.y);
+        INPUT move{};
+        move.type = INPUT_MOUSE;
+        move.mi.dx = x;
+        move.mi.dy = y;
+        move.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        inputs.push_back(move);
+    } else if (options.dx != 0 || options.dy != 0) {
         INPUT move{};
         move.type = INPUT_MOUSE;
         move.mi.dx = options.dx;
@@ -475,23 +663,19 @@ OperationResult mouse_action(const MouseOptions& options) {
         inputs.push_back(move);
     }
     if (click != "none") {
-        DWORD down = MOUSEEVENTF_LEFTDOWN;
-        DWORD up = MOUSEEVENTF_LEFTUP;
-        if (click == "right") {
-            down = MOUSEEVENTF_RIGHTDOWN;
-            up = MOUSEEVENTF_RIGHTUP;
-        } else if (click == "middle") {
-            down = MOUSEEVENTF_MIDDLEDOWN;
-            up = MOUSEEVENTF_MIDDLEUP;
+        const DWORD flags = sendinput_mouse_flags_for_click(click);
+        if ((flags & MOUSEEVENTF_LEFTDOWN) != 0 || (flags & MOUSEEVENTF_RIGHTDOWN) != 0 || (flags & MOUSEEVENTF_MIDDLEDOWN) != 0) {
+            INPUT down_input{};
+            down_input.type = INPUT_MOUSE;
+            down_input.mi.dwFlags = flags & (MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_MIDDLEDOWN);
+            inputs.push_back(down_input);
         }
-        INPUT down_input{};
-        down_input.type = INPUT_MOUSE;
-        down_input.mi.dwFlags = down;
-        INPUT up_input{};
-        up_input.type = INPUT_MOUSE;
-        up_input.mi.dwFlags = up;
-        inputs.push_back(down_input);
-        inputs.push_back(up_input);
+        if ((flags & MOUSEEVENTF_LEFTUP) != 0 || (flags & MOUSEEVENTF_RIGHTUP) != 0 || (flags & MOUSEEVENTF_MIDDLEUP) != 0) {
+            INPUT up_input{};
+            up_input.type = INPUT_MOUSE;
+            up_input.mi.dwFlags = flags & (MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP);
+            inputs.push_back(up_input);
+        }
     }
     if (inputs.empty()) {
         return ok("mouse input empty");
@@ -502,16 +686,25 @@ OperationResult mouse_action(const MouseOptions& options) {
     return ok("mouse input sent");
 #else
 #ifdef KISEKI_HAS_X11
+    if (selected_backend == "driver") {
+        return fail("Linux driver backend is not available; system X11/XTest input is available when DISPLAY permits it");
+    }
     return with_display([&](Display* display, const XTestApi& xtest) {
-        if (options.dx != 0 || options.dy != 0) {
+        if (options.absolute) {
+            XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, options.x, options.y);
+        } else if (options.dx != 0 || options.dy != 0) {
             xtest.fake_motion(display, options.dx, options.dy, CurrentTime);
         }
         if (click != "none") {
             unsigned int button = 1;
-            if (click == "right") button = 3;
-            if (click == "middle") button = 2;
-            xtest.fake_button(display, button, True, CurrentTime);
-            xtest.fake_button(display, button, False, CurrentTime);
+            if (click.find("right") == 0) button = 3;
+            if (click.find("middle") == 0) button = 2;
+            if (click == "left" || click == "right" || click == "middle" || click.ends_with("-down")) {
+                xtest.fake_button(display, button, True, CurrentTime);
+            }
+            if (click == "left" || click == "right" || click == "middle" || click.ends_with("-up")) {
+                xtest.fake_button(display, button, False, CurrentTime);
+            }
         }
         return ok("mouse input sent");
     });
