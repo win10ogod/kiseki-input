@@ -70,7 +70,7 @@ std::string_view index_html() {
           <label>Burst frames <input name="screenshot.burstFrames" type="number" min="1" max="240"></label>
           <label>Format
             <select name="screenshot.format">
-              <option>png</option>
+              <option>bmp</option>
             </select>
           </label>
         </section>

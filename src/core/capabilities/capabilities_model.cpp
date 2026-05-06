@@ -6,6 +6,7 @@ CapabilityMatrix foundation_capabilities() {
     return CapabilityMatrix{
         .input = InputCapabilities{
             .driver = false,
+            .system = false,
             .background_window = false,
         },
         .capture = CaptureCapabilities{
@@ -26,6 +27,7 @@ nlohmann::json to_json(const CapabilityMatrix& capabilities) {
     return nlohmann::json{
         {"input", {
             {"driver", capabilities.input.driver},
+            {"system", capabilities.input.system},
             {"backgroundWindow", capabilities.input.background_window},
         }},
         {"capture", {

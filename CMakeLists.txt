@@ -30,6 +30,10 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(CLI11 nlohmann_json cpp_httplib)
 
+if(NOT WIN32)
+    find_package(X11)
+endif()
+
 set(KISEKI_CORE_SOURCES
     src/core/capabilities/capabilities_model.cpp
     src/core/config/config_store.cpp
@@ -43,6 +47,24 @@ target_compile_features(kiseki_core PUBLIC cxx_std_20)
 target_include_directories(kiseki_core PUBLIC src)
 target_link_libraries(kiseki_core PUBLIC nlohmann_json::nlohmann_json)
 set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
+
+add_library(kiseki_platform STATIC
+    src/platform/capture/bitmap_writer.cpp
+    src/platform/capture/screenshot.cpp
+    src/platform/input/input.cpp
+    src/platform/notification/notification.cpp
+    src/platform/runtime_capabilities.cpp
+)
+target_compile_features(kiseki_platform PUBLIC cxx_std_20)
+target_include_directories(kiseki_platform PUBLIC src)
+target_link_libraries(kiseki_platform PUBLIC kiseki_core)
+if(WIN32)
+    target_link_libraries(kiseki_platform PRIVATE user32 gdi32)
+elseif(X11_FOUND)
+    target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_X11=1)
+    target_link_libraries(kiseki_platform PRIVATE X11::X11 ${CMAKE_DL_LIBS})
+endif()
+set_target_properties(kiseki_platform PROPERTIES CXX_EXTENSIONS OFF)
 
 add_library(kiseki_webui STATIC
     src/webui/config_api.cpp
@@ -59,7 +81,7 @@ add_library(kiseki_cli STATIC
 )
 target_compile_features(kiseki_cli PUBLIC cxx_std_20)
 target_include_directories(kiseki_cli PUBLIC src)
-target_link_libraries(kiseki_cli PRIVATE kiseki_core kiseki_webui CLI11::CLI11)
+target_link_libraries(kiseki_cli PRIVATE kiseki_core kiseki_platform kiseki_webui CLI11::CLI11)
 set_target_properties(kiseki_cli PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(kiseki src/cli/main.cpp)
@@ -89,7 +111,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
 
     add_executable(kiseki_tests ${KISEKI_TEST_SOURCES})
     target_compile_features(kiseki_tests PRIVATE cxx_std_20)
-    target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core kiseki_webui Catch2::Catch2WithMain)
+    target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core kiseki_platform kiseki_webui Catch2::Catch2WithMain)
     set_target_properties(kiseki_tests PROPERTIES CXX_EXTENSIONS OFF)
     catch_discover_tests(kiseki_tests)
 endif()

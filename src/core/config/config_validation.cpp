@@ -91,9 +91,9 @@ ValidationResult validate_config(const AppConfig& config) {
         add_issue(result, "screenshot.burstFrames", "burstFrames must be between 1 and 240");
     }
 
-    constexpr std::array<std::string_view, 1> formats{"png"};
+    constexpr std::array<std::string_view, 1> formats{"bmp"};
     if (!one_of(config.screenshot.format, formats)) {
-        add_issue(result, "screenshot.format", "format must be png");
+        add_issue(result, "screenshot.format", "format must be bmp");
     }
 
     return result;

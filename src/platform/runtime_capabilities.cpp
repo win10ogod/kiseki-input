@@ -1,0 +1,34 @@
+#include "platform/runtime_capabilities.hpp"
+
+#include "platform/capture/screenshot.hpp"
+#include "platform/input/input.hpp"
+
+namespace kiseki::platform {
+
+kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
+    auto capabilities = kiseki::core::capabilities::foundation_capabilities();
+    capabilities.input.driver = input::driver_input_available();
+    capabilities.input.system = input::system_input_available();
+    capabilities.capture.desktop = capture::desktop_capture_available();
+    capabilities.capture.burst = capabilities.capture.desktop;
+    capabilities.limitations = {
+        "WebUI is configuration-only; operational input, screenshot, notification, and daemon actions are CLI-only",
+        "background-window input is not guaranteed for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games",
+    };
+    if (!capabilities.input.driver) {
+#ifdef _WIN32
+        capabilities.limitations.push_back("Windows driver input requires IbInputSimulator.dll next to the executable; otherwise system input is used when available");
+#else
+        capabilities.limitations.push_back("Linux driver-level input is not enabled; X11/XTest system input is used when available");
+#endif
+    }
+    if (!capabilities.input.system) {
+        capabilities.limitations.push_back("system input backend is unavailable on this platform/session");
+    }
+    if (!capabilities.capture.desktop) {
+        capabilities.limitations.push_back("desktop screenshot backend is unavailable on this platform/session");
+    }
+    return capabilities;
+}
+
+}

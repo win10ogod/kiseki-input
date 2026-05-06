@@ -73,7 +73,7 @@ AppConfig default_config() {
             .default_output_directory = "",
             .burst_fps = 60,
             .burst_frames = 8,
-            .format = "png",
+            .format = "bmp",
         },
         .safety = SafetyConfig{
             .allow_driver_input_without_target = true,

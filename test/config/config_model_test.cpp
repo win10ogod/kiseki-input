@@ -40,7 +40,7 @@ TEST_CASE("default config matches schema version one") {
     REQUIRE(config.screenshot.default_output_directory == "");
     REQUIRE(config.screenshot.burst_fps == 60);
     REQUIRE(config.screenshot.burst_frames == 8);
-    REQUIRE(config.screenshot.format == "png");
+    REQUIRE(config.screenshot.format == "bmp");
     REQUIRE(config.safety.allow_driver_input_without_target);
     REQUIRE(config.safety.allow_background_input_for_games);
 }

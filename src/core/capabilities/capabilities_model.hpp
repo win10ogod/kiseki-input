@@ -9,6 +9,7 @@ namespace kiseki::core::capabilities {
 
 struct InputCapabilities {
     bool driver = false;
+    bool system = false;
     bool background_window = false;
 };
 

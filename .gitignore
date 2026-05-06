@@ -1,2 +1,4 @@
 .worktrees/
 build/
+build-wsl/
+artifacts/
