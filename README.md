@@ -71,7 +71,7 @@ Supported macro step types: `key`, `combo`, `text`, `mouse`, `drag`, `screenshot
 
 ## Platform Notes
 
-Windows screenshots and system input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `F:\輝色臻至\原始參考\IbInputSimulator`.
+Windows screenshots and system input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `IbInputSimulator`.
 
 WSL/Linux input was tested through X11/XTest. In the current WSLg session, X11 root screenshot capture is blocked by the compositor, so the Linux binary reports desktop screenshot unavailable instead of crashing. The same Linux code works on X11 sessions that permit `XGetImage` on the root window.
 
