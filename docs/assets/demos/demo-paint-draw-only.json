@@ -1,0 +1,9 @@
+{
+  "name": "demo-paint-draw-only",
+  "steps": [
+    {"type": "mouse", "x": 930, "y": 335, "backend": "system"},
+    {"type": "drag", "file": "docs/assets/demos/paint-heart-points-right.txt", "backend": "system"},
+    {"type": "sleep", "ms": 250},
+    {"type": "screenshot", "output": "artifacts/live-test/demos/demo-paint-draw-only.bmp"}
+  ]
+}

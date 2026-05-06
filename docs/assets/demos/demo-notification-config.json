@@ -1,0 +1,8 @@
+{
+  "heartbeat": {
+    "enabled": true,
+    "intervalSeconds": 1,
+    "notificationEnabled": true,
+    "message": "Kiseki demo finished. Thanks for watching."
+  }
+}

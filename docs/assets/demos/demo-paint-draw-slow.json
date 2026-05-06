@@ -1,0 +1,29 @@
+{
+  "name": "demo-paint-draw-slow",
+  "steps": [
+    {"type": "mouse", "x": 930, "y": 335, "backend": "system"},
+    {"type": "mouse", "x": 930, "y": 335, "click": "left-down", "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 900, "y": 305, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 860, "y": 320, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 858, "y": 365, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 895, "y": 400, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 930, "y": 430, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 965, "y": 400, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 1002, "y": 365, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 1000, "y": 320, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 960, "y": 305, "backend": "system"},
+    {"type": "sleep", "ms": 80},
+    {"type": "mouse", "x": 930, "y": 335, "click": "left-up", "backend": "system"},
+    {"type": "sleep", "ms": 250},
+    {"type": "screenshot", "output": "artifacts/live-test/demos/demo-paint-draw-slow.bmp"}
+  ]
+}

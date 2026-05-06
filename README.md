@@ -2,6 +2,14 @@
 
 Kiseki Input is a cross-platform C++ CLI tool for configuration-first input and screenshot automation workflows.
 
+## Demos
+
+These GIFs were recorded from the Windows build with the CLI and macro runner. They are cropped to the actual target window or dialog.
+
+| Macro input in Notepad | Mouse macro in Paint | Heartbeat notification |
+| --- | --- | --- |
+| ![Kiseki CLI typing text into Notepad](docs/assets/demos/notepad-unicode.gif) | ![Kiseki CLI drawing a heart in Paint](docs/assets/demos/paint-macro.gif) | ![Kiseki heartbeat notification](docs/assets/demos/heartbeat-notification.gif) |
+
 ## Current Build
 
 This build includes:
@@ -84,3 +92,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 When building with a multi-config generator, the executable is usually under `build/Debug/kiseki.exe` on Windows.
+
+## Credits
+
+Special thanks to [Chaoses-Ib/IbInputSimulator](https://github.com/Chaoses-Ib/IbInputSimulator). Kiseki Input's Windows driver backend is designed around `IbInputSimulator.dll` from that project.
+
+Thanks to Codex and GPT-5.5 for implementation assistance, live Windows testing, macro verification, and demo production.

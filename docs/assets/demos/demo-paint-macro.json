@@ -1,0 +1,16 @@
+{
+  "name": "demo-paint-macro",
+  "steps": [
+    {"type": "combo", "keys": "win+r", "backend": "system"},
+    {"type": "sleep", "ms": 250},
+    {"type": "text", "text": "mspaint.exe"},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "sleep", "ms": 1400},
+    {"type": "combo", "keys": "win+up", "backend": "system"},
+    {"type": "sleep", "ms": 300},
+    {"type": "mouse", "x": 740, "y": 335, "backend": "system"},
+    {"type": "drag", "file": "docs/assets/demos/paint-heart-points.txt", "backend": "system"},
+    {"type": "sleep", "ms": 250},
+    {"type": "screenshot", "output": "artifacts/live-test/demos/demo-paint-macro.bmp"}
+  ]
+}

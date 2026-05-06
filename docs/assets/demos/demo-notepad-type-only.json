@@ -1,0 +1,14 @@
+{
+  "name": "demo-notepad-type-only",
+  "steps": [
+    {"type": "combo", "keys": "ctrl+a", "backend": "system"},
+    {"type": "key", "key": "backspace", "backend": "system"},
+    {"type": "text", "text": "Kiseki Input demo"},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "text", "text": "WSADFGHJKL, 你好"},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "text", "text": "Macro + screenshot + notification"},
+    {"type": "sleep", "ms": 300},
+    {"type": "screenshot", "output": "artifacts/live-test/demos/demo-notepad-type-only.bmp"}
+  ]
+}
