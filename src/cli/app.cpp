@@ -46,6 +46,10 @@ int validate_config_command(const std::filesystem::path& config_path, Io io) {
     return 0;
 }
 
+const char* availability(bool available) {
+    return available ? "available" : "unavailable";
+}
+
 }
 
 std::filesystem::path resolve_config_path(std::filesystem::path override_path) {
@@ -91,6 +95,17 @@ int run(const std::vector<std::string>& args, std::filesystem::path config_path,
             io.out << "Config: valid\n";
         } else {
             io.out << "Config: invalid: " << result.error << '\n';
+        }
+
+        const auto capabilities = foundation_capabilities();
+        io.out << "Capabilities:\n";
+        io.out << "  Input driver backend: " << availability(capabilities.input.driver) << '\n';
+        io.out << "  Background-window input: " << availability(capabilities.input.background_window) << '\n';
+        io.out << "  Screenshot burst: " << availability(capabilities.capture.burst) << '\n';
+
+        io.out << "Limitations:\n";
+        for (const auto& limitation : capabilities.limitations) {
+            io.out << "  - " << limitation << '\n';
         }
     });
 

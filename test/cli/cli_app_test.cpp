@@ -10,6 +10,8 @@
 #include <string_view>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "cli/app.hpp"
 
 namespace {
@@ -131,14 +133,16 @@ TEST_CASE("capabilities prints foundation capability json") {
     const auto path = temp.file("config.json");
 
     const auto result = run_cli({"capabilities"}, path);
+    const auto json = nlohmann::json::parse(result.out);
 
     REQUIRE(result.code == 0);
-    REQUIRE(result.out.find("\"backgroundWindow\"") != std::string::npos);
-    REQUIRE(result.out.find("\"limitations\"") != std::string::npos);
+    REQUIRE(json.at("input").at("backgroundWindow").get<bool>() == false);
+    REQUIRE(json.at("limitations").is_array());
+    REQUIRE_FALSE(json.at("limitations").empty());
     REQUIRE(result.err.empty());
 }
 
-TEST_CASE("doctor prints diagnostic text") {
+TEST_CASE("doctor prints diagnostic text with foundation limitations") {
     const TempConfigDirectory temp;
     const auto path = temp.file("config.json");
 
@@ -147,5 +151,45 @@ TEST_CASE("doctor prints diagnostic text") {
     REQUIRE(result.code == 0);
     REQUIRE(result.out.find("Kiseki Input doctor") != std::string::npos);
     REQUIRE(result.out.find("Config path:") != std::string::npos);
+    REQUIRE(result.out.find("Input driver backend: unavailable") != std::string::npos);
+    REQUIRE(result.out.find("Background-window input: unavailable") != std::string::npos);
+    REQUIRE(result.out.find("Screenshot burst: unavailable") != std::string::npos);
+    REQUIRE(result.out.find("Limitations:") != std::string::npos);
+    REQUIRE(result.out.find("foundation build exposes configuration and WebUI only") != std::string::npos);
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("doctor reports invalid config details") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("invalid.json");
+    write_text(path, "{\"webui\":{\"port\":0}}");
+
+    const auto result = run_cli({"doctor"}, path);
+
+    REQUIRE(result.code == 0);
+    REQUIRE(result.out.find("Config: invalid") != std::string::npos);
+    REQUIRE(result.out.find("webui.port") != std::string::npos);
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("run rejects argv style args containing executable name") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    const auto result = run_cli({"kiseki", "doctor"}, path);
+
+    REQUIRE(result.code != 0);
+    REQUIRE(result.out.empty());
+    REQUIRE_FALSE(result.err.empty());
+}
+
+TEST_CASE("unknown command reports parse error") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    const auto result = run_cli({"unknown"}, path);
+
+    REQUIRE(result.code != 0);
+    REQUIRE(result.out.empty());
+    REQUIRE_FALSE(result.err.empty());
 }
