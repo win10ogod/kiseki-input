@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -59,6 +60,11 @@ CliResult run_cli(const std::vector<std::string>& args, const std::filesystem::p
     };
 }
 
+void write_text(const std::filesystem::path& path, std::string_view content) {
+    std::ofstream file{path};
+    file << content;
+}
+
 }
 
 TEST_CASE("config path prints injected config path") {
@@ -84,6 +90,19 @@ TEST_CASE("config show prints default json when file is absent") {
     REQUIRE(result.err.empty());
 }
 
+TEST_CASE("config show reports malformed config errors") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("malformed.json");
+    write_text(path, "{\"webui\":");
+
+    const auto result = run_cli({"config", "show"}, path);
+
+    REQUIRE(result.code == 2);
+    REQUIRE(result.out.empty());
+    REQUIRE_FALSE(result.err.empty());
+    REQUIRE(result.err.find("failed to parse config file") != std::string::npos);
+}
+
 TEST_CASE("config validate reports valid config") {
     const TempConfigDirectory temp;
     const auto path = temp.file("missing.json");
@@ -93,6 +112,18 @@ TEST_CASE("config validate reports valid config") {
     REQUIRE(result.code == 0);
     REQUIRE(result.out == "configuration is valid\n");
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("config validate reports invalid config errors") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("invalid.json");
+    write_text(path, "{\"webui\":{\"port\":0}}");
+
+    const auto result = run_cli({"config", "validate"}, path);
+
+    REQUIRE(result.code == 2);
+    REQUIRE(result.out.empty());
+    REQUIRE(result.err.find("webui.port") != std::string::npos);
 }
 
 TEST_CASE("capabilities prints foundation capability json") {
