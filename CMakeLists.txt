@@ -59,7 +59,7 @@ add_library(kiseki_cli STATIC
 )
 target_compile_features(kiseki_cli PUBLIC cxx_std_20)
 target_include_directories(kiseki_cli PUBLIC src)
-target_link_libraries(kiseki_cli PRIVATE kiseki_core CLI11::CLI11)
+target_link_libraries(kiseki_cli PRIVATE kiseki_core kiseki_webui CLI11::CLI11)
 set_target_properties(kiseki_cli PROPERTIES CXX_EXTENSIONS OFF)
 
 add_executable(kiseki src/cli/main.cpp)

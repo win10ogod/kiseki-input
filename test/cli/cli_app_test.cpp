@@ -193,3 +193,78 @@ TEST_CASE("unknown command reports parse error") {
     REQUIRE(result.out.empty());
     REQUIRE_FALSE(result.err.empty());
 }
+
+TEST_CASE("config-ui launches configured local web server") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.launch_config_ui = [&](const kiseki::cli::WebUiLaunchOptions& options,
+                                        const std::filesystem::path& config_path,
+                                        kiseki::cli::Io io) {
+        REQUIRE(options.host == "127.0.0.1");
+        REQUIRE(options.port == 8787);
+        REQUIRE(config_path == path);
+        io.out << "fake launch\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run({"config-ui"}, path, kiseki::cli::Io{out, err}, dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(out.str() == "fake launch\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("config-ui command line options override configured host and port") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.launch_config_ui = [&](const kiseki::cli::WebUiLaunchOptions& options,
+                                        const std::filesystem::path&,
+                                        kiseki::cli::Io) {
+        REQUIRE(options.host == "0.0.0.0");
+        REQUIRE(options.port == 9001);
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"config-ui", "--host", "0.0.0.0", "--port", "9001"},
+        path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("config-ui reports invalid config without launching") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto path = temp.file("invalid.json");
+    write_text(path, "{\"webui\":{\"port\":0}}");
+    bool launched = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.launch_config_ui = [&](const kiseki::cli::WebUiLaunchOptions&,
+                                        const std::filesystem::path&,
+                                        kiseki::cli::Io) {
+        launched = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run({"config-ui"}, path, kiseki::cli::Io{out, err}, dependencies);
+
+    REQUIRE(code == 2);
+    REQUIRE_FALSE(launched);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().find("config error:") != std::string::npos);
+    REQUIRE(err.str().find("webui.port") != std::string::npos);
+}

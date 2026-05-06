@@ -10,6 +10,7 @@
 #include "core/config/config_model.hpp"
 #include "core/config/config_store.hpp"
 #include "core/version.hpp"
+#include "webui/web_server.hpp"
 
 namespace kiseki::cli {
 
@@ -52,6 +53,17 @@ const char* availability(bool available) {
 
 }
 
+Dependencies default_dependencies() {
+    return Dependencies{
+        .launch_config_ui = [](const WebUiLaunchOptions& options, const std::filesystem::path& config_path, Io io) {
+            io.out << "Serving configuration UI at "
+                   << kiseki::webui::build_listen_url(options.host, options.port) << '\n';
+            kiseki::webui::WebServer server{config_path};
+            return server.listen(options.host, options.port);
+        },
+    };
+}
+
 std::filesystem::path resolve_config_path(std::filesystem::path override_path) {
     if (!override_path.empty()) {
         return override_path;
@@ -60,9 +72,18 @@ std::filesystem::path resolve_config_path(std::filesystem::path override_path) {
     return default_config_path(current_environment(), current_platform());
 }
 
-int run(const std::vector<std::string>& args, std::filesystem::path config_path, Io io) {
+int run(
+    const std::vector<std::string>& args,
+    std::filesystem::path config_path,
+    Io io,
+    Dependencies dependencies) {
     const std::filesystem::path active_config_path = resolve_config_path(std::move(config_path));
+    const ConfigStore store{active_config_path};
     int exit_code = 0;
+    WebUiLaunchOptions webui_options{
+        .host = "",
+        .port = 0,
+    };
 
     CLI::App app{"Kiseki Input"};
     app.set_version_flag("--version", std::string{kiseki::core::version()});
@@ -80,6 +101,33 @@ int run(const std::vector<std::string>& args, std::filesystem::path config_path,
         exit_code = validate_config_command(active_config_path, io);
     });
 
+    auto* config_ui = app.add_subcommand("config-ui", "Launch local configuration WebUI");
+    config_ui->add_option("--host", webui_options.host, "Listen host");
+    config_ui->add_option("--port", webui_options.port, "Listen port");
+    config_ui->callback([&]() {
+        const auto loaded = store.load_or_default();
+        if (!loaded.ok) {
+            io.err << "config error: " << loaded.error << '\n';
+            exit_code = 2;
+            return;
+        }
+
+        if (webui_options.host.empty()) {
+            webui_options.host = loaded.config.webui.host;
+        }
+        if (webui_options.port == 0) {
+            webui_options.port = loaded.config.webui.port;
+        }
+
+        if (!dependencies.launch_config_ui) {
+            io.err << "config-ui launcher is not configured\n";
+            exit_code = 2;
+            return;
+        }
+
+        exit_code = dependencies.launch_config_ui(webui_options, store.path(), io);
+    });
+
     app.add_subcommand("capabilities", "Print foundation capabilities")->callback([&]() {
         io.out << to_json(foundation_capabilities()).dump(2) << '\n';
     });
@@ -89,7 +137,6 @@ int run(const std::vector<std::string>& args, std::filesystem::path config_path,
         io.out << "Version: " << kiseki::core::version() << '\n';
         io.out << "Config path: " << active_config_path.string() << '\n';
 
-        const ConfigStore store{active_config_path};
         const auto result = store.load_or_default();
         if (result.ok) {
             io.out << "Config: valid\n";
