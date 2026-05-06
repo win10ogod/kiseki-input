@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(KisekiInput VERSION 0.1.0 LANGUAGES CXX)
 
 option(KISEKI_BUILD_TESTING "Build Kiseki tests" ON)
+option(KISEKI_BUILD_IBINPUTSIMULATOR "Build and copy IbInputSimulator.dll on Windows" ON)
 
 include(FetchContent)
 include(CTest)
@@ -88,6 +89,82 @@ add_executable(kiseki src/cli/main.cpp)
 target_compile_features(kiseki PRIVATE cxx_std_20)
 target_link_libraries(kiseki PRIVATE kiseki_cli)
 set_target_properties(kiseki PROPERTIES CXX_EXTENSIONS OFF)
+
+if(WIN32 AND KISEKI_BUILD_IBINPUTSIMULATOR)
+    get_filename_component(KISEKI_DEFAULT_IBINPUTSIMULATOR_SOURCE
+        "${CMAKE_SOURCE_DIR}/../原始參考/IbInputSimulator"
+        ABSOLUTE
+    )
+    get_filename_component(KISEKI_DEFAULT_VCPKG_ROOT
+        "${CMAKE_SOURCE_DIR}/../../kiseki-vcpkg"
+        ABSOLUTE
+    )
+
+    if(DEFINED ENV{VCPKG_ROOT})
+        set(KISEKI_DEFAULT_VCPKG_ROOT "$ENV{VCPKG_ROOT}")
+    endif()
+
+    set(KISEKI_IBINPUTSIMULATOR_SOURCE
+        "${KISEKI_DEFAULT_IBINPUTSIMULATOR_SOURCE}"
+        CACHE PATH
+        "Path to IbInputSimulator source tree"
+    )
+    set(KISEKI_VCPKG_ROOT
+        "${KISEKI_DEFAULT_VCPKG_ROOT}"
+        CACHE PATH
+        "Path to a vcpkg tree with detours and rapidjson installed"
+    )
+    set(KISEKI_IBINPUTSIMULATOR_BUILD_DIR
+        "${KISEKI_IBINPUTSIMULATOR_SOURCE}/build"
+        CACHE PATH
+        "IbInputSimulator external build directory"
+    )
+
+    set(KISEKI_IBINPUTSIMULATOR_DLL
+        "${KISEKI_IBINPUTSIMULATOR_BUILD_DIR}/Simulator/Release/IbInputSimulator.dll"
+    )
+    set(KISEKI_VCPKG_TOOLCHAIN
+        "${KISEKI_VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    )
+    set(KISEKI_DETOURS_INCLUDE_DIR
+        "${KISEKI_VCPKG_ROOT}/installed/x64-windows-static/include"
+    )
+    set(KISEKI_DETOURS_RELEASE_LIBRARY
+        "${KISEKI_VCPKG_ROOT}/installed/x64-windows-static/lib/detours.lib"
+    )
+
+    if(EXISTS "${KISEKI_IBINPUTSIMULATOR_SOURCE}/CMakeLists.txt"
+        AND EXISTS "${KISEKI_VCPKG_TOOLCHAIN}"
+        AND EXISTS "${KISEKI_DETOURS_INCLUDE_DIR}/detours/detours.h"
+        AND EXISTS "${KISEKI_DETOURS_RELEASE_LIBRARY}")
+        add_custom_command(
+            OUTPUT "${KISEKI_IBINPUTSIMULATOR_DLL}"
+            COMMAND "${CMAKE_COMMAND}"
+                -S "${KISEKI_IBINPUTSIMULATOR_SOURCE}"
+                -B "${KISEKI_IBINPUTSIMULATOR_BUILD_DIR}"
+                -DBUILD_SHARED_LIBS=ON
+                -DBUILD_TESTING=OFF
+                -DCMAKE_TOOLCHAIN_FILE=${KISEKI_VCPKG_TOOLCHAIN}
+                -DVCPKG_TARGET_TRIPLET=x64-windows-static
+                -DDETOURS_INCLUDE_DIR:PATH=${KISEKI_DETOURS_INCLUDE_DIR}
+                -DDETOURS_LIBRARY:FILEPATH=${KISEKI_DETOURS_RELEASE_LIBRARY}
+            COMMAND "${CMAKE_COMMAND}"
+                --build "${KISEKI_IBINPUTSIMULATOR_BUILD_DIR}"
+                --config Release
+            VERBATIM
+        )
+        add_custom_target(kiseki_ibinputsimulator ALL DEPENDS "${KISEKI_IBINPUTSIMULATOR_DLL}")
+        add_dependencies(kiseki kiseki_ibinputsimulator)
+        add_custom_command(TARGET kiseki POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${KISEKI_IBINPUTSIMULATOR_DLL}"
+                "$<TARGET_FILE_DIR:kiseki>/IbInputSimulator.dll"
+            VERBATIM
+        )
+    else()
+        message(WARNING "IbInputSimulator auto-build skipped. Expected source at ${KISEKI_IBINPUTSIMULATOR_SOURCE} and vcpkg deps at ${KISEKI_VCPKG_ROOT}.")
+    endif()
+endif()
 
 if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
     FetchContent_MakeAvailable(Catch2)
