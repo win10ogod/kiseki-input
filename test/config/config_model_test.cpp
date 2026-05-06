@@ -21,6 +21,7 @@ TEST_CASE("default config matches schema version one") {
     REQUIRE(config.input.windows_driver == "AnyDriver");
     REQUIRE(config.input.linux_driver == "uinput");
     REQUIRE(config.input.background_input_enabled);
+    REQUIRE(config.screenshot.default_output_directory == "");
     REQUIRE(config.screenshot.burst_fps == 60);
     REQUIRE(config.screenshot.burst_frames == 8);
     REQUIRE(config.screenshot.format == "png");
