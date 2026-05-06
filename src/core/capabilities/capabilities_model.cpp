@@ -1,0 +1,41 @@
+#include "core/capabilities/capabilities_model.hpp"
+
+namespace kiseki::core::capabilities {
+
+CapabilityMatrix foundation_capabilities() {
+    return CapabilityMatrix{
+        .input = InputCapabilities{
+            .driver = false,
+            .background_window = false,
+        },
+        .capture = CaptureCapabilities{
+            .desktop = false,
+            .window = false,
+            .region = false,
+            .burst = false,
+        },
+        .limitations = {
+            "foundation build exposes configuration and WebUI only",
+            "input, screenshot, target, notification, and daemon backends are separate implementation slices",
+            "background-window input is not guaranteed for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games",
+        },
+    };
+}
+
+nlohmann::json to_json(const CapabilityMatrix& capabilities) {
+    return nlohmann::json{
+        {"input", {
+            {"driver", capabilities.input.driver},
+            {"backgroundWindow", capabilities.input.background_window},
+        }},
+        {"capture", {
+            {"desktop", capabilities.capture.desktop},
+            {"window", capabilities.capture.window},
+            {"region", capabilities.capture.region},
+            {"burst", capabilities.capture.burst},
+        }},
+        {"limitations", capabilities.limitations},
+    };
+}
+
+}
