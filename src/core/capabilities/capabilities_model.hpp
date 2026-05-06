@@ -8,15 +8,15 @@
 namespace kiseki::core::capabilities {
 
 struct InputCapabilities {
-    bool driver;
-    bool background_window;
+    bool driver = false;
+    bool background_window = false;
 };
 
 struct CaptureCapabilities {
-    bool desktop;
-    bool window;
-    bool region;
-    bool burst;
+    bool desktop = false;
+    bool window = false;
+    bool region = false;
+    bool burst = false;
 };
 
 struct CapabilityMatrix {
