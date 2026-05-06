@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
+#include <string_view>
+#include <system_error>
 #include <utility>
 
 #include "core/config/config_validation.hpp"
@@ -29,6 +31,17 @@ std::string validation_error(const ValidationResult& validation) {
         stream << issue.path << ": " << issue.message;
     }
     return stream.str();
+}
+
+std::string file_error(std::string_view operation, const std::filesystem::path& path) {
+    return std::string{operation} + ": " + path.string();
+}
+
+std::string file_error(
+    std::string_view operation,
+    const std::filesystem::path& path,
+    const std::error_code& error_code) {
+    return std::string{operation} + ": " + path.string() + ": " + error_code.message();
 }
 
 }
@@ -71,7 +84,15 @@ const std::filesystem::path& ConfigStore::path() const {
 }
 
 StoreResult ConfigStore::load_or_default() const {
-    if (!std::filesystem::exists(path_)) {
+    std::error_code error_code;
+    if (!std::filesystem::exists(path_, error_code)) {
+        if (error_code) {
+            return StoreResult{
+                .ok = false,
+                .config = default_config(),
+                .error = file_error("failed to inspect config file", path_, error_code),
+            };
+        }
         return StoreResult{
             .ok = true,
             .config = default_config(),
@@ -84,7 +105,7 @@ StoreResult ConfigStore::load_or_default() const {
         return StoreResult{
             .ok = false,
             .config = default_config(),
-            .error = "failed to open config file: " + path_.string(),
+            .error = file_error("failed to open config file", path_),
         };
     }
 
@@ -110,7 +131,7 @@ StoreResult ConfigStore::load_or_default() const {
         return StoreResult{
             .ok = false,
             .config = default_config(),
-            .error = error.what(),
+            .error = file_error("failed to parse config file", path_) + ": " + error.what(),
         };
     }
 }
@@ -132,7 +153,7 @@ SaveResult ConfigStore::save(const AppConfig& config) const {
     if (error_code) {
         return SaveResult{
             .ok = false,
-            .error = error_code.message(),
+            .error = file_error("failed to create config directory", parent, error_code),
         };
     }
 
@@ -140,11 +161,27 @@ SaveResult ConfigStore::save(const AppConfig& config) const {
     if (!file) {
         return SaveResult{
             .ok = false,
-            .error = "failed to write config file: " + path_.string(),
+            .error = file_error("failed to open config file for writing", path_),
         };
     }
 
     file << to_json(config).dump(2) << '\n';
+    const bool write_ok = static_cast<bool>(file);
+    file.close();
+    if (!write_ok) {
+        return SaveResult{
+            .ok = false,
+            .error = file_error("failed to write config file", path_),
+        };
+    }
+
+    if (!file) {
+        return SaveResult{
+            .ok = false,
+            .error = file_error("failed to close config file", path_),
+        };
+    }
+
     return SaveResult{
         .ok = true,
         .error = "",
