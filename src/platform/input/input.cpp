@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -201,6 +203,38 @@ OperationResult send_combo_with_sendinput(const std::vector<std::string>& keys) 
     return ok("input sent");
 }
 
+std::wstring utf8_to_utf16(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    unsigned int code_page = CP_UTF8;
+    unsigned long flags = MB_ERR_INVALID_CHARS;
+    if (size == 0) {
+        code_page = CP_ACP;
+        flags = 0;
+        size = MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    }
+    if (size == 0) {
+        return {};
+    }
+
+    std::wstring wide(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), wide.data(), size);
+    return wide;
+}
+
+bool send_unicode_code_unit(wchar_t c) {
+    INPUT inputs[2]{};
+    inputs[0].type = INPUT_KEYBOARD;
+    inputs[0].ki.wScan = static_cast<WORD>(c);
+    inputs[0].ki.dwFlags = KEYEVENTF_UNICODE;
+    inputs[1] = inputs[0];
+    inputs[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+    return SendInput(2, inputs, sizeof(INPUT)) == 2;
+}
+
 #else
 #ifdef KISEKI_HAS_X11
 
@@ -385,20 +419,16 @@ OperationResult type_text(const std::string& text) {
         return ok("input text empty");
     }
 #ifdef _WIN32
-    std::vector<INPUT> inputs;
-    inputs.reserve(text.size() * 2U);
-    for (const unsigned char c : text) {
-        INPUT down{};
-        down.type = INPUT_KEYBOARD;
-        down.ki.wScan = c;
-        down.ki.dwFlags = KEYEVENTF_UNICODE;
-        INPUT up = down;
-        up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-        inputs.push_back(down);
-        inputs.push_back(up);
+    const std::wstring wide = utf8_to_utf16(text);
+    if (wide.empty()) {
+        return fail("failed to decode text");
     }
-    if (SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) != inputs.size()) {
-        return fail("SendInput text failed");
+
+    for (const wchar_t c : wide) {
+        if (!send_unicode_code_unit(c)) {
+            return fail("SendInput text failed");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return ok("text input sent");
 #else

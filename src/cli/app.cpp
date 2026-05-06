@@ -3,6 +3,8 @@
 #include <CLI/CLI.hpp>
 
 #include <exception>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -73,6 +75,16 @@ int print_capture_result(const kiseki::platform::CaptureResult& result, Io io) {
         io.err << result.error << '\n';
     }
     return result.code;
+}
+
+std::string read_text_file(const std::filesystem::path& path) {
+    std::ifstream file{path, std::ios::binary};
+    if (!file) {
+        throw std::runtime_error{"failed to open text file: " + path.string()};
+    }
+    std::ostringstream stream;
+    stream << file.rdbuf();
+    return stream.str();
 }
 
 }
@@ -164,6 +176,7 @@ int run(
     };
     InputTextOptions text_options{
         .text = "",
+        .text_file = {},
     };
     InputMouseOptions mouse_options{
         .dx = 0,
@@ -288,10 +301,25 @@ int run(
     });
 
     auto* input_text = input->add_subcommand("text", "Type text");
-    input_text->add_option("--text", text_options.text, "Text to type")->required();
+    input_text->add_option("--text", text_options.text, "Text to type");
+    input_text->add_option("--file", text_options.text_file, "UTF-8 text file to type");
     input_text->callback([&]() {
         if (!dependencies.input_text) {
             io.err << "input backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        if (!text_options.text_file.empty()) {
+            try {
+                text_options.text = read_text_file(text_options.text_file);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                exit_code = 2;
+                return;
+            }
+        }
+        if (text_options.text.empty()) {
+            io.err << "input text requires --text or --file\n";
             exit_code = 2;
             return;
         }

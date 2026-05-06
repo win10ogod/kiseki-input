@@ -48,6 +48,28 @@ std::string shell_quote(const std::string& value) {
     quoted.push_back('\'');
     return quoted;
 }
+#else
+std::wstring utf8_to_utf16(const std::string& text) {
+    if (text.empty()) {
+        return {};
+    }
+
+    int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    unsigned int code_page = CP_UTF8;
+    unsigned long flags = MB_ERR_INVALID_CHARS;
+    if (size == 0) {
+        code_page = CP_ACP;
+        flags = 0;
+        size = MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    }
+    if (size == 0) {
+        return {};
+    }
+
+    std::wstring wide(static_cast<std::size_t>(size), L'\0');
+    MultiByteToWideChar(code_page, flags, text.data(), static_cast<int>(text.size()), wide.data(), size);
+    return wide;
+}
 #endif
 
 }
@@ -58,9 +80,13 @@ OperationResult notify_once(const std::string& message) {
     }
 
 #ifdef _WIN32
+    const std::wstring wide_message = utf8_to_utf16(message);
+    if (wide_message.empty()) {
+        return fail("failed to decode notification message");
+    }
     MessageBoxW(
         nullptr,
-        std::wstring{message.begin(), message.end()}.c_str(),
+        wide_message.c_str(),
         L"Kiseki Input",
         MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
     return ok("notification shown");

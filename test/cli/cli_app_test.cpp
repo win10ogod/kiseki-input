@@ -377,6 +377,35 @@ TEST_CASE("input commands call injected backend") {
     REQUIRE(err.str().empty());
 }
 
+TEST_CASE("input text command reads utf8 text from file") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto text_path = temp.file("input.txt");
+    write_text(text_path, "WSADFGHJKL, \xE4\xBD\xA0\xE5\xA5\xBD");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_text = [&](const kiseki::cli::InputTextOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.text == "WSADFGHJKL, \xE4\xBD\xA0\xE5\xA5\xBD");
+        REQUIRE(options.text_file == text_path);
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"input", "text", "--file", text_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
 TEST_CASE("daemon once sends configured heartbeat notification") {
     std::ostringstream out;
     std::ostringstream err;

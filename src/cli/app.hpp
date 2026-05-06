@@ -40,6 +40,7 @@ struct InputComboOptions {
 
 struct InputTextOptions {
     std::string text;
+    std::filesystem::path text_file;
 };
 
 struct InputMouseOptions {
