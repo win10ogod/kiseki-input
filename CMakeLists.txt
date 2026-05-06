@@ -44,6 +44,14 @@ target_include_directories(kiseki_core PUBLIC src)
 target_link_libraries(kiseki_core PUBLIC nlohmann_json::nlohmann_json)
 set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 
+add_library(kiseki_webui STATIC
+    src/webui/config_api.cpp
+)
+target_compile_features(kiseki_webui PUBLIC cxx_std_20)
+target_include_directories(kiseki_webui PUBLIC src)
+target_link_libraries(kiseki_webui PRIVATE kiseki_core)
+set_target_properties(kiseki_webui PROPERTIES CXX_EXTENSIONS OFF)
+
 add_library(kiseki_cli STATIC
     src/cli/app.cpp
 )
@@ -72,12 +80,13 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/config/config_model_test.cpp
         test/config/config_store_test.cpp
         test/config/config_validation_test.cpp
+        test/webui/config_api_test.cpp
         test/smoke_test.cpp
     )
 
     add_executable(kiseki_tests ${KISEKI_TEST_SOURCES})
     target_compile_features(kiseki_tests PRIVATE cxx_std_20)
-    target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core Catch2::Catch2WithMain)
+    target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core kiseki_webui Catch2::Catch2WithMain)
     set_target_properties(kiseki_tests PROPERTIES CXX_EXTENSIONS OFF)
     catch_discover_tests(kiseki_tests)
 endif()
