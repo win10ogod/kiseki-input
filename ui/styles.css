@@ -1,0 +1,97 @@
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #f4f6f8;
+  color: #1c2530;
+}
+
+body {
+  margin: 0;
+}
+
+.shell {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+  font-weight: 650;
+}
+
+h2 {
+  font-size: 16px;
+  margin-bottom: 14px;
+}
+
+p {
+  color: #647287;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+section {
+  background: #ffffff;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+
+input,
+select,
+button {
+  font: inherit;
+}
+
+input,
+select {
+  min-height: 36px;
+  border: 1px solid #b8c2d0;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 16px;
+  background: #245fba;
+  color: #ffffff;
+}
+
+button:disabled {
+  background: #9aa7b8;
+}
+
+#status {
+  min-height: 20px;
+  margin-top: 16px;
+  white-space: pre-wrap;
+}

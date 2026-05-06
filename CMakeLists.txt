@@ -46,10 +46,12 @@ set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 
 add_library(kiseki_webui STATIC
     src/webui/config_api.cpp
+    src/webui/static_assets.cpp
+    src/webui/web_server.cpp
 )
 target_compile_features(kiseki_webui PUBLIC cxx_std_20)
 target_include_directories(kiseki_webui PUBLIC src)
-target_link_libraries(kiseki_webui PRIVATE kiseki_core)
+target_link_libraries(kiseki_webui PRIVATE kiseki_core httplib::httplib)
 set_target_properties(kiseki_webui PROPERTIES CXX_EXTENSIONS OFF)
 
 add_library(kiseki_cli STATIC
@@ -81,6 +83,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/config/config_store_test.cpp
         test/config/config_validation_test.cpp
         test/webui/config_api_test.cpp
+        test/webui/static_assets_test.cpp
         test/smoke_test.cpp
     )
 

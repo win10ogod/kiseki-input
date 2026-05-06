@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kiseki Input Configuration</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Kiseki Input</h1>
+          <p>Configuration</p>
+        </div>
+        <button id="save" type="button" disabled>Save</button>
+      </header>
+
+      <form id="config-form" class="grid">
+        <section>
+          <h2>WebUI</h2>
+          <label>Host <input name="webui.host" autocomplete="off"></label>
+          <label>Port <input name="webui.port" type="number" min="1" max="65535"></label>
+        </section>
+
+        <section>
+          <h2>Heartbeat</h2>
+          <label><input name="heartbeat.enabled" type="checkbox"> Enabled</label>
+          <label>Interval seconds <input name="heartbeat.intervalSeconds" type="number" min="1"></label>
+          <label><input name="heartbeat.notificationEnabled" type="checkbox"> Notifications</label>
+          <label>Message <input name="heartbeat.message" autocomplete="off"></label>
+        </section>
+
+        <section>
+          <h2>Input Defaults</h2>
+          <label>Default backend
+            <select name="input.defaultBackend">
+              <option value="background-window">background-window</option>
+              <option value="driver">driver</option>
+            </select>
+          </label>
+          <label>Windows driver
+            <select name="input.windowsDriver">
+              <option>AnyDriver</option>
+              <option>SendInput</option>
+              <option>Logitech</option>
+              <option>LogitechGHubNew</option>
+              <option>Razer</option>
+              <option>DD</option>
+              <option>MouClassInputInjection</option>
+            </select>
+          </label>
+          <label>Linux driver
+            <select name="input.linuxDriver">
+              <option>uinput</option>
+            </select>
+          </label>
+          <label><input name="input.backgroundInputEnabled" type="checkbox"> Background input enabled</label>
+        </section>
+
+        <section>
+          <h2>Screenshot Defaults</h2>
+          <label>Output directory <input name="screenshot.defaultOutputDirectory" autocomplete="off"></label>
+          <label>Burst FPS <input name="screenshot.burstFps" type="number" min="1" max="240"></label>
+          <label>Burst frames <input name="screenshot.burstFrames" type="number" min="1" max="240"></label>
+          <label>Format
+            <select name="screenshot.format">
+              <option>png</option>
+            </select>
+          </label>
+        </section>
+      </form>
+
+      <pre id="status" role="status"></pre>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
