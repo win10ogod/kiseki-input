@@ -550,6 +550,161 @@ TEST_CASE("input text command reads utf8 text from file") {
     REQUIRE(err.str().empty());
 }
 
+TEST_CASE("macro validate accepts supported step sequence") {
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto macro_path = temp.file("macro.json");
+    write_text(
+        macro_path,
+        R"({
+  "name": "paint-demo",
+  "steps": [
+    {"type": "combo", "keys": "win+r", "backend": "system"},
+    {"type": "text", "text": "mspaint.exe"},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "sleep", "ms": 10},
+    {"type": "mouse", "x": 640, "y": 360, "click": "left", "backend": "system"},
+    {"type": "drag", "file": "heart-points.txt", "backend": "system"},
+    {"type": "screenshot", "output": "paint.bmp"}
+  ]
+})");
+
+    const auto result = run_cli({"macro", "validate", "--file", macro_path.string()}, config_path);
+
+    REQUIRE(result.code == 0);
+    REQUIRE(result.out == "macro is valid\n");
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("macro run executes steps through injected dependencies") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto macro_path = temp.file("macro.json");
+    const auto text_path = temp.file("text.txt");
+    const auto points_path = temp.file("points.txt");
+    const auto screenshot_path = temp.file("macro.bmp");
+    write_text(text_path, "WSADFGHJKL, \xE4\xBD\xA0\xE5\xA5\xBD");
+    write_text(points_path, "10 20\n30 40\n");
+    write_text(
+        macro_path,
+        R"({
+  "steps": [
+    {"type": "combo", "keys": "win+r", "backend": "system"},
+    {"type": "text", "file": ")" + text_path.generic_string() + R"("},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "mouse", "x": 640, "y": 360, "click": "left-down", "backend": "system"},
+    {"type": "drag", "file": ")" + points_path.generic_string() + R"(", "backend": "system"},
+    {"type": "screenshot", "output": ")" + screenshot_path.generic_string() + R"("}
+  ]
+})");
+    std::vector<std::string> calls;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_combo = [&](const kiseki::cli::InputComboOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.keys == "win+r");
+        REQUIRE(options.backend == "system");
+        calls.push_back("combo");
+        return 0;
+    };
+    dependencies.input_text = [&](const kiseki::cli::InputTextOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.text == "WSADFGHJKL, \xE4\xBD\xA0\xE5\xA5\xBD");
+        REQUIRE(options.text_file == text_path);
+        calls.push_back("text");
+        return 0;
+    };
+    dependencies.input_key = [&](const kiseki::cli::InputKeyOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.key == "enter");
+        REQUIRE(options.backend == "system");
+        calls.push_back("key");
+        return 0;
+    };
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.x == 640);
+        REQUIRE(options.y == 360);
+        REQUIRE(options.absolute);
+        REQUIRE(options.click == "left-down");
+        REQUIRE(options.backend == "system");
+        calls.push_back("mouse");
+        return 0;
+    };
+    dependencies.input_drag = [&](const kiseki::cli::InputDragOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.path == points_path);
+        REQUIRE(options.backend == "system");
+        calls.push_back("drag");
+        return 0;
+    };
+    dependencies.capture_desktop = [&](const kiseki::cli::ScreenshotDesktopOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.output_path == screenshot_path);
+        calls.push_back("screenshot");
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"macro", "run", "--file", macro_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(calls == std::vector<std::string>{"combo", "text", "key", "mouse", "drag", "screenshot"});
+    REQUIRE(out.str() == "macro completed 6 steps\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("macro run stops when a step fails") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto macro_path = temp.file("macro.json");
+    write_text(
+        macro_path,
+        R"({
+  "steps": [
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "text", "text": "unreached"}
+  ]
+})");
+    bool text_called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_key = [&](const kiseki::cli::InputKeyOptions&, kiseki::cli::Io io) {
+        io.err << "input failed\n";
+        return 2;
+    };
+    dependencies.input_text = [&](const kiseki::cli::InputTextOptions&, kiseki::cli::Io) {
+        text_called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"macro", "run", "--file", macro_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 2);
+    REQUIRE_FALSE(text_called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().find("macro step 1 failed") != std::string::npos);
+    REQUIRE(err.str().find("input failed") != std::string::npos);
+}
+
+TEST_CASE("macro validate rejects malformed steps") {
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto macro_path = temp.file("bad-macro.json");
+    write_text(macro_path, R"({"steps":[{"type":"mouse","x":640}]})");
+
+    const auto result = run_cli({"macro", "validate", "--file", macro_path.string()}, config_path);
+
+    REQUIRE(result.code == 2);
+    REQUIRE(result.out.empty());
+    REQUIRE(result.err.find("mouse step requires both x and y") != std::string::npos);
+}
+
 TEST_CASE("daemon once sends configured heartbeat notification") {
     std::ostringstream out;
     std::ostringstream err;

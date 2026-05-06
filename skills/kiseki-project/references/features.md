@@ -37,6 +37,12 @@ Input:
 - `kiseki input mouse --x <n> --y <n> [--absolute] [--click ...] [--backend ...]`
 - `kiseki input drag --file <points.txt> [--backend auto|driver|system]`
 
+Macros:
+
+- `kiseki macro validate --file <macro.json>` validates JSON macro structure.
+- `kiseki macro run --file <macro.json>` executes a macro step sequence.
+- Macro execution stops at the first failing step and returns that step's nonzero code.
+
 Mouse click values:
 
 - `none`, `left`, `right`, `middle`
@@ -120,3 +126,18 @@ Linux:
 - Capture `window` and `region` are not implemented.
 - Game background input is only expected for targets that accept normal system window messages or public automation interfaces.
 - No guarantee is made for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games.
+
+## Macro Schema
+
+Macro files are JSON objects with a non-empty `steps` array. Supported step types:
+
+- `{"type":"key","key":"enter","backend":"system"}`
+- `{"type":"combo","keys":"win+r","backend":"system"}`
+- `{"type":"text","text":"hello"}` or `{"type":"text","file":"input.txt"}`
+- `{"type":"mouse","dx":1,"dy":1,"click":"left","backend":"system"}`
+- `{"type":"mouse","x":640,"y":360,"click":"left","backend":"system"}`
+- `{"type":"drag","file":"points.txt","backend":"system"}`
+- `{"type":"screenshot","output":"screen.bmp"}`
+- `{"type":"sleep","ms":500}`
+
+Backends default to `auto` when omitted. Text steps require exactly one of `text` or `file`. Mouse absolute movement requires both `x` and `y`.

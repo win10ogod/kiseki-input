@@ -99,6 +99,33 @@ Then run:
 
 Use `input drag` instead of separate `mouse left-down`, move, and `left-up` commands for drawing tests, because one process preserves button state more reliably.
 
+## Paint Macro Recipe
+
+Create `artifacts/live-test/paint-macro.json` with `apply_patch`:
+
+```json
+{
+  "name": "paint-heart",
+  "steps": [
+    {"type": "combo", "keys": "win+r", "backend": "system"},
+    {"type": "text", "text": "mspaint.exe"},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "sleep", "ms": 1200},
+    {"type": "drag", "file": "artifacts/live-test/heart-points.txt", "backend": "system"},
+    {"type": "screenshot", "output": "artifacts/live-test/paint-macro.bmp"}
+  ]
+}
+```
+
+Then run:
+
+```bash
+./build/Debug/kiseki.exe macro validate --file artifacts/live-test/paint-macro.json
+./build/Debug/kiseki.exe macro run --file artifacts/live-test/paint-macro.json
+```
+
+Visually inspect `artifacts/live-test/paint-macro.bmp` or a converted PNG before claiming live macro success.
+
 ## WebUI Browser Recipe
 
 Start the server in a long-running command session:

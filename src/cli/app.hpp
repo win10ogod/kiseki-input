@@ -64,6 +64,10 @@ struct DaemonOptions {
     bool once;
 };
 
+struct MacroOptions {
+    std::filesystem::path path;
+};
+
 struct Dependencies {
     std::function<int(const WebUiLaunchOptions&, const std::filesystem::path&, Io)> launch_config_ui;
     std::function<int(const ScreenshotDesktopOptions&, Io)> capture_desktop;

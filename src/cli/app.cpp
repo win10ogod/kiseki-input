@@ -2,11 +2,16 @@
 
 #include <CLI/CLI.hpp>
 
+#include <chrono>
+#include <cstdint>
 #include <exception>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
+
+#include <nlohmann/json.hpp>
 
 #include "core/capabilities/capabilities_model.hpp"
 #include "core/config/config_model.hpp"
@@ -114,6 +119,249 @@ std::vector<kiseki::platform::input::MousePoint> read_mouse_points_file(const st
         throw std::runtime_error{"mouse path file requires at least two points"};
     }
     return points;
+}
+
+struct MacroStep {
+    std::string type;
+    std::string key;
+    std::string keys;
+    std::string text;
+    std::filesystem::path text_file;
+    std::filesystem::path path;
+    std::filesystem::path output_path;
+    std::string backend = "auto";
+    std::string click = "none";
+    int dx = 0;
+    int dy = 0;
+    int x = 0;
+    int y = 0;
+    bool absolute = false;
+    bool has_x = false;
+    bool has_y = false;
+    std::uint32_t ms = 0;
+};
+
+std::string required_string(const nlohmann::json& object, const char* key, std::string_view context) {
+    if (!object.contains(key) || !object.at(key).is_string()) {
+        throw std::runtime_error{std::string{context} + " requires string field '" + key + "'"};
+    }
+    return object.at(key).get<std::string>();
+}
+
+std::string optional_string(const nlohmann::json& object, const char* key, std::string fallback) {
+    if (!object.contains(key)) {
+        return fallback;
+    }
+    if (!object.at(key).is_string()) {
+        throw std::runtime_error{"macro field '" + std::string{key} + "' must be a string"};
+    }
+    return object.at(key).get<std::string>();
+}
+
+int optional_int(const nlohmann::json& object, const char* key, int fallback) {
+    if (!object.contains(key)) {
+        return fallback;
+    }
+    if (!object.at(key).is_number_integer()) {
+        throw std::runtime_error{"macro field '" + std::string{key} + "' must be an integer"};
+    }
+    return object.at(key).get<int>();
+}
+
+std::uint32_t required_non_negative_ms(const nlohmann::json& object) {
+    const int value = optional_int(object, "ms", -1);
+    if (value < 0) {
+        throw std::runtime_error{"sleep step requires non-negative integer field 'ms'"};
+    }
+    return static_cast<std::uint32_t>(value);
+}
+
+bool optional_bool(const nlohmann::json& object, const char* key, bool fallback) {
+    if (!object.contains(key)) {
+        return fallback;
+    }
+    if (!object.at(key).is_boolean()) {
+        throw std::runtime_error{"macro field '" + std::string{key} + "' must be a boolean"};
+    }
+    return object.at(key).get<bool>();
+}
+
+void require_no_partial_mouse_position(const MacroStep& step) {
+    if (step.has_x != step.has_y) {
+        throw std::runtime_error{"mouse step requires both x and y"};
+    }
+    if (step.absolute && !(step.has_x && step.has_y)) {
+        throw std::runtime_error{"mouse step requires both x and y when absolute is true"};
+    }
+}
+
+MacroStep parse_macro_step(const nlohmann::json& step_json, std::size_t index) {
+    if (!step_json.is_object()) {
+        throw std::runtime_error{"macro step " + std::to_string(index + 1) + " must be an object"};
+    }
+
+    MacroStep step;
+    const std::string context = "macro step " + std::to_string(index + 1);
+    step.type = required_string(step_json, "type", context);
+    step.backend = optional_string(step_json, "backend", "auto");
+
+    if (step.type == "key") {
+        step.key = required_string(step_json, "key", "key step");
+    } else if (step.type == "combo") {
+        step.keys = required_string(step_json, "keys", "combo step");
+    } else if (step.type == "text") {
+        const bool has_text = step_json.contains("text");
+        const bool has_file = step_json.contains("file");
+        if (has_text == has_file) {
+            throw std::runtime_error{"text step requires exactly one of text or file"};
+        }
+        if (has_text) {
+            step.text = required_string(step_json, "text", "text step");
+        } else {
+            step.text_file = required_string(step_json, "file", "text step");
+        }
+    } else if (step.type == "mouse") {
+        step.dx = optional_int(step_json, "dx", 0);
+        step.dy = optional_int(step_json, "dy", 0);
+        step.has_x = step_json.contains("x");
+        step.has_y = step_json.contains("y");
+        step.x = optional_int(step_json, "x", 0);
+        step.y = optional_int(step_json, "y", 0);
+        step.absolute = optional_bool(step_json, "absolute", step.has_x && step.has_y);
+        step.click = optional_string(step_json, "click", "none");
+        require_no_partial_mouse_position(step);
+    } else if (step.type == "drag") {
+        step.path = required_string(step_json, "file", "drag step");
+    } else if (step.type == "screenshot") {
+        step.output_path = required_string(step_json, "output", "screenshot step");
+    } else if (step.type == "sleep") {
+        step.ms = required_non_negative_ms(step_json);
+    } else {
+        throw std::runtime_error{"unsupported macro step type: " + step.type};
+    }
+
+    return step;
+}
+
+std::vector<MacroStep> read_macro_file(const std::filesystem::path& path) {
+    nlohmann::json json;
+    try {
+        json = nlohmann::json::parse(read_text_file(path));
+    } catch (const std::exception& error) {
+        throw std::runtime_error{"failed to parse macro file: " + std::string{error.what()}};
+    }
+
+    if (!json.is_object()) {
+        throw std::runtime_error{"macro file must contain a JSON object"};
+    }
+    if (!json.contains("steps") || !json.at("steps").is_array()) {
+        throw std::runtime_error{"macro requires steps array"};
+    }
+    const auto& steps_json = json.at("steps");
+    if (steps_json.empty()) {
+        throw std::runtime_error{"macro requires at least one step"};
+    }
+
+    std::vector<MacroStep> steps;
+    steps.reserve(steps_json.size());
+    for (std::size_t index = 0; index < steps_json.size(); ++index) {
+        steps.push_back(parse_macro_step(steps_json.at(index), index));
+    }
+    return steps;
+}
+
+int validate_macro_command(const MacroOptions& options, Io io) {
+    try {
+        static_cast<void>(read_macro_file(options.path));
+    } catch (const std::exception& error) {
+        io.err << error.what() << '\n';
+        return 2;
+    }
+
+    io.out << "macro is valid\n";
+    return 0;
+}
+
+int run_macro_step(
+    const MacroStep& step,
+    std::size_t index,
+    Dependencies& dependencies,
+    Io io) {
+    const auto missing_backend = [&](std::string_view name) {
+        io.err << "macro step " << (index + 1) << " failed: " << name << " backend is not configured\n";
+        return 2;
+    };
+
+    int code = 0;
+    if (step.type == "key") {
+        if (!dependencies.input_key) return missing_backend("input key");
+        code = dependencies.input_key(InputKeyOptions{.key = step.key, .backend = step.backend}, io);
+    } else if (step.type == "combo") {
+        if (!dependencies.input_combo) return missing_backend("input combo");
+        code = dependencies.input_combo(InputComboOptions{.keys = step.keys, .backend = step.backend}, io);
+    } else if (step.type == "text") {
+        if (!dependencies.input_text) return missing_backend("input text");
+        InputTextOptions options{
+            .text = step.text,
+            .text_file = step.text_file,
+        };
+        if (!options.text_file.empty()) {
+            try {
+                options.text = read_text_file(options.text_file);
+            } catch (const std::exception& error) {
+                io.err << "macro step " << (index + 1) << " failed: " << error.what() << '\n';
+                return 2;
+            }
+        }
+        code = dependencies.input_text(options, io);
+    } else if (step.type == "mouse") {
+        if (!dependencies.input_mouse) return missing_backend("input mouse");
+        code = dependencies.input_mouse(
+            InputMouseOptions{
+                .dx = step.dx,
+                .dy = step.dy,
+                .x = step.x,
+                .y = step.y,
+                .absolute = step.absolute,
+                .backend = step.backend,
+                .click = step.click,
+            },
+            io);
+    } else if (step.type == "drag") {
+        if (!dependencies.input_drag) return missing_backend("input drag");
+        code = dependencies.input_drag(InputDragOptions{.path = step.path, .backend = step.backend}, io);
+    } else if (step.type == "screenshot") {
+        if (!dependencies.capture_desktop) return missing_backend("screenshot");
+        code = dependencies.capture_desktop(ScreenshotDesktopOptions{.output_path = step.output_path}, io);
+    } else if (step.type == "sleep") {
+        std::this_thread::sleep_for(std::chrono::milliseconds{step.ms});
+        code = 0;
+    }
+
+    if (code != 0) {
+        io.err << "macro step " << (index + 1) << " failed\n";
+    }
+    return code;
+}
+
+int run_macro_command(const MacroOptions& options, Dependencies& dependencies, Io io) {
+    std::vector<MacroStep> steps;
+    try {
+        steps = read_macro_file(options.path);
+    } catch (const std::exception& error) {
+        io.err << error.what() << '\n';
+        return 2;
+    }
+
+    for (std::size_t index = 0; index < steps.size(); ++index) {
+        const int code = run_macro_step(steps[index], index, dependencies, io);
+        if (code != 0) {
+            return code;
+        }
+    }
+
+    io.out << "macro completed " << steps.size() << " steps\n";
+    return 0;
 }
 
 }
@@ -238,6 +486,9 @@ int run(
     };
     DaemonOptions daemon_options{
         .once = false,
+    };
+    MacroOptions macro_options{
+        .path = {},
     };
 
     CLI::App app{"Kiseki Input"};
@@ -437,6 +688,20 @@ int run(
         }
         const auto store = make_store();
         exit_code = dependencies.run_daemon(daemon_options, store.path(), io);
+    });
+
+    auto* macro = app.add_subcommand("macro", "Macro commands");
+    macro->require_subcommand(1);
+    auto* macro_validate = macro->add_subcommand("validate", "Validate a JSON macro file");
+    macro_validate->add_option("--file", macro_options.path, "Macro JSON file")->required();
+    macro_validate->callback([&]() {
+        exit_code = validate_macro_command(macro_options, io);
+    });
+
+    auto* macro_run = macro->add_subcommand("run", "Run a JSON macro file");
+    macro_run->add_option("--file", macro_options.path, "Macro JSON file")->required();
+    macro_run->callback([&]() {
+        exit_code = run_macro_command(macro_options, dependencies, io);
     });
 
     app.add_subcommand("capabilities", "Print foundation capabilities")->callback([&]() {

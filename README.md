@@ -11,6 +11,7 @@ This build includes:
 - Config-only local WebUI: `kiseki config-ui`
 - CLI desktop screenshots and burst screenshots
 - CLI keyboard/mouse input
+- CLI JSON macros for sequencing input, screenshots, and waits
 - Configurable heartbeat daemon with dismissible notifications
 - Machine-readable capabilities: `kiseki capabilities`
 - Human-readable diagnostics: `kiseki doctor`
@@ -30,6 +31,8 @@ kiseki input key --key shift
 kiseki input combo --keys win+r
 kiseki input text --text "hello"
 kiseki input mouse --dx 0 --dy 0 --click none
+kiseki macro validate --file macro.json
+kiseki macro run --file macro.json
 kiseki daemon run
 kiseki daemon run --once
 kiseki capabilities
@@ -45,6 +48,26 @@ GET /api/capabilities
 ```
 
 It does not expose input, screenshot, notification, daemon, shell, or execution routes.
+
+## Macros
+
+Macros are JSON files with a `steps` array. They are executed only by the CLI.
+
+```json
+{
+  "name": "paint-demo",
+  "steps": [
+    {"type": "combo", "keys": "win+r", "backend": "system"},
+    {"type": "text", "text": "mspaint.exe"},
+    {"type": "key", "key": "enter", "backend": "system"},
+    {"type": "sleep", "ms": 500},
+    {"type": "drag", "file": "artifacts/live-test/heart-points.txt", "backend": "system"},
+    {"type": "screenshot", "output": "artifacts/live-test/paint-macro.bmp"}
+  ]
+}
+```
+
+Supported macro step types: `key`, `combo`, `text`, `mouse`, `drag`, `screenshot`, and `sleep`.
 
 ## Platform Notes
 
