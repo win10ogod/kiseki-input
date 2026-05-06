@@ -42,6 +42,20 @@ TEST_CASE("config api rejects invalid saved config") {
     REQUIRE(response.body.find("webui.port") != std::string::npos);
 }
 
+TEST_CASE("config api returns foundation capabilities") {
+    const auto path = temp_config_path("kiseki-webui-api-capabilities-test.json");
+    ConfigApi api{path};
+
+    const auto response = api.get_capabilities();
+    const auto json = nlohmann::json::parse(response.body);
+
+    REQUIRE(response.status == 200);
+    REQUIRE(response.content_type == "application/json");
+    REQUIRE_FALSE(json["input"]["driver"].get<bool>());
+    REQUIRE_FALSE(json["capture"]["burst"].get<bool>());
+    REQUIRE_FALSE(json["limitations"].empty());
+}
+
 TEST_CASE("config api exposes only configuration routes") {
     const auto routes = ConfigApi::routes();
 
