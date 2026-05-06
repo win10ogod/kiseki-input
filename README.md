@@ -1,16 +1,48 @@
 # Kiseki Input
 
-Kiseki Input is a cross-platform C++ CLI tool for configuration-first input and screenshot automation workflows.
+Kiseki Input is a native C++ CLI for local desktop automation: keyboard and mouse input, system screenshots, replayable JSON macros, burst capture, heartbeat notifications, and a configuration-only WebUI in one small tool.
 
-## Demos
+It is built for developers who want a practical automation lab instead of a pile of one-off scripts. The project is CLI-first, keeps each backend slice separate, and reports platform limits explicitly instead of pretending every desktop, game, or compositor behaves the same way.
 
-These GIFs were recorded from the Windows build with the CLI and macro runner. They are cropped to the actual target window or dialog.
+## Why Try It
+
+- Single native CLI for input, screenshots, macros, diagnostics, and heartbeat notifications.
+- Replayable JSON macros make manual UI checks repeatable.
+- Burst screenshots can grab short frame sequences such as 8 frames at 60 FPS.
+- WebUI is intentionally configuration-only, so opening it does not create a remote control surface.
+- Windows can use `IbInputSimulator.dll` when available and falls back to system input when it is not.
+- Linux support uses native X11/XTest paths where the session permits it.
+
+## See It Work
+
+These GIFs were recorded from the Windows build using the CLI and macro runner. They are cropped to the actual target window or dialog.
 
 | Macro input in Notepad | Mouse macro in Paint | Heartbeat notification |
 | --- | --- | --- |
 | ![Kiseki CLI typing text into Notepad](docs/assets/demos/notepad-unicode.gif) | ![Kiseki CLI drawing a heart in Paint](docs/assets/demos/paint-macro.gif) | ![Kiseki heartbeat notification](docs/assets/demos/heartbeat-notification.gif) |
 
-## Current Build
+## Try It In 60 Seconds
+
+From the repository root after building:
+
+```bash
+kiseki doctor
+kiseki screenshot desktop --output screenshot.bmp
+kiseki screenshot burst --directory frames --prefix frame --frames 8 --fps 60
+kiseki macro validate --file docs/assets/demos/demo-notepad-unicode.json
+kiseki --config docs/assets/demos/demo-notification-config.json daemon run --once
+```
+
+If `kiseki` is not on `PATH`, use the built executable path instead, such as `build/Debug/kiseki.exe` on Windows multi-config builds.
+
+On Windows, the demo macros can drive visible desktop apps:
+
+```bash
+kiseki macro run --file docs/assets/demos/demo-notepad-unicode.json
+kiseki macro run --file docs/assets/demos/demo-paint-macro.json
+```
+
+## What Works Today
 
 This build includes:
 
@@ -26,7 +58,14 @@ This build includes:
 
 Windows input first attempts to load `IbInputSimulator.dll` next to the executable. If that DLL is absent or cannot initialize, Windows falls back to `SendInput` and reports driver input unavailable. Linux input uses native X11/XTest when available. Desktop screenshots are system-level BMP captures: Win32 GDI on Windows, X11 `XGetImage` on Linux sessions that allow root capture.
 
-## Commands
+## Important Boundaries
+
+- Operational actions are CLI-only. The WebUI can read/write config and show capabilities, but it cannot trigger input, screenshots, notifications, daemon control, shell commands, or process launch.
+- Current public commands operate on desktop screenshots and global/system input. Target-aware and background-window behavior must be checked through capabilities and platform support before relying on it.
+- Game-class programs can be used for targeted screenshot experiments where the platform capture backend can access the surface. Background keyboard/mouse input is not promised for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games.
+- Driver input is not a bypass mechanism. It follows the limits of the installed backend, desktop session, and target application.
+
+## Command Map
 
 ```text
 kiseki config path
@@ -47,7 +86,9 @@ kiseki capabilities
 kiseki doctor
 ```
 
-The WebUI exposes only:
+## WebUI Contract
+
+The embedded local WebUI exposes only:
 
 ```text
 GET /api/config
@@ -59,7 +100,7 @@ It does not expose input, screenshot, notification, daemon, shell, or execution 
 
 ## Macros
 
-Macros are JSON files with a `steps` array. They are executed only by the CLI.
+Macros are JSON files with a `steps` array. They are executed only by the CLI and are useful for turning a visible desktop workflow into a repeatable check.
 
 ```json
 {
@@ -76,6 +117,8 @@ Macros are JSON files with a `steps` array. They are executed only by the CLI.
 ```
 
 Supported macro step types: `key`, `combo`, `text`, `mouse`, `drag`, `screenshot`, and `sleep`.
+
+Demo macro files live under `docs/assets/demos/`.
 
 ## Platform Notes
 
