@@ -92,6 +92,20 @@ std::string read_text_file(const std::filesystem::path& path) {
     return stream.str();
 }
 
+kiseki::platform::target::TargetQuery to_target_query(const TargetOptions& options) {
+    return kiseki::platform::target::TargetQuery{
+        .title = options.title,
+        .pid = options.pid,
+        .window_id = options.window_id,
+    };
+}
+
+void add_target_options(CLI::App* command, TargetOptions& options) {
+    command->add_option("--target-title", options.title, "Target window title substring");
+    command->add_option("--target-pid", options.pid, "Target process id");
+    command->add_option("--target-window-id", options.window_id, "Target platform window id");
+}
+
 std::vector<kiseki::platform::input::MousePoint> read_mouse_points_file(const std::filesystem::path& path) {
     std::ifstream file{path};
     if (!file) {
@@ -387,6 +401,22 @@ Dependencies default_dependencies() {
                 }),
                 io);
         },
+        .capture_window = [](const ScreenshotWindowOptions& options, Io io) {
+            return print_capture_result(
+                kiseki::platform::capture::capture_window_bmp(to_target_query(options.target), options.output_path),
+                io);
+        },
+        .capture_window_burst = [](const ScreenshotWindowBurstOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::capture::capture_window_burst_bmp(kiseki::platform::capture::WindowBurstOptions{
+                    .target = to_target_query(options.target),
+                    .output_directory = options.output_directory,
+                    .prefix = options.prefix,
+                    .frames = options.frames,
+                    .fps = options.fps,
+                }),
+                io);
+        },
         .input_key = [](const InputKeyOptions& options, Io io) {
             return print_operation_result(kiseki::platform::input::tap_key(options.key, options.backend), io);
         },
@@ -418,6 +448,26 @@ Dependencies default_dependencies() {
                 io.err << error.what() << '\n';
                 return 2;
             }
+        },
+        .input_background_text = [](const BackgroundTextOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::input::background_type_text(to_target_query(options.target), options.text),
+                io);
+        },
+        .input_background_key = [](const BackgroundKeyOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::input::background_tap_key(to_target_query(options.target), options.key),
+                io);
+        },
+        .input_background_mouse = [](const BackgroundMouseOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::input::background_mouse_action(kiseki::platform::input::BackgroundMouseOptions{
+                    .target = to_target_query(options.target),
+                    .x = options.x,
+                    .y = options.y,
+                    .click = options.click,
+                }),
+                io);
         },
         .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
             return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
@@ -459,6 +509,17 @@ int run(
         .frames = 0,
         .fps = 0,
     };
+    ScreenshotWindowOptions window_options{
+        .target = {},
+        .output_path = {},
+    };
+    ScreenshotWindowBurstOptions window_burst_options{
+        .target = {},
+        .output_directory = {},
+        .prefix = "frame",
+        .frames = 0,
+        .fps = 0,
+    };
     InputKeyOptions key_options{
         .key = "",
         .backend = "auto",
@@ -483,6 +544,21 @@ int run(
     InputDragOptions drag_options{
         .path = {},
         .backend = "auto",
+    };
+    BackgroundTextOptions background_text_options{
+        .target = {},
+        .text = "",
+        .text_file = {},
+    };
+    BackgroundKeyOptions background_key_options{
+        .target = {},
+        .key = "",
+    };
+    BackgroundMouseOptions background_mouse_options{
+        .target = {},
+        .x = 0,
+        .y = 0,
+        .click = "none",
     };
     DaemonOptions daemon_options{
         .once = false,
@@ -578,6 +654,50 @@ int run(
             burst_options.fps = loaded.config.screenshot.burst_fps;
         }
         exit_code = dependencies.capture_burst(burst_options, io);
+    });
+
+    auto* screenshot_window = screenshot->add_subcommand("window", "Capture a target window to a BMP file");
+    add_target_options(screenshot_window, window_options.target);
+    screenshot_window->add_option("-o,--output", window_options.output_path, "Output BMP path")->required();
+    screenshot_window->callback([&]() {
+        if (!dependencies.capture_window) {
+            io.err << "window screenshot backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.capture_window(window_options, io);
+    });
+
+    auto* screenshot_window_burst = screenshot->add_subcommand("window-burst", "Capture a burst of target-window BMP frames");
+    add_target_options(screenshot_window_burst, window_burst_options.target);
+    screenshot_window_burst->add_option("-d,--directory", window_burst_options.output_directory, "Output directory");
+    screenshot_window_burst->add_option("--prefix", window_burst_options.prefix, "Frame filename prefix");
+    screenshot_window_burst->add_option("--frames", window_burst_options.frames, "Frame count");
+    screenshot_window_burst->add_option("--fps", window_burst_options.fps, "Target frames per second");
+    screenshot_window_burst->callback([&]() {
+        if (!dependencies.capture_window_burst) {
+            io.err << "window burst screenshot backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        const auto loaded = make_store().load_or_default();
+        if (!loaded.ok) {
+            io.err << "config error: " << loaded.error << '\n';
+            exit_code = 2;
+            return;
+        }
+        if (window_burst_options.output_directory.empty()) {
+            window_burst_options.output_directory = loaded.config.screenshot.default_output_directory.empty()
+                                                       ? std::filesystem::path{"."}
+                                                       : std::filesystem::path{loaded.config.screenshot.default_output_directory};
+        }
+        if (window_burst_options.frames == 0) {
+            window_burst_options.frames = loaded.config.screenshot.burst_frames;
+        }
+        if (window_burst_options.fps == 0) {
+            window_burst_options.fps = loaded.config.screenshot.burst_fps;
+        }
+        exit_code = dependencies.capture_window_burst(window_burst_options, io);
     });
 
     auto* input = app.add_subcommand("input", "Keyboard and mouse input commands");
@@ -676,6 +796,59 @@ int run(
         exit_code = dependencies.input_drag(drag_options, io);
     });
 
+    auto* input_background_text = input->add_subcommand("background-text", "Send text to a target window without switching foreground");
+    add_target_options(input_background_text, background_text_options.target);
+    input_background_text->add_option("--text", background_text_options.text, "Text to send");
+    input_background_text->add_option("--file", background_text_options.text_file, "UTF-8 text file to send");
+    input_background_text->callback([&]() {
+        if (!dependencies.input_background_text) {
+            io.err << "background text backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        if (!background_text_options.text_file.empty()) {
+            try {
+                background_text_options.text = read_text_file(background_text_options.text_file);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                exit_code = 2;
+                return;
+            }
+        }
+        if (background_text_options.text.empty()) {
+            io.err << "input background-text requires --text or --file\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.input_background_text(background_text_options, io);
+    });
+
+    auto* input_background_key = input->add_subcommand("background-key", "Tap a key in a target window without switching foreground");
+    add_target_options(input_background_key, background_key_options.target);
+    input_background_key->add_option("--key", background_key_options.key, "Key name")->required();
+    input_background_key->callback([&]() {
+        if (!dependencies.input_background_key) {
+            io.err << "background key backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.input_background_key(background_key_options, io);
+    });
+
+    auto* input_background_mouse = input->add_subcommand("background-mouse", "Send a client-area mouse message to a target window");
+    add_target_options(input_background_mouse, background_mouse_options.target);
+    input_background_mouse->add_option("--x", background_mouse_options.x, "Target client-area X coordinate")->required();
+    input_background_mouse->add_option("--y", background_mouse_options.y, "Target client-area Y coordinate")->required();
+    input_background_mouse->add_option("--click", background_mouse_options.click, "none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    input_background_mouse->callback([&]() {
+        if (!dependencies.input_background_mouse) {
+            io.err << "background mouse backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.input_background_mouse(background_mouse_options, io);
+    });
+
     auto* daemon = app.add_subcommand("daemon", "Background daemon commands");
     daemon->require_subcommand(1);
     auto* daemon_run = daemon->add_subcommand("run", "Run heartbeat notification daemon");
@@ -726,6 +899,7 @@ int run(
         io.out << "  System input backend: " << availability(capabilities.input.system) << '\n';
         io.out << "  Background-window input: " << availability(capabilities.input.background_window) << '\n';
         io.out << "  Desktop screenshot: " << availability(capabilities.capture.desktop) << '\n';
+        io.out << "  Window screenshot: " << availability(capabilities.capture.window) << '\n';
         io.out << "  Screenshot burst: " << availability(capabilities.capture.burst) << '\n';
 
         io.out << "Limitations:\n";

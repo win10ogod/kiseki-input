@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -305,6 +307,128 @@ DWORD sendinput_mouse_flags_for_click(const std::string& click) {
     return 0;
 }
 
+std::optional<HWND> hwnd_from_id(const std::string& id) {
+    try {
+        std::size_t consumed = 0;
+        const auto value = std::stoull(id, &consumed, 0);
+        if (consumed != id.size()) {
+            return std::nullopt;
+        }
+        return reinterpret_cast<HWND>(static_cast<std::uintptr_t>(value));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::string class_name_lower(HWND hwnd) {
+    wchar_t buffer[256]{};
+    const int copied = GetClassNameW(hwnd, buffer, static_cast<int>(sizeof(buffer) / sizeof(buffer[0])));
+    std::string name;
+    name.reserve(static_cast<std::size_t>(copied > 0 ? copied : 0));
+    for (int index = 0; index < copied; ++index) {
+        const wchar_t c = buffer[index];
+        name.push_back(c < 128 ? static_cast<char>(std::tolower(static_cast<unsigned char>(c))) : '?');
+    }
+    return name;
+}
+
+bool is_text_input_class(HWND hwnd) {
+    const std::string name = class_name_lower(hwnd);
+    return name.find("edit") != std::string::npos ||
+           name.find("richedit") != std::string::npos ||
+           name.find("textbox") != std::string::npos;
+}
+
+struct TextChildSearch {
+    HWND result = nullptr;
+};
+
+BOOL CALLBACK enum_text_child_proc(HWND hwnd, LPARAM lparam) {
+    auto* search = reinterpret_cast<TextChildSearch*>(lparam);
+    if (IsWindowVisible(hwnd) && is_text_input_class(hwnd)) {
+        search->result = hwnd;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+HWND first_text_child(HWND hwnd) {
+    TextChildSearch search;
+    EnumChildWindows(hwnd, enum_text_child_proc, reinterpret_cast<LPARAM>(&search));
+    return search.result;
+}
+
+HWND keyboard_message_target(HWND hwnd) {
+    DWORD pid = 0;
+    const DWORD thread_id = GetWindowThreadProcessId(hwnd, &pid);
+    if (thread_id != 0) {
+        GUITHREADINFO info{};
+        info.cbSize = sizeof(info);
+        if (GetGUIThreadInfo(thread_id, &info) != 0 &&
+            info.hwndFocus != nullptr &&
+            (info.hwndFocus == hwnd || IsChild(hwnd, info.hwndFocus))) {
+            return info.hwndFocus;
+        }
+    }
+
+    if (HWND child = first_text_child(hwnd); child != nullptr) {
+        return child;
+    }
+    return hwnd;
+}
+
+LPARAM key_lparam(unsigned short vk, bool release) {
+    const UINT scan = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+    LPARAM lparam = 1 | (static_cast<LPARAM>(scan) << 16);
+    if (release) {
+        lparam |= (1LL << 30) | (1LL << 31);
+    }
+    return lparam;
+}
+
+OperationResult with_resolved_hwnd(const kiseki::platform::target::TargetQuery& query, const auto& callback) {
+    const auto resolved = kiseki::platform::target::resolve_window(query);
+    if (!resolved.ok) {
+        return fail(resolved.error);
+    }
+
+    const auto hwnd = hwnd_from_id(resolved.window.id);
+    if (!hwnd || !IsWindow(*hwnd)) {
+        return fail("resolved target window is no longer valid");
+    }
+    return callback(*hwnd);
+}
+
+HWND mouse_message_target(HWND hwnd, POINT& point) {
+    HWND child = ChildWindowFromPointEx(hwnd, point, CWP_SKIPINVISIBLE | CWP_SKIPDISABLED);
+    if (child == nullptr || child == hwnd) {
+        return hwnd;
+    }
+
+    MapWindowPoints(hwnd, child, &point, 1);
+    return child;
+}
+
+LPARAM mouse_lparam(const POINT& point) {
+    return MAKELPARAM(static_cast<WORD>(point.x), static_cast<WORD>(point.y));
+}
+
+OperationResult post_mouse_button(HWND hwnd, UINT down_message, UINT up_message, WPARAM state, const POINT& point, const std::string& click) {
+    if (click.ends_with("-down")) {
+        return PostMessageW(hwnd, down_message, state, mouse_lparam(point)) != 0 ? ok("background mouse input sent") : fail("PostMessage mouse down failed");
+    }
+    if (click.ends_with("-up")) {
+        return PostMessageW(hwnd, up_message, 0, mouse_lparam(point)) != 0 ? ok("background mouse input sent") : fail("PostMessage mouse up failed");
+    }
+    if (PostMessageW(hwnd, down_message, state, mouse_lparam(point)) == 0) {
+        return fail("PostMessage mouse down failed");
+    }
+    if (PostMessageW(hwnd, up_message, 0, mouse_lparam(point)) == 0) {
+        return fail("PostMessage mouse up failed");
+    }
+    return ok("background mouse input sent");
+}
+
 #else
 #ifdef KISEKI_HAS_X11
 
@@ -377,7 +501,7 @@ OperationResult with_display(const auto& callback) {
         return fail("libXtst is not available");
     }
     const auto result = callback(display, xtest);
-    XFlush(display);
+    XSync(display, False);
     XCloseDisplay(display);
     return result;
 }
@@ -404,6 +528,66 @@ OperationResult send_combo_with_xtest(const std::vector<std::string>& keys) {
         }
         return ok("input sent");
     });
+}
+
+OperationResult with_target_window(const kiseki::platform::target::TargetQuery& query, const auto& callback) {
+    const auto resolved = kiseki::platform::target::resolve_window(query);
+    if (!resolved.ok) {
+        return fail(resolved.error);
+    }
+
+    Display* display = XOpenDisplay(nullptr);
+    if (display == nullptr) {
+        return fail("XOpenDisplay failed; DISPLAY is not available");
+    }
+
+    const Window window = static_cast<Window>(std::stoull(resolved.window.id, nullptr, 0));
+    const auto result = callback(display, window);
+    XFlush(display);
+    XCloseDisplay(display);
+    return result;
+}
+
+OperationResult send_background_key_x11(Display* display, Window window, const std::string& key) {
+    const KeySym sym = keysym_for_name(key);
+    if (sym == NoSymbol) {
+        return fail("unsupported key: " + key);
+    }
+    const KeyCode keycode = XKeysymToKeycode(display, sym);
+    if (keycode == 0) {
+        return fail("unsupported keycode: " + key);
+    }
+
+    XKeyEvent event{};
+    event.display = display;
+    event.window = window;
+    event.root = DefaultRootWindow(display);
+    event.subwindow = None;
+    event.time = CurrentTime;
+    event.x = 1;
+    event.y = 1;
+    event.x_root = 1;
+    event.y_root = 1;
+    event.same_screen = True;
+    event.keycode = keycode;
+    event.state = 0;
+
+    event.type = KeyPress;
+    if (XSendEvent(display, window, True, KeyPressMask, reinterpret_cast<XEvent*>(&event)) == 0) {
+        return fail("XSendEvent key press failed");
+    }
+    event.type = KeyRelease;
+    if (XSendEvent(display, window, True, KeyReleaseMask, reinterpret_cast<XEvent*>(&event)) == 0) {
+        return fail("XSendEvent key release failed");
+    }
+    return ok("background key input sent");
+}
+
+std::string x11_key_name_for_char(char c) {
+    if (c == '\n' || c == '\r') return "Return";
+    if (c == '\t') return "Tab";
+    if (c == ' ') return "space";
+    return std::string{c};
 }
 #endif
 #endif
@@ -438,6 +622,18 @@ bool driver_input_available() {
     return simulator.available();
 #else
     return false;
+#endif
+}
+
+bool background_window_input_available() {
+#ifdef _WIN32
+    return true;
+#else
+#ifdef KISEKI_HAS_X11
+    return kiseki::platform::target::target_window_available();
+#else
+    return false;
+#endif
 #endif
 }
 
@@ -710,6 +906,163 @@ OperationResult mouse_action(const MouseOptions& options) {
     });
 #else
     return fail("Linux X11/XTest input support was not compiled in");
+#endif
+#endif
+}
+
+OperationResult background_type_text(const kiseki::platform::target::TargetQuery& target, const std::string& text) {
+    if (text.empty()) {
+        return ok("background text input empty");
+    }
+
+#ifdef _WIN32
+    const std::wstring wide = utf8_to_utf16(text);
+    if (wide.empty()) {
+        return fail("failed to decode text");
+    }
+
+    return with_resolved_hwnd(target, [&](HWND hwnd) {
+        HWND receiver = keyboard_message_target(hwnd);
+        for (const wchar_t c : wide) {
+            if (PostMessageW(receiver, WM_CHAR, static_cast<WPARAM>(c), 1) == 0) {
+                return fail("PostMessage text failed");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return ok("background text input sent");
+    });
+#else
+#ifdef KISEKI_HAS_X11
+    return with_target_window(target, [&](Display* display, Window window) {
+        for (const unsigned char c : text) {
+            if (c > 0x7f) {
+                return fail("Linux X11 background text currently supports ASCII text");
+            }
+            const auto result = send_background_key_x11(display, window, x11_key_name_for_char(static_cast<char>(c)));
+            if (!result.ok) {
+                return result;
+            }
+        }
+        return ok("background text input sent");
+    });
+#else
+    return fail("Linux X11 background input support was not compiled in");
+#endif
+#endif
+}
+
+OperationResult background_tap_key(const kiseki::platform::target::TargetQuery& target, const std::string& key) {
+    if (key.empty()) {
+        return fail("no key specified");
+    }
+
+#ifdef _WIN32
+    const auto vk = virtual_key_for_name(key);
+    if (vk == 0) {
+        return fail("unsupported key: " + key);
+    }
+
+    return with_resolved_hwnd(target, [&](HWND hwnd) {
+        HWND receiver = keyboard_message_target(hwnd);
+        if (PostMessageW(receiver, WM_KEYDOWN, vk, key_lparam(vk, false)) == 0) {
+            return fail("PostMessage key down failed");
+        }
+        if (PostMessageW(receiver, WM_KEYUP, vk, key_lparam(vk, true)) == 0) {
+            return fail("PostMessage key up failed");
+        }
+        return ok("background key input sent");
+    });
+#else
+#ifdef KISEKI_HAS_X11
+    return with_target_window(target, [&](Display* display, Window window) {
+        return send_background_key_x11(display, window, key);
+    });
+#else
+    return fail("Linux X11 background input support was not compiled in");
+#endif
+#endif
+}
+
+OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
+    const std::string click = lower_copy(options.click);
+    if (!supported_mouse_click(click)) {
+        return fail("click must be none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    }
+    if (options.x < 0 || options.y < 0) {
+        return fail("background mouse coordinates must be non-negative client coordinates");
+    }
+
+#ifdef _WIN32
+    return with_resolved_hwnd(options.target, [&](HWND hwnd) {
+        POINT point{options.x, options.y};
+        HWND receiver = mouse_message_target(hwnd, point);
+        if (PostMessageW(receiver, WM_MOUSEMOVE, 0, mouse_lparam(point)) == 0) {
+            return fail("PostMessage mouse move failed");
+        }
+        if (click == "none") {
+            return ok("background mouse input sent");
+        }
+        if (click.find("left") == 0) {
+            return post_mouse_button(receiver, WM_LBUTTONDOWN, WM_LBUTTONUP, MK_LBUTTON, point, click);
+        }
+        if (click.find("right") == 0) {
+            return post_mouse_button(receiver, WM_RBUTTONDOWN, WM_RBUTTONUP, MK_RBUTTON, point, click);
+        }
+        return post_mouse_button(receiver, WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON, point, click);
+    });
+#else
+#ifdef KISEKI_HAS_X11
+    return with_target_window(options.target, [&](Display* display, Window window) {
+        XMotionEvent motion{};
+        motion.type = MotionNotify;
+        motion.display = display;
+        motion.window = window;
+        motion.root = DefaultRootWindow(display);
+        motion.time = CurrentTime;
+        motion.x = options.x;
+        motion.y = options.y;
+        motion.x_root = options.x;
+        motion.y_root = options.y;
+        motion.same_screen = True;
+        if (XSendEvent(display, window, True, PointerMotionMask, reinterpret_cast<XEvent*>(&motion)) == 0) {
+            return fail("XSendEvent mouse move failed");
+        }
+        if (click == "none") {
+            return ok("background mouse input sent");
+        }
+
+        unsigned int button = 1;
+        if (click.find("right") == 0) button = 3;
+        if (click.find("middle") == 0) button = 2;
+
+        XButtonEvent button_event{};
+        button_event.display = display;
+        button_event.window = window;
+        button_event.root = DefaultRootWindow(display);
+        button_event.time = CurrentTime;
+        button_event.x = options.x;
+        button_event.y = options.y;
+        button_event.x_root = options.x;
+        button_event.y_root = options.y;
+        button_event.same_screen = True;
+        button_event.button = button;
+
+        if (click == "left" || click == "right" || click == "middle" || click.ends_with("-down")) {
+            button_event.type = ButtonPress;
+            if (XSendEvent(display, window, True, ButtonPressMask, reinterpret_cast<XEvent*>(&button_event)) == 0) {
+                return fail("XSendEvent mouse down failed");
+            }
+        }
+        if (click == "left" || click == "right" || click == "middle" || click.ends_with("-up")) {
+            button_event.type = ButtonRelease;
+            if (XSendEvent(display, window, True, ButtonReleaseMask, reinterpret_cast<XEvent*>(&button_event)) == 0) {
+                return fail("XSendEvent mouse up failed");
+            }
+        }
+        return ok("background mouse input sent");
+    });
+#else
+    return fail("Linux X11 background input support was not compiled in");
 #endif
 #endif
 }

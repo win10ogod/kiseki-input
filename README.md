@@ -9,6 +9,7 @@ It is built for developers who want a practical automation lab instead of a pile
 - Single native CLI for input, screenshots, macros, diagnostics, and heartbeat notifications.
 - Replayable JSON macros make manual UI checks repeatable.
 - Burst screenshots can grab short frame sequences such as 8 frames at 60 FPS.
+- Target-window screenshots and message-based background input are available for windows that accept the platform APIs.
 - WebUI is intentionally configuration-only, so opening it does not create a remote control surface.
 - Windows can use `IbInputSimulator.dll` when available and falls back to system input when it is not.
 - Linux support uses native X11/XTest paths where the session permits it.
@@ -50,19 +51,21 @@ This build includes:
 - JSON configuration defaults, validation, and persistence
 - Config-only local WebUI: `kiseki config-ui`
 - CLI desktop screenshots and burst screenshots
+- CLI target-window screenshots and target-window burst screenshots
 - CLI keyboard/mouse input
+- CLI message-based background keyboard/mouse input for target windows that accept it
 - CLI JSON macros for sequencing input, screenshots, and waits
 - Configurable heartbeat daemon with dismissible notifications
 - Machine-readable capabilities: `kiseki capabilities`
 - Human-readable diagnostics: `kiseki doctor`
 
-Windows input first attempts to load `IbInputSimulator.dll` next to the executable. If that DLL is absent or cannot initialize, Windows falls back to `SendInput` and reports driver input unavailable. Linux input uses native X11/XTest when available. Desktop screenshots are system-level BMP captures: Win32 GDI on Windows, X11 `XGetImage` on Linux sessions that allow root capture.
+Windows input first attempts to load `IbInputSimulator.dll` next to the executable. If that DLL is absent or cannot initialize, Windows falls back to `SendInput` and reports driver input unavailable. Target-window background input on Windows uses normal window messages such as `WM_CHAR`, `WM_KEYDOWN/UP`, and mouse messages. Linux input uses native X11/XTest for global input and X11 events for target-window background input when available. Screenshots are system-level BMP captures: Win32 GDI/`PrintWindow` on Windows, X11 `XGetImage` on Linux sessions that allow capture.
 
 ## Important Boundaries
 
 - Operational actions are CLI-only. The WebUI can read/write config and show capabilities, but it cannot trigger input, screenshots, notifications, daemon control, shell commands, or process launch.
-- Current public commands operate on desktop screenshots and global/system input. Target-aware and background-window behavior must be checked through capabilities and platform support before relying on it.
-- Game-class programs can be used for targeted screenshot experiments where the platform capture backend can access the surface. Background keyboard/mouse input is not promised for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games.
+- Target-aware and background-window behavior must be checked through capabilities and platform support before relying on it.
+- Game-class programs can be used for targeted screenshot experiments where the platform capture backend can access the surface. Background keyboard/mouse input depends on whether the target accepts system window messages or public automation events.
 - Driver input is not a bypass mechanism. It follows the limits of the installed backend, desktop session, and target application.
 
 ## Command Map
@@ -74,10 +77,15 @@ kiseki config validate
 kiseki config-ui
 kiseki screenshot desktop --output screenshot.bmp
 kiseki screenshot burst --directory frames --prefix frame --frames 8 --fps 60
+kiseki screenshot window --target-title "Untitled" --output window.bmp
+kiseki screenshot window-burst --target-title "Untitled" --directory frames --prefix window --frames 8 --fps 60
 kiseki input key --key shift
 kiseki input combo --keys win+r
 kiseki input text --text "hello"
 kiseki input mouse --dx 0 --dy 0 --click none
+kiseki input background-text --target-title "Untitled" --text "hello"
+kiseki input background-key --target-title "Untitled" --key enter
+kiseki input background-mouse --target-title "Untitled" --x 20 --y 20 --click left
 kiseki macro validate --file macro.json
 kiseki macro run --file macro.json
 kiseki daemon run
@@ -122,9 +130,9 @@ Demo macro files live under `docs/assets/demos/`.
 
 ## Platform Notes
 
-Windows screenshots and system input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `IbInputSimulator`.
+Windows screenshots, target-window screenshots, system input, and message-based background input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `IbInputSimulator`.
 
-WSL/Linux input was tested through X11/XTest. In the current WSLg session, X11 root screenshot capture is blocked by the compositor, so the Linux binary reports desktop screenshot unavailable instead of crashing. The same Linux code works on X11 sessions that permit `XGetImage` on the root window.
+Linux support is implemented through X11/XTest and X11 window APIs. Wayland or compositor-restricted sessions may report target input or screenshot capture unavailable instead of crashing.
 
 ## Build
 

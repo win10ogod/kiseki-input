@@ -12,9 +12,9 @@ Windows driver-level keyboard and mouse simulation uses the existing MIT-license
 
 ## Explicit Non-Goals
 
-The project does not provide a remote control API, tray application, desktop GUI, browser-triggered action endpoint, anti-cheat bypass, target process injection, or hidden WebUI execution route.
+The project does not provide a remote control API, tray application, desktop GUI, browser-triggered action endpoint, protected-input bypass, target process injection, or hidden WebUI execution route.
 
-Game support is limited by operating system and target application behavior. Targeted high-speed screenshots are supported for games when the platform capture backend can access the target surface. Background keyboard and mouse input for games is best-effort and only applies to games that accept system window messages or public automation interfaces. Raw Input, DirectInput, protected full-screen, and anti-cheat protected games are not promised to accept true background input.
+Game support is limited by operating system and target application behavior. Targeted high-speed screenshots are supported for games when the platform capture backend can access the target surface. Background keyboard and mouse input for games is best-effort and only applies to games that accept system window messages or public automation interfaces. Raw Input, DirectInput, protected full-screen, and targets that do not accept background window messages are not promised to accept true background input.
 
 ## Top-Level Commands
 
@@ -324,7 +324,7 @@ Example capability shape:
     "burst": true
   },
   "limitations": [
-    "background-window input is not guaranteed for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games"
+    "background-window input depends on whether the target accepts system window messages or public automation events"
   ]
 }
 ```

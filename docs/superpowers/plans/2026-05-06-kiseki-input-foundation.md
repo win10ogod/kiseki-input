@@ -1235,7 +1235,7 @@ CapabilityMatrix foundation_capabilities() {
         .limitations = {
             "foundation build exposes configuration and WebUI only",
             "input, screenshot, target, notification, and daemon backends are separate implementation slices",
-            "background-window input is not guaranteed for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games",
+            "background-window input depends on whether the target accepts system window messages or public automation events",
         },
     };
 }

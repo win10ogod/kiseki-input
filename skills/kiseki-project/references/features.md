@@ -24,6 +24,9 @@ Screenshots:
 
 - `kiseki screenshot desktop --output <file.bmp>` captures the visible desktop to BMP.
 - `kiseki screenshot burst --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames.
+- `kiseki screenshot window --target-title <text> --output <file.bmp>` captures one target window.
+- `kiseki screenshot window-burst --target-title <text> --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames from one target window.
+- Target selectors are `--target-title`, `--target-pid`, and `--target-window-id`.
 - If burst options are omitted or zero, defaults come from config.
 - Supported format is currently BMP.
 
@@ -36,6 +39,9 @@ Input:
 - `kiseki input mouse --dx <n> --dy <n> [--click ...] [--backend ...]`
 - `kiseki input mouse --x <n> --y <n> [--absolute] [--click ...] [--backend ...]`
 - `kiseki input drag --file <points.txt> [--backend auto|driver|system]`
+- `kiseki input background-text --target-title <text> --text <text>`
+- `kiseki input background-key --target-title <text> --key <name>`
+- `kiseki input background-mouse --target-title <text> --x <n> --y <n> [--click ...]`
 
 Macros:
 
@@ -112,20 +118,24 @@ Windows:
 - Input `auto` uses `SendInput` for combos containing `win`, `super`, or `meta`; otherwise it tries IbInputSimulator first and falls back to SendInput.
 - Unicode text input uses `KEYEVENTF_UNICODE`.
 - Absolute mouse coordinates are virtual-screen coordinates.
+- Target-window screenshots use `PrintWindow`.
+- Background-window input uses normal Win32 window messages and targets text-like child controls when possible.
 
 Linux:
 
 - Input uses X11/XTest when compiled with X11 and `DISPLAY` is usable.
 - Linux `driver` backend currently reports unavailable.
 - Screenshot uses X11 root `XGetImage` when the session permits it.
-- Some WSLg sessions block root capture; the CLI should report unavailable/failure clearly, not crash.
+- Target-window background input uses X11 events.
+- Target-window screenshots use X11 `XGetImage` on the selected window.
+- Some compositor sessions block capture; the CLI should report unavailable/failure clearly, not crash.
 
 ## Capability Limits
 
-- `backgroundWindow` is currently reported unavailable by runtime capabilities.
-- Capture `window` and `region` are not implemented.
+- `backgroundWindow` is reported available when the platform/session supports target-window operations.
+- Capture `window` is implemented. Capture `region` is not implemented.
 - Game background input is only expected for targets that accept normal system window messages or public automation interfaces.
-- No guarantee is made for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games.
+- No guarantee is made for targets that ignore system window messages or public automation events.
 
 ## Macro Schema
 

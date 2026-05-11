@@ -9,6 +9,7 @@
 - `src/platform/input/`: keyboard, text, mouse, and drag backends.
 - `src/platform/notification/`: heartbeat notification and daemon loop.
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.
+- `src/platform/target/`: platform target-window resolver for title, PID, and window id selectors.
 - `src/webui/`: embedded static assets, config-only API, HTTP server.
 - `test/`: Catch2 unit tests.
 - `ui/`: source WebUI assets mirrored into embedded static assets.
@@ -69,4 +70,4 @@ Tests should continue to assert that WebUI assets do not reference operational A
 
 When touching background input or game-targeted wording, preserve this constraint:
 
-> Game-class programs support targeted high-speed screenshot where available; background keyboard/mouse only works for targets that accept system window messages or public automation interfaces. No guarantee is made for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games.
+> Game-class programs support targeted high-speed screenshot where available; background keyboard/mouse only works for targets that accept system window messages or public automation interfaces.

@@ -43,5 +43,5 @@ TEST_CASE("foundation capabilities include explicit limitations") {
     const auto limitations = json["limitations"].dump();
     REQUIRE(limitations.find("configuration and WebUI only") != std::string::npos);
     REQUIRE(limitations.find("separate implementation slices") != std::string::npos);
-    REQUIRE(limitations.find("background-window input is not guaranteed") != std::string::npos);
+    REQUIRE(limitations.find("background-window input depends") != std::string::npos);
 }

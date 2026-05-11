@@ -15,7 +15,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - Prefer small platform slices: input, screenshot, notification, config, WebUI, and CLI wiring should remain separable.
 - On Windows, use the Windows executable for live UI verification from WSL; WSL is only the orchestration shell.
 - Do not claim Linux support from WSL-only results. Linux screenshot/input must be tested on a real Linux graphical session when the user asks for Linux proof.
-- Do not overclaim game background input. It is not guaranteed for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games.
+- Do not overclaim game background input. It depends on whether the target accepts system window messages or public automation events.
 
 ## Project Anchors
 

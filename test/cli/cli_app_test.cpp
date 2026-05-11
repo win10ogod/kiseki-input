@@ -148,7 +148,8 @@ TEST_CASE("capabilities prints foundation capability json") {
     const auto json = nlohmann::json::parse(result.out);
 
     REQUIRE(result.code == 0);
-    REQUIRE(json.at("input").at("backgroundWindow").get<bool>() == false);
+    REQUIRE(json.at("input").at("backgroundWindow").is_boolean());
+    REQUIRE(json.at("capture").at("window").is_boolean());
     REQUIRE(json.at("limitations").is_array());
     REQUIRE_FALSE(json.at("limitations").empty());
     REQUIRE(result.err.empty());
@@ -167,6 +168,7 @@ TEST_CASE("doctor prints diagnostic text with foundation limitations") {
     REQUIRE(result.out.find("System input backend:") != std::string::npos);
     REQUIRE(result.out.find("Background-window input:") != std::string::npos);
     REQUIRE(result.out.find("Desktop screenshot:") != std::string::npos);
+    REQUIRE(result.out.find("Window screenshot:") != std::string::npos);
     REQUIRE(result.out.find("Screenshot burst:") != std::string::npos);
     REQUIRE(result.out.find("Limitations:") != std::string::npos);
     REQUIRE(result.out.find("WebUI is configuration-only") != std::string::npos);
@@ -338,6 +340,69 @@ TEST_CASE("screenshot burst command passes frame count and fps") {
     REQUIRE(err.str().empty());
 }
 
+TEST_CASE("screenshot window command is available with target selectors") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto output_path = temp.file("notepad.bmp");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.capture_window = [&](const kiseki::cli::ScreenshotWindowOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.target.title == "Untitled");
+        REQUIRE(options.target.pid == 0);
+        REQUIRE(options.target.window_id.empty());
+        REQUIRE(options.output_path == output_path);
+        called = true;
+        io.out << "window ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"screenshot", "window", "--target-title", "Untitled", "--output", output_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "window ok\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("screenshot window burst command is available with target selectors") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto output_dir = temp.file("frames");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.capture_window_burst = [&](const kiseki::cli::ScreenshotWindowBurstOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.target.title == "Untitled");
+        REQUIRE(options.output_directory == output_dir);
+        REQUIRE(options.prefix == "frame");
+        REQUIRE(options.frames == 8);
+        REQUIRE(options.fps == 60);
+        called = true;
+        io.out << "window burst ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"screenshot", "window-burst", "--target-title", "Untitled", "--directory", output_dir.string(), "--frames", "8", "--fps", "60"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "window burst ok\n");
+    REQUIRE(err.str().empty());
+}
+
 TEST_CASE("input commands call injected backend") {
     std::ostringstream out;
     std::ostringstream err;
@@ -380,6 +445,58 @@ TEST_CASE("input commands call injected backend") {
     REQUIRE(kiseki::cli::run({"input", "text", "--text", "abc"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"input", "mouse", "--dx", "0", "--dy", "0"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(calls == 4);
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("background input commands are available with target selectors") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    std::vector<std::string> calls;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_background_text = [&](const kiseki::cli::BackgroundTextOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title == "Untitled");
+        REQUIRE(options.text == "abc");
+        calls.push_back("text");
+        return 0;
+    };
+    dependencies.input_background_key = [&](const kiseki::cli::BackgroundKeyOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title == "Untitled");
+        REQUIRE(options.key == "enter");
+        calls.push_back("key");
+        return 0;
+    };
+    dependencies.input_background_mouse = [&](const kiseki::cli::BackgroundMouseOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title == "Untitled");
+        REQUIRE(options.x == 10);
+        REQUIRE(options.y == 20);
+        REQUIRE(options.click == "left");
+        calls.push_back("mouse");
+        return 0;
+    };
+
+    REQUIRE(kiseki::cli::run(
+        {"input", "background-text", "--target-title", "Untitled", "--text", "abc"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies) == 0);
+
+    REQUIRE(kiseki::cli::run(
+        {"input", "background-key", "--target-title", "Untitled", "--key", "enter"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies) == 0);
+
+    REQUIRE(kiseki::cli::run(
+        {"input", "background-mouse", "--target-title", "Untitled", "--x", "10", "--y", "20", "--click", "left"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies) == 0);
+
+    REQUIRE(calls == std::vector<std::string>{"text", "key", "mouse"});
+    REQUIRE(out.str().empty());
     REQUIRE(err.str().empty());
 }
 

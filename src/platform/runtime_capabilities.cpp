@@ -9,11 +9,14 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
     auto capabilities = kiseki::core::capabilities::foundation_capabilities();
     capabilities.input.driver = input::driver_input_available();
     capabilities.input.system = input::system_input_available();
+    capabilities.input.background_window = input::background_window_input_available();
     capabilities.capture.desktop = capture::desktop_capture_available();
-    capabilities.capture.burst = capabilities.capture.desktop;
+    capabilities.capture.window = capture::window_capture_available();
+    capabilities.capture.burst = capabilities.capture.desktop || capabilities.capture.window;
     capabilities.limitations = {
         "WebUI is configuration-only; operational input, screenshot, notification, and daemon actions are CLI-only",
-        "background-window input is not guaranteed for Raw Input, DirectInput, protected fullscreen, or anti-cheat protected games",
+        "background-window input depends on whether the target accepts system window messages or public automation events",
+        "some Raw Input, DirectInput, protected fullscreen, and hardware-overlay targets may ignore background input or window capture",
     };
     if (!capabilities.input.driver) {
 #ifdef _WIN32
@@ -27,6 +30,9 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
     }
     if (!capabilities.capture.desktop) {
         capabilities.limitations.push_back("desktop screenshot backend is unavailable on this platform/session");
+    }
+    if (!capabilities.capture.window) {
+        capabilities.limitations.push_back("window screenshot backend is unavailable on this platform/session");
     }
     return capabilities;
 }

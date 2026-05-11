@@ -55,6 +55,7 @@ add_library(kiseki_platform STATIC
     src/platform/input/input.cpp
     src/platform/notification/notification.cpp
     src/platform/runtime_capabilities.cpp
+    src/platform/target/target.cpp
 )
 target_compile_features(kiseki_platform PUBLIC cxx_std_20)
 target_include_directories(kiseki_platform PUBLIC src)
