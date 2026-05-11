@@ -20,6 +20,14 @@ WebUI:
 - Allowed API routes: `GET /api/config`, `PUT /api/config`, `GET /api/capabilities`.
 - Never expose operational API routes from the WebUI.
 
+Targets:
+
+- `kiseki target list` prints target windows as JSON.
+- `kiseki target list --target-title <text>` filters by title substring.
+- `kiseki target list --target-pid <pid>` filters by process id.
+- `kiseki target list --target-window-id <id>` filters by platform window id.
+- Use `id` from this output with `--target-window-id` when a title selector is ambiguous.
+
 Screenshots:
 
 - `kiseki screenshot desktop --output <file.bmp>` captures the visible desktop to BMP.

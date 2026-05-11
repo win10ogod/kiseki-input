@@ -21,6 +21,7 @@
 #include "platform/input/input.hpp"
 #include "platform/notification/notification.hpp"
 #include "platform/runtime_capabilities.hpp"
+#include "platform/target/target.hpp"
 #include "webui/web_server.hpp"
 
 namespace kiseki::cli {
@@ -80,6 +81,32 @@ int print_capture_result(const kiseki::platform::CaptureResult& result, Io io) {
         io.err << result.error << '\n';
     }
     return result.code;
+}
+
+nlohmann::json target_window_to_json(const kiseki::platform::target::TargetWindow& window) {
+    return nlohmann::json{
+        {"id", window.id},
+        {"title", window.title},
+        {"pid", window.pid},
+        {"x", window.x},
+        {"y", window.y},
+        {"width", window.width},
+        {"height", window.height},
+    };
+}
+
+int print_target_list_result(const kiseki::platform::target::ListResult& result, Io io) {
+    if (!result.ok) {
+        io.err << result.error << '\n';
+        return result.code;
+    }
+
+    nlohmann::json targets = nlohmann::json::array();
+    for (const auto& window : result.windows) {
+        targets.push_back(target_window_to_json(window));
+    }
+    io.out << nlohmann::json{{"targets", std::move(targets)}}.dump(2) << '\n';
+    return 0;
 }
 
 std::string read_text_file(const std::filesystem::path& path) {
@@ -388,6 +415,9 @@ Dependencies default_dependencies() {
             kiseki::webui::WebServer server{config_path};
             return server.listen(options.host, options.port);
         },
+        .list_targets = [](const TargetListOptions& options, Io io) {
+            return print_target_list_result(kiseki::platform::target::list_windows(to_target_query(options.filter)), io);
+        },
         .capture_desktop = [](const ScreenshotDesktopOptions& options, Io io) {
             return print_capture_result(kiseki::platform::capture::capture_desktop_bmp(options.output_path), io);
         },
@@ -509,6 +539,9 @@ int run(
         .frames = 0,
         .fps = 0,
     };
+    TargetListOptions target_list_options{
+        .filter = {},
+    };
     ScreenshotWindowOptions window_options{
         .target = {},
         .output_path = {},
@@ -610,6 +643,19 @@ int run(
         }
 
         exit_code = dependencies.launch_config_ui(webui_options, store.path(), io);
+    });
+
+    auto* target = app.add_subcommand("target", "Target window commands");
+    target->require_subcommand(1);
+    auto* target_list = target->add_subcommand("list", "List target windows");
+    add_target_options(target_list, target_list_options.filter);
+    target_list->callback([&]() {
+        if (!dependencies.list_targets) {
+            io.err << "target list backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.list_targets(target_list_options, io);
     });
 
     auto* screenshot = app.add_subcommand("screenshot", "Screenshot commands");

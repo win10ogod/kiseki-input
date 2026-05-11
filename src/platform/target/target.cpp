@@ -33,11 +33,29 @@ ResolveResult fail(std::string error) {
     };
 }
 
+ListResult fail_list(std::string error) {
+    return ListResult{
+        .ok = false,
+        .code = 2,
+        .windows = {},
+        .error = std::move(error),
+    };
+}
+
 ResolveResult ok(TargetWindow window) {
     return ResolveResult{
         .ok = true,
         .code = 0,
         .window = std::move(window),
+        .error = "",
+    };
+}
+
+ListResult ok_list(std::vector<TargetWindow> windows) {
+    return ListResult{
+        .ok = true,
+        .code = 0,
+        .windows = std::move(windows),
         .error = "",
     };
 }
@@ -171,6 +189,15 @@ BOOL CALLBACK enum_windows_proc(HWND hwnd, LPARAM lparam) {
     return TRUE;
 }
 
+std::vector<TargetWindow> enumerate_windows(const TargetQuery& filter) {
+    EnumContext context{
+        .query = filter,
+        .matches = {},
+    };
+    EnumWindows(enum_windows_proc, reinterpret_cast<LPARAM>(&context));
+    return std::move(context.matches);
+}
+
 #else
 #ifdef KISEKI_HAS_X11
 
@@ -279,6 +306,31 @@ void collect_windows(Display* display, Window root, std::vector<Window>& windows
     }
 }
 
+std::vector<TargetWindow> enumerate_windows(Display* display, const TargetQuery& filter) {
+    std::vector<TargetWindow> matches;
+    if (!filter.window_id.empty()) {
+        const auto window_id = parse_x11_window_id(filter.window_id);
+        if (!window_id) {
+            return matches;
+        }
+        const auto window = describe_window(display, static_cast<Window>(*window_id));
+        if (window && query_matches(filter, *window)) {
+            matches.push_back(*window);
+        }
+        return matches;
+    }
+
+    std::vector<Window> windows;
+    collect_windows(display, DefaultRootWindow(display), windows);
+    for (const Window window : windows) {
+        const auto description = describe_window(display, window);
+        if (description && query_matches(filter, *description)) {
+            matches.push_back(*description);
+        }
+    }
+    return matches;
+}
+
 #endif
 #endif
 
@@ -309,53 +361,40 @@ bool target_window_available() {
 #endif
 }
 
+ListResult list_windows(const TargetQuery& filter) {
+#ifdef _WIN32
+    return ok_list(enumerate_windows(filter));
+#else
+#ifdef KISEKI_HAS_X11
+    Display* display = XOpenDisplay(nullptr);
+    if (display == nullptr) {
+        return fail_list("XOpenDisplay failed; DISPLAY is not available");
+    }
+
+    if (!filter.window_id.empty() && !parse_x11_window_id(filter.window_id)) {
+        XCloseDisplay(display);
+        return fail_list("invalid target window id");
+    }
+
+    auto matches = enumerate_windows(display, filter);
+    XCloseDisplay(display);
+    return ok_list(std::move(matches));
+#else
+    return fail_list("Linux X11 target window support was not compiled in");
+#endif
+#endif
+}
+
 ResolveResult resolve_window(const TargetQuery& query) {
     if (!has_target_selector(query)) {
         return fail("target selector required: use --target-title, --target-pid, or --target-window-id");
     }
 
-#ifdef _WIN32
-    EnumContext context{
-        .query = query,
-        .matches = {},
-    };
-    EnumWindows(enum_windows_proc, reinterpret_cast<LPARAM>(&context));
-    return single_match_or_error(context.matches);
-#else
-#ifdef KISEKI_HAS_X11
-    Display* display = XOpenDisplay(nullptr);
-    if (display == nullptr) {
-        return fail("XOpenDisplay failed; DISPLAY is not available");
+    auto result = list_windows(query);
+    if (!result.ok) {
+        return fail(result.error);
     }
-
-    std::vector<TargetWindow> matches;
-    if (!query.window_id.empty()) {
-        const auto window_id = parse_x11_window_id(query.window_id);
-        if (!window_id) {
-            XCloseDisplay(display);
-            return fail("invalid target window id");
-        }
-        const auto window = describe_window(display, static_cast<Window>(*window_id));
-        if (window && query_matches(query, *window)) {
-            matches.push_back(*window);
-        }
-    } else {
-        std::vector<Window> windows;
-        collect_windows(display, DefaultRootWindow(display), windows);
-        for (const Window window : windows) {
-            const auto description = describe_window(display, window);
-            if (description && query_matches(query, *description)) {
-                matches.push_back(*description);
-            }
-        }
-    }
-
-    XCloseDisplay(display);
-    return single_match_or_error(matches);
-#else
-    return fail("Linux X11 target window support was not compiled in");
-#endif
-#endif
+    return single_match_or_error(result.windows);
 }
 
 }

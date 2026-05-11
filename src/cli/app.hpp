@@ -36,6 +36,10 @@ struct TargetOptions {
     std::string window_id;
 };
 
+struct TargetListOptions {
+    TargetOptions filter;
+};
+
 struct ScreenshotWindowOptions {
     TargetOptions target;
     std::filesystem::path output_path;
@@ -107,6 +111,7 @@ struct MacroOptions {
 
 struct Dependencies {
     std::function<int(const WebUiLaunchOptions&, const std::filesystem::path&, Io)> launch_config_ui;
+    std::function<int(const TargetListOptions&, Io)> list_targets;
     std::function<int(const ScreenshotDesktopOptions&, Io)> capture_desktop;
     std::function<int(const ScreenshotBurstOptions&, Io)> capture_burst;
     std::function<int(const ScreenshotWindowOptions&, Io)> capture_window;

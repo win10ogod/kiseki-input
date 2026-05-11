@@ -28,6 +28,7 @@ From the repository root after building:
 
 ```bash
 kiseki doctor
+kiseki target list
 kiseki screenshot desktop --output screenshot.bmp
 kiseki screenshot burst --directory frames --prefix frame --frames 8 --fps 60
 kiseki macro validate --file docs/assets/demos/demo-notepad-unicode.json
@@ -51,6 +52,7 @@ This build includes:
 - JSON configuration defaults, validation, and persistence
 - Config-only local WebUI: `kiseki config-ui`
 - CLI desktop screenshots and burst screenshots
+- CLI target listing for window id, PID, title, and geometry
 - CLI target-window screenshots and target-window burst screenshots
 - CLI keyboard/mouse input
 - CLI message-based background keyboard/mouse input for target windows that accept it
@@ -75,6 +77,8 @@ kiseki config path
 kiseki config show
 kiseki config validate
 kiseki config-ui
+kiseki target list
+kiseki target list --target-title "Untitled"
 kiseki screenshot desktop --output screenshot.bmp
 kiseki screenshot burst --directory frames --prefix frame --frames 8 --fps 60
 kiseki screenshot window --target-title "Untitled" --output window.bmp
@@ -130,9 +134,9 @@ Demo macro files live under `docs/assets/demos/`.
 
 ## Platform Notes
 
-Windows screenshots, target-window screenshots, system input, and message-based background input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `IbInputSimulator`.
+Windows screenshots, target listing, target-window screenshots, system input, and message-based background input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `IbInputSimulator`.
 
-Linux support is implemented through X11/XTest and X11 window APIs. Wayland or compositor-restricted sessions may report target input or screenshot capture unavailable instead of crashing.
+Linux support is implemented through X11/XTest and X11 window APIs. `kiseki target list` is the recommended first step before using target-window screenshots or background input, especially when a desktop environment exposes both a window-manager frame and a client window. Wayland or compositor-restricted sessions may report target input or screenshot capture unavailable instead of crashing.
 
 ## Build
 

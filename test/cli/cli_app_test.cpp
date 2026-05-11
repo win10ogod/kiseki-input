@@ -403,6 +403,47 @@ TEST_CASE("screenshot window burst command is available with target selectors") 
     REQUIRE(err.str().empty());
 }
 
+TEST_CASE("target list command is available") {
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+
+    const auto result = run_cli({"target", "list", "--help"}, config_path);
+
+    REQUIRE(result.code == 0);
+    REQUIRE(result.out.find("List target windows") != std::string::npos);
+    REQUIRE(result.out.find("--target-title") != std::string::npos);
+    REQUIRE(result.err.empty());
+}
+
+TEST_CASE("target list command passes filters to backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.list_targets = [&](const kiseki::cli::TargetListOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.filter.title == "Notepad");
+        REQUIRE(options.filter.pid == 1234);
+        REQUIRE(options.filter.window_id == "0x123");
+        called = true;
+        io.out << "target list ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"target", "list", "--target-title", "Notepad", "--target-pid", "1234", "--target-window-id", "0x123"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "target list ok\n");
+    REQUIRE(err.str().empty());
+}
+
 TEST_CASE("input commands call injected backend") {
     std::ostringstream out;
     std::ostringstream err;

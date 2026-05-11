@@ -9,7 +9,7 @@
 - `src/platform/input/`: keyboard, text, mouse, and drag backends.
 - `src/platform/notification/`: heartbeat notification and daemon loop.
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.
-- `src/platform/target/`: platform target-window resolver for title, PID, and window id selectors.
+- `src/platform/target/`: platform target-window listing and resolver for title, PID, and window id selectors.
 - `src/webui/`: embedded static assets, config-only API, HTTP server.
 - `test/`: Catch2 unit tests.
 - `ui/`: source WebUI assets mirrored into embedded static assets.

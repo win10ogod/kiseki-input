@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace kiseki::platform::target {
 
@@ -28,8 +29,16 @@ struct ResolveResult {
     std::string error;
 };
 
+struct ListResult {
+    bool ok = false;
+    int code = 2;
+    std::vector<TargetWindow> windows;
+    std::string error;
+};
+
 bool has_target_selector(const TargetQuery& query);
 bool target_window_available();
+ListResult list_windows(const TargetQuery& filter = {});
 ResolveResult resolve_window(const TargetQuery& query);
 
 }
