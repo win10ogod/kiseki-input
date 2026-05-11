@@ -13,6 +13,7 @@ It is built for developers who want a practical automation lab instead of a pile
 - WebUI is intentionally configuration-only, so opening it does not create a remote control surface.
 - Windows can use `IbInputSimulator.dll` when available and falls back to system input when it is not.
 - Linux support uses native X11/XTest paths where the session permits it.
+- macOS support is planned, but waits for real macOS hardware validation.
 
 ## See It Work
 
@@ -137,6 +138,12 @@ Demo macro files live under `docs/assets/demos/`.
 Windows screenshots, target listing, target-window screenshots, system input, and message-based background input were tested in this tree. Driver-level input requires an `IbInputSimulator.dll` build artifact from `IbInputSimulator`.
 
 Linux support is implemented through X11/XTest and X11 window APIs. `kiseki target list` is the recommended first step before using target-window screenshots or background input, especially when a desktop environment exposes both a window-manager frame and a client window. Wayland or compositor-restricted sessions may report target input or screenshot capture unavailable instead of crashing.
+
+macOS is a planned platform line. It is not excluded by project direction; it is not marked supported today because the maintainers currently do not have reliable macOS hardware for build, permission, and live desktop verification. See [docs/roadmap.md](docs/roadmap.md).
+
+## Roadmap
+
+See [docs/roadmap.md](docs/roadmap.md) for the Windows, Linux, and planned macOS platform lines.
 
 ## Build
 

@@ -138,6 +138,12 @@ Linux:
 - Target-window screenshots use X11 `XGetImage` on the selected window.
 - Some compositor sessions block capture; the CLI should report unavailable/failure clearly, not crash.
 
+macOS:
+
+- macOS is a planned platform line, not a completed support claim.
+- The blocker is lack of reliable macOS hardware for build, permission, and live desktop validation.
+- Roadmap details live in `docs/roadmap.md`.
+
 ## Capability Limits
 
 - `backgroundWindow` is reported available when the platform/session supports target-window operations.
