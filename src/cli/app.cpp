@@ -21,6 +21,7 @@
 #include "platform/input/input.hpp"
 #include "platform/notification/notification.hpp"
 #include "platform/runtime_capabilities.hpp"
+#include "platform/session/background_desktop.hpp"
 #include "platform/target/target.hpp"
 #include "webui/web_server.hpp"
 
@@ -95,6 +96,19 @@ nlohmann::json target_window_to_json(const kiseki::platform::target::TargetWindo
     };
 }
 
+nlohmann::json target_child_window_to_json(const kiseki::platform::target::TargetChildWindow& window) {
+    return nlohmann::json{
+        {"id", window.id},
+        {"parentId", window.parent_id},
+        {"title", window.title},
+        {"className", window.class_name},
+        {"x", window.x},
+        {"y", window.y},
+        {"width", window.width},
+        {"height", window.height},
+    };
+}
+
 int print_target_list_result(const kiseki::platform::target::ListResult& result, Io io) {
     if (!result.ok) {
         io.err << result.error << '\n';
@@ -106,6 +120,23 @@ int print_target_list_result(const kiseki::platform::target::ListResult& result,
         targets.push_back(target_window_to_json(window));
     }
     io.out << nlohmann::json{{"targets", std::move(targets)}}.dump(2) << '\n';
+    return 0;
+}
+
+int print_target_inspect_result(const kiseki::platform::target::InspectResult& result, Io io) {
+    if (!result.ok) {
+        io.err << result.error << '\n';
+        return result.code;
+    }
+
+    nlohmann::json children = nlohmann::json::array();
+    for (const auto& child : result.children) {
+        children.push_back(target_child_window_to_json(child));
+    }
+    io.out << nlohmann::json{
+        {"target", target_window_to_json(result.window)},
+        {"children", std::move(children)},
+    }.dump(2) << '\n';
     return 0;
 }
 
@@ -172,6 +203,7 @@ struct MacroStep {
     std::filesystem::path output_path;
     std::string backend = "auto";
     std::string click = "none";
+    TargetOptions target;
     int dx = 0;
     int dy = 0;
     int x = 0;
@@ -227,6 +259,14 @@ bool optional_bool(const nlohmann::json& object, const char* key, bool fallback)
     return object.at(key).get<bool>();
 }
 
+TargetOptions optional_target_options(const nlohmann::json& object) {
+    return TargetOptions{
+        .title = optional_string(object, "targetTitle", ""),
+        .pid = static_cast<std::uint32_t>(optional_int(object, "targetPid", 0)),
+        .window_id = optional_string(object, "targetWindowId", ""),
+    };
+}
+
 void require_no_partial_mouse_position(const MacroStep& step) {
     if (step.has_x != step.has_y) {
         throw std::runtime_error{"mouse step requires both x and y"};
@@ -273,6 +313,12 @@ MacroStep parse_macro_step(const nlohmann::json& step_json, std::size_t index) {
         require_no_partial_mouse_position(step);
     } else if (step.type == "drag") {
         step.path = required_string(step_json, "file", "drag step");
+    } else if (step.type == "background-drag") {
+        step.path = required_string(step_json, "file", "background-drag step");
+        step.target = optional_target_options(step_json);
+    } else if (step.type == "background-screenshot") {
+        step.output_path = required_string(step_json, "output", "background-screenshot step");
+        step.target = optional_target_options(step_json);
     } else if (step.type == "screenshot") {
         step.output_path = required_string(step_json, "output", "screenshot step");
     } else if (step.type == "sleep") {
@@ -371,6 +417,12 @@ int run_macro_step(
     } else if (step.type == "drag") {
         if (!dependencies.input_drag) return missing_backend("input drag");
         code = dependencies.input_drag(InputDragOptions{.path = step.path, .backend = step.backend}, io);
+    } else if (step.type == "background-drag") {
+        if (!dependencies.input_background_drag) return missing_backend("background drag");
+        code = dependencies.input_background_drag(BackgroundDragOptions{.target = step.target, .path = step.path}, io);
+    } else if (step.type == "background-screenshot") {
+        if (!dependencies.capture_background_window) return missing_backend("background screenshot");
+        code = dependencies.capture_background_window(ScreenshotBackgroundWindowOptions{.target = step.target, .output_path = step.output_path}, io);
     } else if (step.type == "screenshot") {
         if (!dependencies.capture_desktop) return missing_backend("screenshot");
         code = dependencies.capture_desktop(ScreenshotDesktopOptions{.output_path = step.output_path}, io);
@@ -418,6 +470,9 @@ Dependencies default_dependencies() {
         .list_targets = [](const TargetListOptions& options, Io io) {
             return print_target_list_result(kiseki::platform::target::list_windows(to_target_query(options.filter)), io);
         },
+        .inspect_target = [](const TargetInspectOptions& options, Io io) {
+            return print_target_inspect_result(kiseki::platform::target::inspect_window(to_target_query(options.target)), io);
+        },
         .capture_desktop = [](const ScreenshotDesktopOptions& options, Io io) {
             return print_capture_result(kiseki::platform::capture::capture_desktop_bmp(options.output_path), io);
         },
@@ -434,6 +489,11 @@ Dependencies default_dependencies() {
         .capture_window = [](const ScreenshotWindowOptions& options, Io io) {
             return print_capture_result(
                 kiseki::platform::capture::capture_window_bmp(to_target_query(options.target), options.output_path),
+                io);
+        },
+        .capture_background_window = [](const ScreenshotBackgroundWindowOptions& options, Io io) {
+            return print_capture_result(
+                kiseki::platform::capture::capture_background_window_bmp(to_target_query(options.target), options.output_path),
                 io);
         },
         .capture_window_burst = [](const ScreenshotWindowBurstOptions& options, Io io) {
@@ -499,6 +559,80 @@ Dependencies default_dependencies() {
                 }),
                 io);
         },
+        .input_background_drag = [](const BackgroundDragOptions& options, Io io) {
+            try {
+                return print_operation_result(
+                    kiseki::platform::input::background_mouse_drag(kiseki::platform::input::BackgroundDragOptions{
+                        .target = to_target_query(options.target),
+                        .points = read_mouse_points_file(options.path),
+                    }),
+                    io);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                return 2;
+            }
+        },
+        .background_desktop_start = [](const BackgroundDesktopStartOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::start_background_desktop(kiseki::platform::session::BackgroundDesktopStartOptions{
+                    .display = options.display,
+                    .state_directory = options.state_directory,
+                    .width = options.width,
+                    .height = options.height,
+                    .depth = options.depth,
+                }),
+                io);
+        },
+        .background_desktop_stop = [](const BackgroundDesktopStopOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::stop_background_desktop(kiseki::platform::session::BackgroundDesktopStopOptions{
+                    .display = options.display,
+                    .state_directory = options.state_directory,
+                }),
+                io);
+        },
+        .background_desktop_launch = [](const BackgroundDesktopLaunchOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::launch_in_background_desktop(kiseki::platform::session::BackgroundDesktopLaunchOptions{
+                    .display = options.display,
+                    .command = options.command,
+                }),
+                io);
+        },
+        .background_desktop_screenshot = [](const BackgroundDesktopScreenshotOptions& options, Io io) {
+            return print_capture_result(
+                kiseki::platform::session::screenshot_background_desktop(kiseki::platform::session::BackgroundDesktopScreenshotOptions{
+                    .display = options.display,
+                    .output_path = options.output_path,
+                }),
+                io);
+        },
+        .background_desktop_text = [](const BackgroundDesktopTextOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::text_background_desktop(kiseki::platform::session::BackgroundDesktopTextOptions{
+                    .display = options.display,
+                    .text = options.text,
+                }),
+                io);
+        },
+        .background_desktop_key = [](const BackgroundDesktopKeyOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::key_background_desktop(kiseki::platform::session::BackgroundDesktopKeyOptions{
+                    .display = options.display,
+                    .key = options.key,
+                }),
+                io);
+        },
+        .background_desktop_mouse = [](const BackgroundDesktopMouseOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::mouse_background_desktop(kiseki::platform::session::BackgroundDesktopMouseOptions{
+                    .display = options.display,
+                    .x = options.x,
+                    .y = options.y,
+                    .click = options.click,
+                }),
+                io);
+        },
         .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
             return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
         },
@@ -542,7 +676,14 @@ int run(
     TargetListOptions target_list_options{
         .filter = {},
     };
+    TargetInspectOptions target_inspect_options{
+        .target = {},
+    };
     ScreenshotWindowOptions window_options{
+        .target = {},
+        .output_path = {},
+    };
+    ScreenshotBackgroundWindowOptions background_window_options{
         .target = {},
         .output_path = {},
     };
@@ -589,6 +730,44 @@ int run(
     };
     BackgroundMouseOptions background_mouse_options{
         .target = {},
+        .x = 0,
+        .y = 0,
+        .click = "none",
+    };
+    BackgroundDragOptions background_drag_options{
+        .target = {},
+        .path = {},
+    };
+    BackgroundDesktopStartOptions background_desktop_start_options{
+        .display = ":99",
+        .state_directory = {},
+        .width = 1280,
+        .height = 720,
+        .depth = 24,
+    };
+    BackgroundDesktopStopOptions background_desktop_stop_options{
+        .display = ":99",
+        .state_directory = {},
+    };
+    BackgroundDesktopLaunchOptions background_desktop_launch_options{
+        .display = ":99",
+        .command = "",
+    };
+    BackgroundDesktopScreenshotOptions background_desktop_screenshot_options{
+        .display = ":99",
+        .output_path = {},
+    };
+    BackgroundDesktopTextOptions background_desktop_text_options{
+        .display = ":99",
+        .text = "",
+        .text_file = {},
+    };
+    BackgroundDesktopKeyOptions background_desktop_key_options{
+        .display = ":99",
+        .key = "",
+    };
+    BackgroundDesktopMouseOptions background_desktop_mouse_options{
+        .display = ":99",
         .x = 0,
         .y = 0,
         .click = "none",
@@ -657,6 +836,16 @@ int run(
         }
         exit_code = dependencies.list_targets(target_list_options, io);
     });
+    auto* target_inspect = target->add_subcommand("inspect", "Inspect a selected target window and child receivers");
+    add_target_options(target_inspect, target_inspect_options.target);
+    target_inspect->callback([&]() {
+        if (!dependencies.inspect_target) {
+            io.err << "target inspect backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.inspect_target(target_inspect_options, io);
+    });
 
     auto* screenshot = app.add_subcommand("screenshot", "Screenshot commands");
     screenshot->require_subcommand(1);
@@ -712,6 +901,18 @@ int run(
             return;
         }
         exit_code = dependencies.capture_window(window_options, io);
+    });
+
+    auto* screenshot_background_window = screenshot->add_subcommand("background-window", "Capture a target window without activating it");
+    add_target_options(screenshot_background_window, background_window_options.target);
+    screenshot_background_window->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
+    screenshot_background_window->callback([&]() {
+        if (!dependencies.capture_background_window) {
+            io.err << "background-window screenshot backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.capture_background_window(background_window_options, io);
     });
 
     auto* screenshot_window_burst = screenshot->add_subcommand("window-burst", "Capture a burst of target-window BMP frames");
@@ -895,6 +1096,124 @@ int run(
         exit_code = dependencies.input_background_mouse(background_mouse_options, io);
     });
 
+    auto* input_background_drag = input->add_subcommand("background-drag", "Drag the left mouse button through target client points without switching foreground");
+    add_target_options(input_background_drag, background_drag_options.target);
+    input_background_drag->add_option("--file", background_drag_options.path, "Target client path file: one 'x y' point per line")->required();
+    input_background_drag->callback([&]() {
+        if (!dependencies.input_background_drag) {
+            io.err << "background drag backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.input_background_drag(background_drag_options, io);
+    });
+
+    auto* background_desktop = app.add_subcommand("background-desktop", "Run and operate an isolated Linux X11 background desktop");
+    background_desktop->require_subcommand(1);
+    auto* background_desktop_start = background_desktop->add_subcommand("start", "Start an Xvfb background desktop");
+    background_desktop_start->add_option("--display", background_desktop_start_options.display, "X11 display such as :99");
+    background_desktop_start->add_option("--state-dir", background_desktop_start_options.state_directory, "Directory for background desktop state files");
+    background_desktop_start->add_option("--width", background_desktop_start_options.width, "Screen width");
+    background_desktop_start->add_option("--height", background_desktop_start_options.height, "Screen height");
+    background_desktop_start->add_option("--depth", background_desktop_start_options.depth, "Screen depth");
+    background_desktop_start->callback([&]() {
+        if (!dependencies.background_desktop_start) {
+            io.err << "background desktop start backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_start(background_desktop_start_options, io);
+    });
+
+    auto* background_desktop_stop = background_desktop->add_subcommand("stop", "Stop an Xvfb background desktop started by Kiseki");
+    background_desktop_stop->add_option("--display", background_desktop_stop_options.display, "X11 display such as :99");
+    background_desktop_stop->add_option("--state-dir", background_desktop_stop_options.state_directory, "Directory for background desktop state files");
+    background_desktop_stop->callback([&]() {
+        if (!dependencies.background_desktop_stop) {
+            io.err << "background desktop stop backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_stop(background_desktop_stop_options, io);
+    });
+
+    auto* background_desktop_launch = background_desktop->add_subcommand("launch", "Launch a command inside the background desktop");
+    background_desktop_launch->add_option("--display", background_desktop_launch_options.display, "X11 display such as :99");
+    background_desktop_launch->add_option("--command", background_desktop_launch_options.command, "Shell command to launch")->required();
+    background_desktop_launch->callback([&]() {
+        if (!dependencies.background_desktop_launch) {
+            io.err << "background desktop launch backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_launch(background_desktop_launch_options, io);
+    });
+
+    auto* background_desktop_screenshot = background_desktop->add_subcommand("screenshot", "Capture the background desktop to a BMP file");
+    background_desktop_screenshot->add_option("--display", background_desktop_screenshot_options.display, "X11 display such as :99");
+    background_desktop_screenshot->add_option("-o,--output", background_desktop_screenshot_options.output_path, "Output BMP path")->required();
+    background_desktop_screenshot->callback([&]() {
+        if (!dependencies.background_desktop_screenshot) {
+            io.err << "background desktop screenshot backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_screenshot(background_desktop_screenshot_options, io);
+    });
+
+    auto* background_desktop_text = background_desktop->add_subcommand("text", "Type text into the background desktop");
+    background_desktop_text->add_option("--display", background_desktop_text_options.display, "X11 display such as :99");
+    background_desktop_text->add_option("--text", background_desktop_text_options.text, "Text to type");
+    background_desktop_text->add_option("--file", background_desktop_text_options.text_file, "UTF-8 text file to type");
+    background_desktop_text->callback([&]() {
+        if (!dependencies.background_desktop_text) {
+            io.err << "background desktop text backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        if (!background_desktop_text_options.text_file.empty()) {
+            try {
+                background_desktop_text_options.text = read_text_file(background_desktop_text_options.text_file);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                exit_code = 2;
+                return;
+            }
+        }
+        if (background_desktop_text_options.text.empty()) {
+            io.err << "background-desktop text requires --text or --file\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_text(background_desktop_text_options, io);
+    });
+
+    auto* background_desktop_key = background_desktop->add_subcommand("key", "Tap a key in the background desktop");
+    background_desktop_key->add_option("--display", background_desktop_key_options.display, "X11 display such as :99");
+    background_desktop_key->add_option("--key", background_desktop_key_options.key, "Key name")->required();
+    background_desktop_key->callback([&]() {
+        if (!dependencies.background_desktop_key) {
+            io.err << "background desktop key backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_key(background_desktop_key_options, io);
+    });
+
+    auto* background_desktop_mouse = background_desktop->add_subcommand("mouse", "Move and optionally click in the background desktop");
+    background_desktop_mouse->add_option("--display", background_desktop_mouse_options.display, "X11 display such as :99");
+    background_desktop_mouse->add_option("--x", background_desktop_mouse_options.x, "Background desktop X coordinate")->required();
+    background_desktop_mouse->add_option("--y", background_desktop_mouse_options.y, "Background desktop Y coordinate")->required();
+    background_desktop_mouse->add_option("--click", background_desktop_mouse_options.click, "none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    background_desktop_mouse->callback([&]() {
+        if (!dependencies.background_desktop_mouse) {
+            io.err << "background desktop mouse backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_mouse(background_desktop_mouse_options, io);
+    });
+
     auto* daemon = app.add_subcommand("daemon", "Background daemon commands");
     daemon->require_subcommand(1);
     auto* daemon_run = daemon->add_subcommand("run", "Run heartbeat notification daemon");
@@ -947,6 +1266,7 @@ int run(
         io.out << "  Desktop screenshot: " << availability(capabilities.capture.desktop) << '\n';
         io.out << "  Window screenshot: " << availability(capabilities.capture.window) << '\n';
         io.out << "  Screenshot burst: " << availability(capabilities.capture.burst) << '\n';
+        io.out << "  Background desktop session: " << availability(capabilities.session.background_desktop) << '\n';
 
         io.out << "Limitations:\n";
         for (const auto& limitation : capabilities.limitations) {

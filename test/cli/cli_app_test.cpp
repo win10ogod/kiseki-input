@@ -150,6 +150,7 @@ TEST_CASE("capabilities prints foundation capability json") {
     REQUIRE(result.code == 0);
     REQUIRE(json.at("input").at("backgroundWindow").is_boolean());
     REQUIRE(json.at("capture").at("window").is_boolean());
+    REQUIRE(json.at("session").at("backgroundDesktop").is_boolean());
     REQUIRE(json.at("limitations").is_array());
     REQUIRE_FALSE(json.at("limitations").empty());
     REQUIRE(result.err.empty());
@@ -170,6 +171,7 @@ TEST_CASE("doctor prints diagnostic text with foundation limitations") {
     REQUIRE(result.out.find("Desktop screenshot:") != std::string::npos);
     REQUIRE(result.out.find("Window screenshot:") != std::string::npos);
     REQUIRE(result.out.find("Screenshot burst:") != std::string::npos);
+    REQUIRE(result.out.find("Background desktop session:") != std::string::npos);
     REQUIRE(result.out.find("Limitations:") != std::string::npos);
     REQUIRE(result.out.find("WebUI is configuration-only") != std::string::npos);
     REQUIRE(result.err.empty());
@@ -371,6 +373,37 @@ TEST_CASE("screenshot window command is available with target selectors") {
     REQUIRE(err.str().empty());
 }
 
+TEST_CASE("screenshot background-window command uses the dedicated background capture backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto output_path = temp.file("paint-background.bmp");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.capture_background_window = [&](const kiseki::cli::ScreenshotBackgroundWindowOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.target.title == "Paint");
+        REQUIRE(options.target.pid == 1234);
+        REQUIRE(options.target.window_id == "0x123");
+        REQUIRE(options.output_path == output_path);
+        called = true;
+        io.out << "background window ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"screenshot", "background-window", "--target-title", "Paint", "--target-pid", "1234", "--target-window-id", "0x123", "--output", output_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "background window ok\n");
+    REQUIRE(err.str().empty());
+}
+
 TEST_CASE("screenshot window burst command is available with target selectors") {
     std::ostringstream out;
     std::ostringstream err;
@@ -441,6 +474,35 @@ TEST_CASE("target list command passes filters to backend") {
     REQUIRE(code == 0);
     REQUIRE(called);
     REQUIRE(out.str() == "target list ok\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("target inspect command passes selected window to backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.inspect_target = [&](const kiseki::cli::TargetInspectOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.target.title == "Notepad");
+        REQUIRE(options.target.pid == 4321);
+        REQUIRE(options.target.window_id == "0x456");
+        called = true;
+        io.out << "target inspect ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"target", "inspect", "--target-title", "Notepad", "--target-pid", "4321", "--target-window-id", "0x456"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "target inspect ok\n");
     REQUIRE(err.str().empty());
 }
 
@@ -517,6 +579,12 @@ TEST_CASE("background input commands are available with target selectors") {
         calls.push_back("mouse");
         return 0;
     };
+    dependencies.input_background_drag = [&](const kiseki::cli::BackgroundDragOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title == "Untitled");
+        REQUIRE(options.path.filename() == "points.txt");
+        calls.push_back("drag");
+        return 0;
+    };
 
     REQUIRE(kiseki::cli::run(
         {"input", "background-text", "--target-title", "Untitled", "--text", "abc"},
@@ -536,7 +604,13 @@ TEST_CASE("background input commands are available with target selectors") {
         kiseki::cli::Io{out, err},
         dependencies) == 0);
 
-    REQUIRE(calls == std::vector<std::string>{"text", "key", "mouse"});
+    REQUIRE(kiseki::cli::run(
+        {"input", "background-drag", "--target-title", "Untitled", "--file", "points.txt"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies) == 0);
+
+    REQUIRE(calls == std::vector<std::string>{"text", "key", "mouse", "drag"});
     REQUIRE(out.str().empty());
     REQUIRE(err.str().empty());
 }
@@ -625,6 +699,105 @@ TEST_CASE("input drag command passes path and backend") {
 
     REQUIRE(code == 0);
     REQUIRE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("background desktop commands call injected backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto state_dir = temp.file("sessions");
+    const auto screenshot_path = temp.file("desktop.bmp");
+    std::vector<std::string> calls;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.background_desktop_start = [&](const kiseki::cli::BackgroundDesktopStartOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.width == 1280);
+        REQUIRE(options.height == 720);
+        REQUIRE(options.depth == 24);
+        REQUIRE(options.state_directory == state_dir);
+        calls.push_back("start");
+        return 0;
+    };
+    dependencies.background_desktop_stop = [&](const kiseki::cli::BackgroundDesktopStopOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.state_directory == state_dir);
+        calls.push_back("stop");
+        return 0;
+    };
+    dependencies.background_desktop_launch = [&](const kiseki::cli::BackgroundDesktopLaunchOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.command == "xterm");
+        calls.push_back("launch");
+        return 0;
+    };
+    dependencies.background_desktop_screenshot = [&](const kiseki::cli::BackgroundDesktopScreenshotOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.output_path == screenshot_path);
+        calls.push_back("screenshot");
+        return 0;
+    };
+    dependencies.background_desktop_text = [&](const kiseki::cli::BackgroundDesktopTextOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.text == "abc");
+        calls.push_back("text");
+        return 0;
+    };
+    dependencies.background_desktop_key = [&](const kiseki::cli::BackgroundDesktopKeyOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.key == "enter");
+        calls.push_back("key");
+        return 0;
+    };
+    dependencies.background_desktop_mouse = [&](const kiseki::cli::BackgroundDesktopMouseOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":99");
+        REQUIRE(options.x == 10);
+        REQUIRE(options.y == 20);
+        REQUIRE(options.click == "left");
+        calls.push_back("mouse");
+        return 0;
+    };
+
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "start", "--display", ":99", "--width", "1280", "--height", "720", "--depth", "24", "--state-dir", state_dir.string()},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "launch", "--display", ":99", "--command", "xterm"},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "screenshot", "--display", ":99", "--output", screenshot_path.string()},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "text", "--display", ":99", "--text", "abc"},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "key", "--display", ":99", "--key", "enter"},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "mouse", "--display", ":99", "--x", "10", "--y", "20", "--click", "left"},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+    REQUIRE(kiseki::cli::run(
+                {"background-desktop", "stop", "--display", ":99", "--state-dir", state_dir.string()},
+                config_path,
+                kiseki::cli::Io{out, err},
+                dependencies) == 0);
+
+    REQUIRE(calls == std::vector<std::string>{"start", "launch", "screenshot", "text", "key", "mouse", "stop"});
     REQUIRE(out.str().empty());
     REQUIRE(err.str().empty());
 }
@@ -793,6 +966,12 @@ TEST_CASE("macro run executes steps through injected dependencies") {
         calls.push_back("drag");
         return 0;
     };
+    dependencies.input_background_drag = [&](const kiseki::cli::BackgroundDragOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title == "Paint");
+        REQUIRE(options.path == points_path);
+        calls.push_back("background-drag");
+        return 0;
+    };
     dependencies.capture_desktop = [&](const kiseki::cli::ScreenshotDesktopOptions& options, kiseki::cli::Io) {
         REQUIRE(options.output_path == screenshot_path);
         calls.push_back("screenshot");
@@ -808,6 +987,83 @@ TEST_CASE("macro run executes steps through injected dependencies") {
     REQUIRE(code == 0);
     REQUIRE(calls == std::vector<std::string>{"combo", "text", "key", "mouse", "drag", "screenshot"});
     REQUIRE(out.str() == "macro completed 6 steps\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("macro run supports background drag steps") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto macro_path = temp.file("macro.json");
+    const auto points_path = temp.file("points.txt");
+    write_text(points_path, "10 20\n30 40\n");
+    write_text(
+        macro_path,
+        R"({
+  "steps": [
+    {"type": "background-drag", "targetTitle": "Paint", "file": ")" + points_path.generic_string() + R"("}
+  ]
+})");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_background_drag = [&](const kiseki::cli::BackgroundDragOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title == "Paint");
+        REQUIRE(options.target.pid == 0);
+        REQUIRE(options.target.window_id.empty());
+        REQUIRE(options.path == points_path);
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"macro", "run", "--file", macro_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "macro completed 1 steps\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("macro run supports background screenshot steps") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto macro_path = temp.file("macro.json");
+    const auto output_path = temp.file("paint-background.bmp");
+    write_text(
+        macro_path,
+        R"({
+  "steps": [
+    {"type": "background-screenshot", "targetWindowId": "0x123", "output": ")" + output_path.generic_string() + R"("}
+  ]
+})");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.capture_background_window = [&](const kiseki::cli::ScreenshotBackgroundWindowOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.target.title.empty());
+        REQUIRE(options.target.pid == 0);
+        REQUIRE(options.target.window_id == "0x123");
+        REQUIRE(options.output_path == output_path);
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"macro", "run", "--file", macro_path.string()},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "macro completed 1 steps\n");
     REQUIRE(err.str().empty());
 }
 

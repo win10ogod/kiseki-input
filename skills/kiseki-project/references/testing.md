@@ -35,6 +35,13 @@ mkdir -p artifacts/live-test
 ./build/Debug/kiseki.exe screenshot desktop --output artifacts/live-test/desktop-before.bmp
 ```
 
+Inspect a selected Windows target without sending input:
+
+```bash
+./build/Debug/kiseki.exe target list
+./build/Debug/kiseki.exe target inspect --target-window-id 0x123456
+```
+
 For Windows shell hotkeys, use system backend:
 
 ```bash
@@ -177,3 +184,22 @@ Use `--once` first so testing does not leave a daemon running:
 ```
 
 If the test opens a dismissible Windows message box, close it before continuing. For long-running daemon tests, record the session id and stop it before final response unless explicitly asked to keep it running.
+
+## Linux Background Desktop Recipe
+
+Run only on a real Linux host with X11 libraries and `Xvfb` installed. WSL-only results are not Linux desktop proof.
+
+```bash
+cmake -S . -B build -DKISEKI_BUILD_TESTING=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+mkdir -p artifacts/live-test
+./build/kiseki background-desktop start --display :99 --width 1280 --height 720 --depth 24
+./build/kiseki background-desktop launch --display :99 --command "xterm"
+./build/kiseki background-desktop mouse --display :99 --x 40 --y 40 --click left
+./build/kiseki background-desktop text --display :99 --text "kiseki background desktop"
+./build/kiseki background-desktop screenshot --display :99 --output artifacts/live-test/background-desktop.bmp
+./build/kiseki background-desktop stop --display :99
+```
+
+Expected result: the BMP shows the virtual X11 desktop and launched app. The physical desktop cursor and focus should not move during the sequence.

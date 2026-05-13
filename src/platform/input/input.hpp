@@ -30,6 +30,11 @@ struct BackgroundMouseOptions {
     std::string click;
 };
 
+struct BackgroundDragOptions {
+    kiseki::platform::target::TargetQuery target;
+    std::vector<MousePoint> points;
+};
+
 bool system_input_available();
 bool driver_input_available();
 bool background_window_input_available();
@@ -42,5 +47,6 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const
 OperationResult background_type_text(const kiseki::platform::target::TargetQuery& target, const std::string& text);
 OperationResult background_tap_key(const kiseki::platform::target::TargetQuery& target, const std::string& key);
 OperationResult background_mouse_action(const BackgroundMouseOptions& options);
+OperationResult background_mouse_drag(const BackgroundDragOptions& options);
 
 }

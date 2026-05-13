@@ -26,13 +26,15 @@ Targets:
 - `kiseki target list --target-title <text>` filters by title substring.
 - `kiseki target list --target-pid <pid>` filters by process id.
 - `kiseki target list --target-window-id <id>` filters by platform window id.
-- Use `id` from this output with `--target-window-id` when a title selector is ambiguous.
+- `kiseki target inspect --target-title <text>` prints the selected target and child receiver handles.
+- Use `id` from this output with `--target-window-id` when a title selector is ambiguous; on Windows, explicit child HWND ids from `target inspect` can be selected directly.
 
 Screenshots:
 
 - `kiseki screenshot desktop --output <file.bmp>` captures the visible desktop to BMP.
 - `kiseki screenshot burst --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames.
 - `kiseki screenshot window --target-title <text> --output <file.bmp>` captures one target window.
+- `kiseki screenshot background-window --target-title <text> --output <file.bmp>` captures one target window without activating it.
 - `kiseki screenshot window-burst --target-title <text> --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames from one target window.
 - Target selectors are `--target-title`, `--target-pid`, and `--target-window-id`.
 - If burst options are omitted or zero, defaults come from config.
@@ -50,6 +52,18 @@ Input:
 - `kiseki input background-text --target-title <text> --text <text>`
 - `kiseki input background-key --target-title <text> --key <name>`
 - `kiseki input background-mouse --target-title <text> --x <n> --y <n> [--click ...]`
+- `kiseki input background-drag --target-title <text> --file <points.txt>`
+
+Linux background desktop:
+
+- `kiseki background-desktop start --display :99 --width 1280 --height 720 --depth 24`
+- `kiseki background-desktop stop --display :99`
+- `kiseki background-desktop launch --display :99 --command <shell-command>`
+- `kiseki background-desktop screenshot --display :99 --output <file.bmp>`
+- `kiseki background-desktop text --display :99 --text <text>`
+- `kiseki background-desktop text --display :99 --file <utf8-file>`
+- `kiseki background-desktop key --display :99 --key <name>`
+- `kiseki background-desktop mouse --display :99 --x <n> --y <n> [--click ...]`
 
 Macros:
 
@@ -127,7 +141,10 @@ Windows:
 - Unicode text input uses `KEYEVENTF_UNICODE`.
 - Absolute mouse coordinates are virtual-screen coordinates.
 - Target-window screenshots use `PrintWindow`.
+- Explicit background-window screenshots use the same selected-window capture backend and must not activate the target.
 - Background-window input uses normal Win32 window messages and targets text-like child controls when possible.
+- `target inspect` reports child HWNDs, class names, bounds, and titles so selected-window automation can choose concrete receivers.
+- Windows background screenshot is the supported Windows background observation path; it does not require a VM, Docker, or separate session backend.
 
 Linux:
 
@@ -136,6 +153,9 @@ Linux:
 - Screenshot uses X11 root `XGetImage` when the session permits it.
 - Target-window background input uses X11 events.
 - Target-window screenshots use X11 `XGetImage` on the selected window.
+- Explicit background-window screenshots use the same selected-window X11 capture backend.
+- Background desktop support starts `Xvfb` and runs applications on an isolated `DISPLAY`.
+- Background desktop screenshot/input commands temporarily select that `DISPLAY` and use the same X11 screenshot and XTest input paths.
 - Some compositor sessions block capture; the CLI should report unavailable/failure clearly, not crash.
 
 macOS:
@@ -147,6 +167,7 @@ macOS:
 ## Capability Limits
 
 - `backgroundWindow` is reported available when the platform/session supports target-window operations.
+- `session.backgroundDesktop` is reported available when `Xvfb` is available on a Linux X11 build.
 - Capture `window` is implemented. Capture `region` is not implemented.
 - Game background input is only expected for targets that accept normal system window messages or public automation interfaces.
 - No guarantee is made for targets that ignore system window messages or public automation events.
@@ -161,7 +182,9 @@ Macro files are JSON objects with a non-empty `steps` array. Supported step type
 - `{"type":"mouse","dx":1,"dy":1,"click":"left","backend":"system"}`
 - `{"type":"mouse","x":640,"y":360,"click":"left","backend":"system"}`
 - `{"type":"drag","file":"points.txt","backend":"system"}`
+- `{"type":"background-drag","targetTitle":"Paint","file":"points.txt"}`
 - `{"type":"screenshot","output":"screen.bmp"}`
+- `{"type":"background-screenshot","targetTitle":"Paint","output":"window.bmp"}`
 - `{"type":"sleep","ms":500}`
 
 Backends default to `auto` when omitted. Text steps require exactly one of `text` or `file`. Mouse absolute movement requires both `x` and `y`.

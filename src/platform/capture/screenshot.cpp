@@ -379,6 +379,10 @@ CaptureResult capture_window_bmp(const kiseki::platform::target::TargetQuery& ta
 #endif
 }
 
+CaptureResult capture_background_window_bmp(const kiseki::platform::target::TargetQuery& target, const std::filesystem::path& output_path) {
+    return capture_window_bmp(target, output_path);
+}
+
 OperationResult capture_burst_bmp(const BurstOptions& options) {
     if (options.frames == 0 || options.fps == 0) {
         return fail_operation("burst frames and fps must be greater than zero");

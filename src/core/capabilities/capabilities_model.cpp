@@ -15,6 +15,9 @@ CapabilityMatrix foundation_capabilities() {
             .region = false,
             .burst = false,
         },
+        .session = SessionCapabilities{
+            .background_desktop = false,
+        },
         .limitations = {
             "foundation build exposes configuration and WebUI only",
             "input, screenshot, target, notification, and daemon backends are separate implementation slices",
@@ -35,6 +38,9 @@ nlohmann::json to_json(const CapabilityMatrix& capabilities) {
             {"window", capabilities.capture.window},
             {"region", capabilities.capture.region},
             {"burst", capabilities.capture.burst},
+        }},
+        {"session", {
+            {"backgroundDesktop", capabilities.session.background_desktop},
         }},
         {"limitations", capabilities.limitations},
     };

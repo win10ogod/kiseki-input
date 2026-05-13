@@ -20,9 +20,14 @@ struct CaptureCapabilities {
     bool burst = false;
 };
 
+struct SessionCapabilities {
+    bool background_desktop = false;
+};
+
 struct CapabilityMatrix {
     InputCapabilities input;
     CaptureCapabilities capture;
+    SessionCapabilities session;
     std::vector<std::string> limitations;
 };
 

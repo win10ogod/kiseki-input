@@ -42,11 +42,31 @@ ListResult fail_list(std::string error) {
     };
 }
 
+InspectResult fail_inspect(std::string error) {
+    return InspectResult{
+        .ok = false,
+        .code = 2,
+        .window = {},
+        .children = {},
+        .error = std::move(error),
+    };
+}
+
 ResolveResult ok(TargetWindow window) {
     return ResolveResult{
         .ok = true,
         .code = 0,
         .window = std::move(window),
+        .error = "",
+    };
+}
+
+InspectResult ok_inspect(TargetWindow window, std::vector<TargetChildWindow> children) {
+    return InspectResult{
+        .ok = true,
+        .code = 0,
+        .window = std::move(window),
+        .children = std::move(children),
         .error = "",
     };
 }
@@ -140,6 +160,15 @@ std::string window_text(HWND hwnd) {
     return utf16_to_utf8(wide);
 }
 
+std::string window_class_name(HWND hwnd) {
+    wchar_t buffer[256]{};
+    const int copied = GetClassNameW(hwnd, buffer, static_cast<int>(sizeof(buffer) / sizeof(buffer[0])));
+    if (copied <= 0) {
+        return {};
+    }
+    return utf16_to_utf8(std::wstring{buffer, buffer + copied});
+}
+
 std::string hwnd_id(HWND hwnd) {
     std::ostringstream stream;
     stream << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(hwnd);
@@ -175,6 +204,33 @@ std::optional<TargetWindow> describe_window(HWND hwnd) {
     };
 }
 
+std::optional<TargetChildWindow> describe_child_window(HWND hwnd, HWND parent) {
+    if (!IsWindow(hwnd) || !IsWindowVisible(hwnd)) {
+        return std::nullopt;
+    }
+
+    RECT rect{};
+    if (GetWindowRect(hwnd, &rect) == 0) {
+        return std::nullopt;
+    }
+    const int width = rect.right - rect.left;
+    const int height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        return std::nullopt;
+    }
+
+    return TargetChildWindow{
+        .id = hwnd_id(hwnd),
+        .parent_id = hwnd_id(parent),
+        .title = window_text(hwnd),
+        .class_name = window_class_name(hwnd),
+        .x = rect.left,
+        .y = rect.top,
+        .width = width,
+        .height = height,
+    };
+}
+
 struct EnumContext {
     TargetQuery query;
     std::vector<TargetWindow> matches;
@@ -190,12 +246,48 @@ BOOL CALLBACK enum_windows_proc(HWND hwnd, LPARAM lparam) {
 }
 
 std::vector<TargetWindow> enumerate_windows(const TargetQuery& filter) {
+    if (!filter.window_id.empty()) {
+        const auto window_id = parse_window_id(filter.window_id);
+        if (!window_id) {
+            return {};
+        }
+        HWND hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(*window_id));
+        const auto window = describe_window(hwnd);
+        if (window && query_matches(filter, *window)) {
+            return {*window};
+        }
+        return {};
+    }
+
     EnumContext context{
         .query = filter,
         .matches = {},
     };
     EnumWindows(enum_windows_proc, reinterpret_cast<LPARAM>(&context));
     return std::move(context.matches);
+}
+
+struct ChildEnumContext {
+    HWND parent = nullptr;
+    std::vector<TargetChildWindow> children;
+};
+
+BOOL CALLBACK enum_child_windows_proc(HWND hwnd, LPARAM lparam) {
+    auto* context = reinterpret_cast<ChildEnumContext*>(lparam);
+    const auto child = describe_child_window(hwnd, context->parent);
+    if (child) {
+        context->children.push_back(*child);
+    }
+    return TRUE;
+}
+
+std::vector<TargetChildWindow> enumerate_child_windows(HWND parent) {
+    ChildEnumContext context{
+        .parent = parent,
+        .children = {},
+    };
+    EnumChildWindows(parent, enum_child_windows_proc, reinterpret_cast<LPARAM>(&context));
+    return std::move(context.children);
 }
 
 #else
@@ -256,10 +348,63 @@ std::uint32_t get_window_pid(Display* display, Window window) {
     return pid;
 }
 
+std::string get_window_class(Display* display, Window window) {
+    Atom wm_class = XInternAtom(display, "WM_CLASS", True);
+    if (wm_class == None) {
+        return {};
+    }
+
+    Atom actual_type = None;
+    int actual_format = 0;
+    unsigned long items = 0;
+    unsigned long bytes_after = 0;
+    unsigned char* data = nullptr;
+    std::string result;
+    if (XGetWindowProperty(display, window, wm_class, 0, 1024, False, XA_STRING, &actual_type, &actual_format, &items, &bytes_after, &data) == Success && data != nullptr) {
+        const char* text = reinterpret_cast<const char*>(data);
+        const char* end = text + items;
+        while (text < end && *text != '\0') {
+            ++text;
+        }
+        if (text + 1 < end) {
+            result.assign(text + 1, end);
+        }
+        XFree(data);
+    }
+    return result;
+}
+
 std::string x11_window_id(Window window) {
     std::ostringstream stream;
     stream << "0x" << std::hex << static_cast<unsigned long>(window);
     return stream.str();
+}
+
+std::optional<TargetChildWindow> describe_child_window(Display* display, Window window, Window parent) {
+    XWindowAttributes attributes{};
+    if (XGetWindowAttributes(display, window, &attributes) == 0) {
+        return std::nullopt;
+    }
+    if (attributes.width <= 0 || attributes.height <= 0) {
+        return std::nullopt;
+    }
+
+    Window root = DefaultRootWindow(display);
+    Window child = None;
+    int root_x = 0;
+    int root_y = 0;
+    XTranslateCoordinates(display, window, root, 0, 0, &root_x, &root_y, &child);
+
+    return TargetChildWindow{
+        .id = x11_window_id(window),
+        .parent_id = x11_window_id(parent),
+        .title = get_window_title(display, window),
+        .class_name = get_window_class(display, window),
+        .x = root_x,
+        .y = root_y,
+        .width = attributes.width,
+        .height = attributes.height,
+    };
 }
 
 std::optional<TargetWindow> describe_window(Display* display, Window window) {
@@ -304,6 +449,20 @@ void collect_windows(Display* display, Window root, std::vector<Window>& windows
     if (children != nullptr) {
         XFree(children);
     }
+}
+
+std::vector<TargetChildWindow> enumerate_child_windows(Display* display, Window parent) {
+    std::vector<Window> windows;
+    collect_windows(display, parent, windows);
+
+    std::vector<TargetChildWindow> children;
+    for (const Window window : windows) {
+        const auto child = describe_child_window(display, window, parent);
+        if (child) {
+            children.push_back(*child);
+        }
+    }
+    return children;
 }
 
 std::vector<TargetWindow> enumerate_windows(Display* display, const TargetQuery& filter) {
@@ -395,6 +554,42 @@ ResolveResult resolve_window(const TargetQuery& query) {
         return fail(result.error);
     }
     return single_match_or_error(result.windows);
+}
+
+InspectResult inspect_window(const TargetQuery& query) {
+    const auto resolved = resolve_window(query);
+    if (!resolved.ok) {
+        return fail_inspect(resolved.error);
+    }
+
+#ifdef _WIN32
+    const auto value = parse_window_id(resolved.window.id);
+    if (!value) {
+        return fail_inspect("resolved target window id is invalid");
+    }
+    HWND hwnd = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(*value));
+    if (!IsWindow(hwnd)) {
+        return fail_inspect("resolved target window is no longer valid");
+    }
+    return ok_inspect(resolved.window, enumerate_child_windows(hwnd));
+#else
+#ifdef KISEKI_HAS_X11
+    Display* display = XOpenDisplay(nullptr);
+    if (display == nullptr) {
+        return fail_inspect("XOpenDisplay failed; DISPLAY is not available");
+    }
+    const auto value = parse_x11_window_id(resolved.window.id);
+    if (!value) {
+        XCloseDisplay(display);
+        return fail_inspect("resolved target window id is invalid");
+    }
+    auto children = enumerate_child_windows(display, static_cast<Window>(*value));
+    XCloseDisplay(display);
+    return ok_inspect(resolved.window, std::move(children));
+#else
+    return fail_inspect("Linux X11 target inspection support was not compiled in");
+#endif
+#endif
 }
 
 }

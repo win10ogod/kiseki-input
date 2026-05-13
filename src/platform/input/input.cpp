@@ -429,6 +429,14 @@ OperationResult post_mouse_button(HWND hwnd, UINT down_message, UINT up_message,
     return ok("background mouse input sent");
 }
 
+POINT map_parent_point_to_receiver(HWND parent, HWND receiver, const MousePoint& source) {
+    POINT point{source.x, source.y};
+    if (receiver != parent) {
+        MapWindowPoints(parent, receiver, &point, 1);
+    }
+    return point;
+}
+
 #else
 #ifdef KISEKI_HAS_X11
 
@@ -583,11 +591,133 @@ OperationResult send_background_key_x11(Display* display, Window window, const s
     return ok("background key input sent");
 }
 
-std::string x11_key_name_for_char(char c) {
-    if (c == '\n' || c == '\r') return "Return";
-    if (c == '\t') return "Tab";
-    if (c == ' ') return "space";
-    return std::string{c};
+struct X11TextKey {
+    KeySym keysym = NoSymbol;
+    bool shift = false;
+};
+
+X11TextKey x11_text_key_for_char(unsigned char c) {
+    if (c >= 'a' && c <= 'z') return {static_cast<KeySym>(XK_a + (c - 'a')), false};
+    if (c >= 'A' && c <= 'Z') return {static_cast<KeySym>(XK_a + (c - 'A')), true};
+    if (c >= '0' && c <= '9') return {static_cast<KeySym>(XK_0 + (c - '0')), false};
+
+    switch (c) {
+        case '\n':
+        case '\r': return {XK_Return, false};
+        case '\t': return {XK_Tab, false};
+        case ' ': return {XK_space, false};
+        case '-': return {XK_minus, false};
+        case '_': return {XK_minus, true};
+        case '=': return {XK_equal, false};
+        case '+': return {XK_equal, true};
+        case '[': return {XK_bracketleft, false};
+        case '{': return {XK_bracketleft, true};
+        case ']': return {XK_bracketright, false};
+        case '}': return {XK_bracketright, true};
+        case '\\': return {XK_backslash, false};
+        case '|': return {XK_backslash, true};
+        case ';': return {XK_semicolon, false};
+        case ':': return {XK_semicolon, true};
+        case '\'': return {XK_apostrophe, false};
+        case '"': return {XK_apostrophe, true};
+        case ',': return {XK_comma, false};
+        case '<': return {XK_comma, true};
+        case '.': return {XK_period, false};
+        case '>': return {XK_period, true};
+        case '/': return {XK_slash, false};
+        case '?': return {XK_slash, true};
+        case '`': return {XK_grave, false};
+        case '~': return {XK_grave, true};
+        case '!': return {XK_1, true};
+        case '@': return {XK_2, true};
+        case '#': return {XK_3, true};
+        case '$': return {XK_4, true};
+        case '%': return {XK_5, true};
+        case '^': return {XK_6, true};
+        case '&': return {XK_7, true};
+        case '*': return {XK_8, true};
+        case '(': return {XK_9, true};
+        case ')': return {XK_0, true};
+        default: return {};
+    }
+}
+
+std::string unsupported_x11_text_byte(unsigned char c) {
+    std::ostringstream stream;
+    stream << "unsupported Linux X11 text byte: 0x" << std::hex << static_cast<int>(c);
+    return stream.str();
+}
+
+OperationResult send_text_with_xtest(std::string_view text) {
+    return with_display([&](Display* display, const XTestApi& xtest) {
+        const KeyCode shift = XKeysymToKeycode(display, XK_Shift_L);
+        for (const unsigned char c : text) {
+            const X11TextKey key = x11_text_key_for_char(c);
+            if (key.keysym == NoSymbol) {
+                return fail(unsupported_x11_text_byte(c));
+            }
+            const KeyCode code = XKeysymToKeycode(display, key.keysym);
+            if (code == 0 || (key.shift && shift == 0)) {
+                return fail(unsupported_x11_text_byte(c));
+            }
+            if (key.shift) {
+                xtest.fake_key(display, shift, True, CurrentTime);
+            }
+            xtest.fake_key(display, code, True, CurrentTime);
+            xtest.fake_key(display, code, False, CurrentTime);
+            if (key.shift) {
+                xtest.fake_key(display, shift, False, CurrentTime);
+            }
+            XSync(display, False);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return ok("text input sent");
+    });
+}
+
+bool send_background_key_event_x11(Display* display, Window window, KeyCode keycode, int type, unsigned int state) {
+    XKeyEvent event{};
+    event.display = display;
+    event.window = window;
+    event.root = DefaultRootWindow(display);
+    event.subwindow = None;
+    event.time = CurrentTime;
+    event.x = 1;
+    event.y = 1;
+    event.x_root = 1;
+    event.y_root = 1;
+    event.same_screen = True;
+    event.keycode = keycode;
+    event.state = state;
+    event.type = type;
+    const long mask = type == KeyPress ? KeyPressMask : KeyReleaseMask;
+    return XSendEvent(display, window, True, mask, reinterpret_cast<XEvent*>(&event)) != 0;
+}
+
+OperationResult send_background_text_key_x11(Display* display, Window window, unsigned char c) {
+    const X11TextKey key = x11_text_key_for_char(c);
+    if (key.keysym == NoSymbol) {
+        return fail(unsupported_x11_text_byte(c));
+    }
+    const KeyCode keycode = XKeysymToKeycode(display, key.keysym);
+    const KeyCode shift = XKeysymToKeycode(display, XK_Shift_L);
+    if (keycode == 0 || (key.shift && shift == 0)) {
+        return fail(unsupported_x11_text_byte(c));
+    }
+
+    if (key.shift && !send_background_key_event_x11(display, window, shift, KeyPress, 0)) {
+        return fail("XSendEvent shift press failed");
+    }
+    if (!send_background_key_event_x11(display, window, keycode, KeyPress, key.shift ? ShiftMask : 0)) {
+        return fail("XSendEvent key press failed");
+    }
+    if (!send_background_key_event_x11(display, window, keycode, KeyRelease, key.shift ? ShiftMask : 0)) {
+        return fail("XSendEvent key release failed");
+    }
+    if (key.shift && !send_background_key_event_x11(display, window, shift, KeyRelease, ShiftMask)) {
+        return fail("XSendEvent shift release failed");
+    }
+    return ok("background key input sent");
 }
 #endif
 #endif
@@ -711,13 +841,11 @@ OperationResult type_text(const std::string& text) {
     }
     return ok("text input sent");
 #else
-    for (const char c : text) {
-        const auto result = key_combo(std::string{c});
-        if (!result.ok) {
-            return result;
-        }
-    }
-    return ok("text input sent");
+#ifdef KISEKI_HAS_X11
+    return send_text_with_xtest(text);
+#else
+    return fail("Linux X11/XTest input support was not compiled in");
+#endif
 #endif
 }
 
@@ -935,10 +1063,7 @@ OperationResult background_type_text(const kiseki::platform::target::TargetQuery
 #ifdef KISEKI_HAS_X11
     return with_target_window(target, [&](Display* display, Window window) {
         for (const unsigned char c : text) {
-            if (c > 0x7f) {
-                return fail("Linux X11 background text currently supports ASCII text");
-            }
-            const auto result = send_background_key_x11(display, window, x11_key_name_for_char(static_cast<char>(c)));
+            const auto result = send_background_text_key_x11(display, window, c);
             if (!result.ok) {
                 return result;
             }
@@ -1060,6 +1185,105 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
             }
         }
         return ok("background mouse input sent");
+    });
+#else
+    return fail("Linux X11 background input support was not compiled in");
+#endif
+#endif
+}
+
+OperationResult background_mouse_drag(const BackgroundDragOptions& options) {
+    if (options.points.size() < 2) {
+        return fail("background drag requires at least two points");
+    }
+    for (const auto& point : options.points) {
+        if (point.x < 0 || point.y < 0) {
+            return fail("background drag coordinates must be non-negative client coordinates");
+        }
+    }
+
+#ifdef _WIN32
+    return with_resolved_hwnd(options.target, [&](HWND hwnd) {
+        POINT first{options.points.front().x, options.points.front().y};
+        HWND receiver = mouse_message_target(hwnd, first);
+        if (PostMessageW(receiver, WM_MOUSEMOVE, 0, mouse_lparam(first)) == 0) {
+            return fail("PostMessage drag initial mouse move failed");
+        }
+        if (PostMessageW(receiver, WM_LBUTTONDOWN, MK_LBUTTON, mouse_lparam(first)) == 0) {
+            return fail("PostMessage drag mouse down failed");
+        }
+
+        for (std::size_t index = 1; index < options.points.size(); ++index) {
+            const POINT point = map_parent_point_to_receiver(hwnd, receiver, options.points[index]);
+            if (PostMessageW(receiver, WM_MOUSEMOVE, MK_LBUTTON, mouse_lparam(point)) == 0) {
+                PostMessageW(receiver, WM_LBUTTONUP, 0, mouse_lparam(point));
+                return fail("PostMessage drag mouse move failed");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        const POINT last = map_parent_point_to_receiver(hwnd, receiver, options.points.back());
+        if (PostMessageW(receiver, WM_LBUTTONUP, 0, mouse_lparam(last)) == 0) {
+            return fail("PostMessage drag mouse up failed");
+        }
+        return ok("background mouse drag sent");
+    });
+#else
+#ifdef KISEKI_HAS_X11
+    return with_target_window(options.target, [&](Display* display, Window window) {
+        const auto first = options.points.front();
+        XMotionEvent motion{};
+        motion.type = MotionNotify;
+        motion.display = display;
+        motion.window = window;
+        motion.root = DefaultRootWindow(display);
+        motion.time = CurrentTime;
+        motion.x = first.x;
+        motion.y = first.y;
+        motion.x_root = first.x;
+        motion.y_root = first.y;
+        motion.same_screen = True;
+        if (XSendEvent(display, window, True, PointerMotionMask, reinterpret_cast<XEvent*>(&motion)) == 0) {
+            return fail("XSendEvent drag initial mouse move failed");
+        }
+
+        XButtonEvent button{};
+        button.display = display;
+        button.window = window;
+        button.root = DefaultRootWindow(display);
+        button.time = CurrentTime;
+        button.x = first.x;
+        button.y = first.y;
+        button.x_root = first.x;
+        button.y_root = first.y;
+        button.same_screen = True;
+        button.button = 1;
+        button.type = ButtonPress;
+        if (XSendEvent(display, window, True, ButtonPressMask, reinterpret_cast<XEvent*>(&button)) == 0) {
+            return fail("XSendEvent drag mouse down failed");
+        }
+
+        for (std::size_t index = 1; index < options.points.size(); ++index) {
+            motion.x = options.points[index].x;
+            motion.y = options.points[index].y;
+            motion.x_root = options.points[index].x;
+            motion.y_root = options.points[index].y;
+            motion.state = Button1Mask;
+            if (XSendEvent(display, window, True, PointerMotionMask, reinterpret_cast<XEvent*>(&motion)) == 0) {
+                return fail("XSendEvent drag mouse move failed");
+            }
+        }
+
+        const auto last = options.points.back();
+        button.type = ButtonRelease;
+        button.x = last.x;
+        button.y = last.y;
+        button.x_root = last.x;
+        button.y_root = last.y;
+        if (XSendEvent(display, window, True, ButtonReleaseMask, reinterpret_cast<XEvent*>(&button)) == 0) {
+            return fail("XSendEvent drag mouse up failed");
+        }
+        return ok("background mouse drag sent");
     });
 #else
     return fail("Linux X11 background input support was not compiled in");

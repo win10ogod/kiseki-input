@@ -7,6 +7,7 @@
 using kiseki::core::capabilities::foundation_capabilities;
 using kiseki::core::capabilities::CaptureCapabilities;
 using kiseki::core::capabilities::InputCapabilities;
+using kiseki::core::capabilities::SessionCapabilities;
 using kiseki::core::capabilities::to_json;
 
 namespace {
@@ -21,11 +22,17 @@ consteval bool default_capture_capabilities_fail_closed() {
     return !capabilities.desktop && !capabilities.window && !capabilities.region && !capabilities.burst;
 }
 
+consteval bool default_session_capabilities_fail_closed() {
+    SessionCapabilities capabilities;
+    return !capabilities.background_desktop;
+}
+
 }
 
 TEST_CASE("default capability structs fail closed") {
     STATIC_REQUIRE(default_input_capabilities_fail_closed());
     STATIC_REQUIRE(default_capture_capabilities_fail_closed());
+    STATIC_REQUIRE(default_session_capabilities_fail_closed());
 }
 
 TEST_CASE("foundation capabilities include explicit limitations") {
@@ -38,6 +45,7 @@ TEST_CASE("foundation capabilities include explicit limitations") {
     REQUIRE(json["capture"]["window"].get<bool>() == false);
     REQUIRE(json["capture"]["region"].get<bool>() == false);
     REQUIRE(json["capture"]["burst"].get<bool>() == false);
+    REQUIRE(json["session"]["backgroundDesktop"].get<bool>() == false);
     REQUIRE_FALSE(json["limitations"].empty());
 
     const auto limitations = json["limitations"].dump();

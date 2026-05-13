@@ -11,8 +11,9 @@ Windows is the primary live-tested platform today.
 - CLI configuration, diagnostics, macros, heartbeat notifications, and WebUI configuration.
 - Desktop screenshots and burst screenshots.
 - Target window listing, target window screenshots, and target window burst screenshots.
+- Target inspection for selected windows and child receiver handles.
 - Global keyboard and mouse input through the configured backend.
-- Message-based target-window input where the selected target accepts the relevant Windows APIs.
+- Direct selected-window input where the selected target accepts the relevant Windows APIs.
 - Optional `IbInputSimulator.dll` integration when the DLL can be built and loaded.
 
 ### Linux
@@ -24,8 +25,17 @@ Linux support currently targets graphical X11 sessions and true-machine validati
 - X11 desktop screenshots, target-window screenshots, and burst screenshots.
 - X11/XTest global input where the active session accepts it.
 - X11 target-window events where the selected target accepts them.
+- Isolated Xvfb background desktops for running, clicking, typing into, and capturing Linux GUI applications on a separate `DISPLAY`.
 
 Wayland and compositor-restricted sessions need their own backend work. WSL-only results are not treated as Linux desktop proof.
+
+## Current Background Strategy
+
+Hyper-V, Virtual Desktop, and Desktop Object are not part of the current implementation track.
+
+Windows keeps background work scoped to observation: `screenshot background-window` captures a selected target window without introducing a separate Windows session backend. Direct selected-window input remains available where an application accepts the same-session Windows APIs, but it is not presented as a universal background operation method.
+
+Linux first uses true background desktop operation: create an isolated X11 desktop with Xvfb, launch applications inside that `DISPLAY`, then use the normal Linux X11 screenshot and XTest input paths against that isolated desktop. This avoids taking over the user's physical Linux desktop session.
 
 ## Planned macOS Line
 

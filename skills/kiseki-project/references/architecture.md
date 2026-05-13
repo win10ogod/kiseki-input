@@ -9,6 +9,7 @@
 - `src/platform/input/`: keyboard, text, mouse, and drag backends.
 - `src/platform/notification/`: heartbeat notification and daemon loop.
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.
+- `src/platform/session/`: Linux Xvfb background desktop lifecycle.
 - `src/platform/target/`: platform target-window listing and resolver for title, PID, and window id selectors.
 - `src/webui/`: embedded static assets, config-only API, HTTP server.
 - `test/`: Catch2 unit tests.
@@ -59,6 +60,20 @@ Linux:
 - Detect session support before claiming capabilities.
 - For WSL, report unsupported compositor/session behavior clearly.
 - True Linux behavior needs a real graphical Linux test environment.
+- Linux background desktop support is Xvfb-based and should stay separate from the current physical `DISPLAY`. Use scoped environment changes when routing screenshot or input commands to an isolated `DISPLAY`.
+
+Windows selected-window:
+
+- Resolve a target HWND through `platform/target`.
+- Use `target inspect` when a command needs receiver detail; it reports child HWNDs, class names, and bounds.
+- Keep direct selected-window behavior message/API based. Do not present it as universal canvas/raw-input operation.
+
+Windows background screenshot:
+
+- Keep Windows background work scoped to observation through `screenshot background-window`.
+- Do not introduce a separate Windows session backend for the current project direction.
+- Selected-window input remains a compatibility helper for targets that accept normal Windows messages; do not describe it as universal background operation.
+- Background screenshot should use target selectors and the selected-window capture backend without activating the target.
 
 ## WebUI Asset Rule
 

@@ -40,7 +40,16 @@ struct TargetListOptions {
     TargetOptions filter;
 };
 
+struct TargetInspectOptions {
+    TargetOptions target;
+};
+
 struct ScreenshotWindowOptions {
+    TargetOptions target;
+    std::filesystem::path output_path;
+};
+
+struct ScreenshotBackgroundWindowOptions {
     TargetOptions target;
     std::filesystem::path output_path;
 };
@@ -101,6 +110,52 @@ struct BackgroundMouseOptions {
     std::string click;
 };
 
+struct BackgroundDragOptions {
+    TargetOptions target;
+    std::filesystem::path path;
+};
+
+struct BackgroundDesktopStartOptions {
+    std::string display;
+    std::filesystem::path state_directory;
+    int width;
+    int height;
+    int depth;
+};
+
+struct BackgroundDesktopStopOptions {
+    std::string display;
+    std::filesystem::path state_directory;
+};
+
+struct BackgroundDesktopLaunchOptions {
+    std::string display;
+    std::string command;
+};
+
+struct BackgroundDesktopScreenshotOptions {
+    std::string display;
+    std::filesystem::path output_path;
+};
+
+struct BackgroundDesktopTextOptions {
+    std::string display;
+    std::string text;
+    std::filesystem::path text_file;
+};
+
+struct BackgroundDesktopKeyOptions {
+    std::string display;
+    std::string key;
+};
+
+struct BackgroundDesktopMouseOptions {
+    std::string display;
+    int x;
+    int y;
+    std::string click;
+};
+
 struct DaemonOptions {
     bool once;
 };
@@ -112,9 +167,11 @@ struct MacroOptions {
 struct Dependencies {
     std::function<int(const WebUiLaunchOptions&, const std::filesystem::path&, Io)> launch_config_ui;
     std::function<int(const TargetListOptions&, Io)> list_targets;
+    std::function<int(const TargetInspectOptions&, Io)> inspect_target;
     std::function<int(const ScreenshotDesktopOptions&, Io)> capture_desktop;
     std::function<int(const ScreenshotBurstOptions&, Io)> capture_burst;
     std::function<int(const ScreenshotWindowOptions&, Io)> capture_window;
+    std::function<int(const ScreenshotBackgroundWindowOptions&, Io)> capture_background_window;
     std::function<int(const ScreenshotWindowBurstOptions&, Io)> capture_window_burst;
     std::function<int(const InputKeyOptions&, Io)> input_key;
     std::function<int(const InputComboOptions&, Io)> input_combo;
@@ -124,6 +181,14 @@ struct Dependencies {
     std::function<int(const BackgroundTextOptions&, Io)> input_background_text;
     std::function<int(const BackgroundKeyOptions&, Io)> input_background_key;
     std::function<int(const BackgroundMouseOptions&, Io)> input_background_mouse;
+    std::function<int(const BackgroundDragOptions&, Io)> input_background_drag;
+    std::function<int(const BackgroundDesktopStartOptions&, Io)> background_desktop_start;
+    std::function<int(const BackgroundDesktopStopOptions&, Io)> background_desktop_stop;
+    std::function<int(const BackgroundDesktopLaunchOptions&, Io)> background_desktop_launch;
+    std::function<int(const BackgroundDesktopScreenshotOptions&, Io)> background_desktop_screenshot;
+    std::function<int(const BackgroundDesktopTextOptions&, Io)> background_desktop_text;
+    std::function<int(const BackgroundDesktopKeyOptions&, Io)> background_desktop_key;
+    std::function<int(const BackgroundDesktopMouseOptions&, Io)> background_desktop_mouse;
     std::function<int(const DaemonOptions&, const std::filesystem::path&, Io)> run_daemon;
 };
 
