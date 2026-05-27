@@ -19,11 +19,15 @@ It is built for developers who want a practical automation lab instead of a pile
 
 ## See It Work
 
-These GIFs were recorded from the Windows build using the CLI and macro runner. They are cropped to the actual target window or dialog.
+These GIFs were recorded from live CLI runs. Windows demos use the visible desktop and macro runner. Linux uses an isolated Xvfb `DISPLAY`. macOS uses the optional Cua Driver backend through `kiseki mac-background`; in the controlled run, Safari stayed frontmost and the cursor position did not move.
 
 | Macro input in Notepad | Mouse macro in Paint | Heartbeat notification |
 | --- | --- | --- |
 | ![Kiseki CLI typing text into Notepad](docs/assets/demos/notepad-unicode.gif) | ![Kiseki CLI drawing a heart in Paint](docs/assets/demos/paint-macro.gif) | ![Kiseki heartbeat notification](docs/assets/demos/heartbeat-notification.gif) |
+
+| Linux isolated DISPLAY | macOS CUA background |
+| --- | --- |
+| ![Kiseki Linux isolated Xvfb background desktop demo](docs/assets/demos/linux-isolated-display.gif) | ![Kiseki macOS CUA background TextEdit demo](docs/assets/demos/macos-cua-background.gif) |
 
 ## Try It In 60 Seconds
 
