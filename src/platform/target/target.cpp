@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -12,6 +15,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <ApplicationServices/ApplicationServices.h>
 #else
 #ifdef KISEKI_HAS_X11
 #include <X11/Xatom.h>
@@ -290,6 +295,160 @@ std::vector<TargetChildWindow> enumerate_child_windows(HWND parent) {
     return std::move(context.children);
 }
 
+#elif defined(__APPLE__)
+
+std::string cf_string_to_utf8(CFStringRef value) {
+    if (value == nullptr) {
+        return {};
+    }
+
+    const CFIndex length = CFStringGetLength(value);
+    const CFIndex max_size = CFStringGetMaximumSizeForEncoding(length, kCFStringEncodingUTF8) + 1;
+    if (max_size <= 1) {
+        return {};
+    }
+
+    std::string output(static_cast<std::size_t>(max_size), '\0');
+    if (!CFStringGetCString(value, output.data(), max_size, kCFStringEncodingUTF8)) {
+        return {};
+    }
+    output.resize(std::strlen(output.c_str()));
+    return output;
+}
+
+std::optional<long long> cf_number_to_i64(CFDictionaryRef dictionary, CFStringRef key) {
+    CFNumberRef value = static_cast<CFNumberRef>(CFDictionaryGetValue(dictionary, key));
+    if (value == nullptr || CFGetTypeID(value) != CFNumberGetTypeID()) {
+        return std::nullopt;
+    }
+
+    long long result = 0;
+    if (!CFNumberGetValue(value, kCFNumberLongLongType, &result)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+std::optional<double> cf_number_to_double(CFDictionaryRef dictionary, CFStringRef key) {
+    CFNumberRef value = static_cast<CFNumberRef>(CFDictionaryGetValue(dictionary, key));
+    if (value == nullptr || CFGetTypeID(value) != CFNumberGetTypeID()) {
+        return std::nullopt;
+    }
+
+    double result = 0.0;
+    if (!CFNumberGetValue(value, kCFNumberDoubleType, &result)) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+std::string cf_dictionary_string(CFDictionaryRef dictionary, CFStringRef key) {
+    CFStringRef value = static_cast<CFStringRef>(CFDictionaryGetValue(dictionary, key));
+    if (value == nullptr || CFGetTypeID(value) != CFStringGetTypeID()) {
+        return {};
+    }
+    return cf_string_to_utf8(value);
+}
+
+std::string cg_window_id(CGWindowID window) {
+    std::ostringstream stream;
+    stream << "0x" << std::hex << static_cast<unsigned long>(window);
+    return stream.str();
+}
+
+std::optional<CGWindowID> parse_cg_window_id(const std::string& id) {
+    const auto value = parse_window_id(id);
+    if (!value || *value > static_cast<unsigned long long>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::nullopt;
+    }
+    return static_cast<CGWindowID>(*value);
+}
+
+std::optional<TargetWindow> describe_cg_window(CFDictionaryRef dictionary) {
+    const auto window_number = cf_number_to_i64(dictionary, kCGWindowNumber);
+    if (!window_number ||
+        *window_number <= 0 ||
+        *window_number > static_cast<long long>(std::numeric_limits<std::uint32_t>::max())) {
+        return std::nullopt;
+    }
+
+    const auto layer = cf_number_to_i64(dictionary, kCGWindowLayer).value_or(0);
+    if (layer != 0) {
+        return std::nullopt;
+    }
+
+    const auto alpha = cf_number_to_double(dictionary, kCGWindowAlpha).value_or(1.0);
+    if (alpha <= 0.0) {
+        return std::nullopt;
+    }
+
+    CFDictionaryRef bounds_value = static_cast<CFDictionaryRef>(CFDictionaryGetValue(dictionary, kCGWindowBounds));
+    if (bounds_value == nullptr || CFGetTypeID(bounds_value) != CFDictionaryGetTypeID()) {
+        return std::nullopt;
+    }
+
+    CGRect bounds{};
+    if (!CGRectMakeWithDictionaryRepresentation(bounds_value, &bounds)) {
+        return std::nullopt;
+    }
+    if (bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
+        return std::nullopt;
+    }
+
+    const std::string owner = cf_dictionary_string(dictionary, kCGWindowOwnerName);
+    const std::string name = cf_dictionary_string(dictionary, kCGWindowName);
+    std::string title = name;
+    if (!owner.empty() && !name.empty()) {
+        title = owner + " - " + name;
+    } else if (title.empty()) {
+        title = owner;
+    }
+
+    const auto pid = cf_number_to_i64(dictionary, kCGWindowOwnerPID).value_or(0);
+    return TargetWindow{
+        .id = cg_window_id(static_cast<CGWindowID>(*window_number)),
+        .title = title,
+        .pid = pid > 0 && pid <= static_cast<long long>(std::numeric_limits<std::uint32_t>::max()) ? static_cast<std::uint32_t>(pid) : 0U,
+        .x = static_cast<int>(std::llround(bounds.origin.x)),
+        .y = static_cast<int>(std::llround(bounds.origin.y)),
+        .width = static_cast<int>(std::llround(bounds.size.width)),
+        .height = static_cast<int>(std::llround(bounds.size.height)),
+    };
+}
+
+std::vector<TargetWindow> enumerate_windows(const TargetQuery& filter) {
+    CGWindowListOption options = kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements;
+    CGWindowID relative_window = kCGNullWindowID;
+    if (!filter.window_id.empty()) {
+        const auto window_id = parse_cg_window_id(filter.window_id);
+        if (!window_id) {
+            return {};
+        }
+        options = kCGWindowListOptionIncludingWindow;
+        relative_window = *window_id;
+    }
+
+    CFArrayRef windows = CGWindowListCopyWindowInfo(options, relative_window);
+    if (windows == nullptr) {
+        return {};
+    }
+
+    std::vector<TargetWindow> matches;
+    const CFIndex count = CFArrayGetCount(windows);
+    for (CFIndex index = 0; index < count; ++index) {
+        CFDictionaryRef dictionary = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(windows, index));
+        if (dictionary == nullptr || CFGetTypeID(dictionary) != CFDictionaryGetTypeID()) {
+            continue;
+        }
+        const auto window = describe_cg_window(dictionary);
+        if (window && query_matches(filter, *window)) {
+            matches.push_back(*window);
+        }
+    }
+    CFRelease(windows);
+    return matches;
+}
+
 #else
 #ifdef KISEKI_HAS_X11
 
@@ -502,6 +661,13 @@ bool has_target_selector(const TargetQuery& query) {
 bool target_window_available() {
 #ifdef _WIN32
     return true;
+#elif defined(__APPLE__)
+    CFArrayRef windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    if (windows == nullptr) {
+        return false;
+    }
+    CFRelease(windows);
+    return true;
 #else
 #ifdef KISEKI_HAS_X11
     const char* display_name = std::getenv("DISPLAY");
@@ -522,6 +688,8 @@ bool target_window_available() {
 
 ListResult list_windows(const TargetQuery& filter) {
 #ifdef _WIN32
+    return ok_list(enumerate_windows(filter));
+#elif defined(__APPLE__)
     return ok_list(enumerate_windows(filter));
 #else
 #ifdef KISEKI_HAS_X11
@@ -572,6 +740,12 @@ InspectResult inspect_window(const TargetQuery& query) {
         return fail_inspect("resolved target window is no longer valid");
     }
     return ok_inspect(resolved.window, enumerate_child_windows(hwnd));
+#elif defined(__APPLE__)
+    const auto value = parse_cg_window_id(resolved.window.id);
+    if (!value) {
+        return fail_inspect("resolved target window id is invalid");
+    }
+    return ok_inspect(resolved.window, {});
 #else
 #ifdef KISEKI_HAS_X11
     Display* display = XOpenDisplay(nullptr);

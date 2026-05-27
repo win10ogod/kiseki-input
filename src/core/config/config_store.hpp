@@ -11,6 +11,7 @@ namespace kiseki::core::config {
 enum class PlatformKind {
     Windows,
     Linux,
+    MacOS,
 };
 
 struct EnvironmentSnapshot {

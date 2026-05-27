@@ -160,8 +160,13 @@ Linux:
 
 macOS:
 
-- macOS is a planned platform line, not a completed support claim.
-- The blocker is lack of reliable macOS hardware for build, permission, and live desktop validation.
+- macOS has an initial native backend in the codebase.
+- Config path uses `~/Library/Application Support/KisekiInput/config.json`.
+- Target listing uses Apple Window Services in the active GUI session.
+- Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission.
+- Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission.
+- Target-window background input is not reported available until a target-specific automation backend exists.
+- Release-grade support still requires real macOS build, permission, and live desktop validation.
 - Roadmap details live in `docs/roadmap.md`.
 
 ## Capability Limits

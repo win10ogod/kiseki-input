@@ -14,7 +14,7 @@ It is built for developers who want a practical automation lab instead of a pile
 - WebUI is intentionally configuration-only, so opening it does not create a remote control surface.
 - Windows can use `IbInputSimulator.dll` when available and falls back to system input when it is not.
 - Linux support uses native X11/XTest paths where the session permits it.
-- macOS support is planned, but waits for real macOS hardware validation.
+- macOS has an initial native backend for target listing, system screenshots, selected-window screenshots, and global CGEvent input; live hardware validation is still required before treating it as release-grade.
 
 ## See It Work
 
@@ -60,6 +60,7 @@ This build includes:
 - CLI keyboard/mouse input
 - CLI message-based background keyboard/mouse input for target windows that accept it
 - CLI Linux background desktop lifecycle and input/screenshot commands when built with X11 and `Xvfb` is installed
+- Initial macOS native backend for config path, target listing, desktop/window screenshots, burst screenshots, and global keyboard/mouse input
 - CLI JSON macros for sequencing input, screenshots, and waits
 - Configurable heartbeat daemon with dismissible notifications
 - Machine-readable capabilities: `kiseki capabilities`
@@ -154,11 +155,11 @@ Linux support is implemented through X11/XTest and X11 window APIs. `kiseki targ
 
 Windows background screenshot uses selected-window capture through `screenshot background-window`. It is the Windows background observation path for this project; it does not require a VM, Docker, or separate session backend. Windows selected-window input remains a compatibility helper for ordinary Win32 controls and apps that accept public window messages.
 
-macOS is a planned platform line. It is not excluded by project direction; it is not marked supported today because the maintainers currently do not have reliable macOS hardware for build, permission, and live desktop verification. See [docs/roadmap.md](docs/roadmap.md).
+macOS has an initial native backend using Apple desktop APIs. Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission in the active GUI session. Target listing uses Window Services. Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission. Target-window background input is not reported as available on macOS until a target-specific automation backend exists. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md) for the Windows, Linux, and planned macOS platform lines.
+See [docs/roadmap.md](docs/roadmap.md) for the Windows, Linux, and macOS platform lines.
 
 ## Build
 

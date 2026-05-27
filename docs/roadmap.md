@@ -37,16 +37,16 @@ Windows keeps background work scoped to observation: `screenshot background-wind
 
 Linux first uses true background desktop operation: create an isolated X11 desktop with Xvfb, launch applications inside that `DISPLAY`, then use the normal Linux X11 screenshot and XTest input paths against that isolated desktop. This avoids taking over the user's physical Linux desktop session.
 
-## Planned macOS Line
+## macOS Line
 
-macOS support is planned, but it is not marked as implemented because the maintainers currently do not have reliable macOS hardware for build, permission, and live desktop verification.
+macOS support now has an initial native backend in the codebase, but it is not marked release-grade until it passes real macOS build, permission, and live desktop verification.
 
-This is an equipment and validation gap, not a lack of interest in macOS support. The project should not claim macOS support until it can be tested on a real macOS desktop with the required user permissions.
+The remaining gap is validation and backend expansion, not lack of interest in macOS support. The project should distinguish between compiled backend support and live-verified behavior on a real macOS desktop with the required user permissions.
 
 ### macOS Phase 0: Capability Design
 
-- Add macOS to the capability matrix as `planned`, not `available`.
-- Document expected permission requirements in `doctor`.
+- Add macOS to the capability matrix with permission-aware availability.
+- Document Screen Recording and Accessibility requirements in `doctor`.
 - Keep the CLI shape consistent with Windows and Linux.
 - Define which backends are observation, input, target discovery, and app automation backends.
 
@@ -54,21 +54,21 @@ This is an equipment and validation gap, not a lack of interest in macOS support
 
 - Build the core CLI on macOS.
 - Support config, config validation, config-only WebUI, capabilities, doctor, macros, and heartbeat daemon flow.
-- Add macOS config path behavior.
+- Add macOS config path behavior through `~/Library/Application Support/KisekiInput/config.json`.
 - Keep operational WebUI routes out of scope.
 
 ### macOS Phase 2: Observation Backends
 
-- Desktop screenshot backend.
-- Target/window observation backend where macOS APIs and permissions allow it.
+- Desktop and selected-window screenshot backend through ScreenCaptureKit when Screen Recording permission is available.
+- Target/window discovery through Window Services in the current user GUI session.
 - Burst screenshot path with the same user-facing options as other platforms.
 - Clear failure output when Screen Recording permission or a compatible capture backend is missing.
 
-Candidate implementation areas include macOS screen capture APIs and permission-aware capture handling. The exact backend should be selected during implementation on real hardware.
+ScreenCaptureKit is the active screenshot backend. Future work should extend it for high-performance streaming and richer capture modes.
 
 ### macOS Phase 3: Action Backends
 
-- Foreground input backend for keyboard and mouse actions.
+- Global input backend for keyboard and mouse actions through Quartz CGEvent when Accessibility permission is available.
 - Accessibility-based app interaction where the target exposes usable UI elements.
 - Apple Events or application automation where an app exposes public automation.
 - Clear backend selection in `capabilities` and `doctor`.
@@ -92,4 +92,4 @@ macOS contributions are welcome when they include real macOS validation evidence
 - `kiseki doctor` output.
 - Screenshot/input/target-list artifacts when relevant.
 
-The project should stay honest about what has been tested, while keeping macOS as a first-class planned platform line.
+The project should stay honest about what has been tested, while keeping macOS as a first-class platform line.

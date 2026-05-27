@@ -57,6 +57,8 @@ EnvironmentSnapshot current_environment() {
 PlatformKind current_platform() {
 #ifdef _WIN32
     return PlatformKind::Windows;
+#elif defined(__APPLE__)
+    return PlatformKind::MacOS;
 #else
     return PlatformKind::Linux;
 #endif
@@ -66,6 +68,11 @@ std::filesystem::path default_config_path(const EnvironmentSnapshot& env, Platfo
     if (platform == PlatformKind::Windows) {
         const std::filesystem::path base = env.appdata.value_or(".");
         return base / "KisekiInput" / "config.json";
+    }
+
+    if (platform == PlatformKind::MacOS) {
+        const std::filesystem::path home = env.home.value_or(".");
+        return home / "Library" / "Application Support" / "KisekiInput" / "config.json";
     }
 
     if (env.xdg_config_home.has_value()) {

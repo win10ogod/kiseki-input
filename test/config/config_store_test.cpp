@@ -71,6 +71,15 @@ TEST_CASE("default path uses xdg config home on linux") {
     REQUIRE(path.generic_string() == "/home/a/.config-custom/kiseki-input/config.json");
 }
 
+TEST_CASE("default path uses application support on macos") {
+    EnvironmentSnapshot env;
+    env.home = "/Users/a";
+
+    const auto path = default_config_path(env, PlatformKind::MacOS);
+
+    REQUIRE(path.generic_string() == "/Users/a/Library/Application Support/KisekiInput/config.json");
+}
+
 TEST_CASE("default path falls back to home on linux") {
     EnvironmentSnapshot env;
     env.home = "/home/a";

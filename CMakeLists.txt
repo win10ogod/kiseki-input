@@ -31,7 +31,7 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(CLI11 nlohmann_json cpp_httplib)
 
-if(NOT WIN32)
+if(UNIX AND NOT APPLE AND NOT WIN32)
     find_package(X11)
 endif()
 
@@ -62,7 +62,22 @@ target_compile_features(kiseki_platform PUBLIC cxx_std_20)
 target_include_directories(kiseki_platform PUBLIC src)
 target_link_libraries(kiseki_platform PUBLIC kiseki_core)
 if(WIN32)
-    target_link_libraries(kiseki_platform PRIVATE user32 gdi32)
+    target_sources(kiseki_platform PRIVATE src/platform/capture/d3d11_capture.cpp)
+    target_link_libraries(kiseki_platform PUBLIC user32 gdi32 d3d11.lib dxgi.lib)
+elseif(APPLE)
+    enable_language(OBJCXX)
+    target_sources(kiseki_platform PRIVATE src/platform/capture/mac_capture.mm)
+    find_library(KISEKI_APPLICATIONSERVICES_FRAMEWORK ApplicationServices REQUIRED)
+    find_library(KISEKI_FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(KISEKI_SCREENCAPTUREKIT_FRAMEWORK ScreenCaptureKit REQUIRED)
+    find_library(KISEKI_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    target_link_libraries(kiseki_platform PRIVATE
+        ${KISEKI_APPLICATIONSERVICES_FRAMEWORK}
+        ${KISEKI_FOUNDATION_FRAMEWORK}
+        ${KISEKI_SCREENCAPTUREKIT_FRAMEWORK}
+        ${KISEKI_COREVIDEO_FRAMEWORK}
+    )
+    target_compile_options(kiseki_platform PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
 elseif(X11_FOUND)
     target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_X11=1)
     target_link_libraries(kiseki_platform PRIVATE X11::X11 ${CMAKE_DL_LIBS})
@@ -191,6 +206,10 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
     add_executable(kiseki_tests ${KISEKI_TEST_SOURCES})
     target_compile_features(kiseki_tests PRIVATE cxx_std_20)
     target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core kiseki_platform kiseki_webui Catch2::Catch2WithMain)
+    target_link_libraries(kiseki_tests PRIVATE
+        "$<$<PLATFORM_ID:Windows>:d3d11.lib>"
+        "$<$<PLATFORM_ID:Windows>:dxgi.lib>"
+    )
     set_target_properties(kiseki_tests PROPERTIES CXX_EXTENSIONS OFF)
     catch_discover_tests(kiseki_tests)
 endif()

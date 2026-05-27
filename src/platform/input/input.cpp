@@ -15,6 +15,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <ApplicationServices/ApplicationServices.h>
 #else
 #ifdef KISEKI_HAS_X11
 #include <X11/Xlib.h>
@@ -437,6 +439,258 @@ POINT map_parent_point_to_receiver(HWND parent, HWND receiver, const MousePoint&
     return point;
 }
 
+#elif defined(__APPLE__)
+
+struct MacKey {
+    CGKeyCode code = 0;
+    CGEventFlags modifier_flag = 0;
+    bool modifier = false;
+};
+
+std::optional<MacKey> mac_key_for_name(const std::string& key) {
+    const std::string name = lower_copy(key);
+    if (name.size() == 1) {
+        switch (name[0]) {
+            case 'a': return MacKey{0};
+            case 's': return MacKey{1};
+            case 'd': return MacKey{2};
+            case 'f': return MacKey{3};
+            case 'h': return MacKey{4};
+            case 'g': return MacKey{5};
+            case 'z': return MacKey{6};
+            case 'x': return MacKey{7};
+            case 'c': return MacKey{8};
+            case 'v': return MacKey{9};
+            case 'b': return MacKey{11};
+            case 'q': return MacKey{12};
+            case 'w': return MacKey{13};
+            case 'e': return MacKey{14};
+            case 'r': return MacKey{15};
+            case 'y': return MacKey{16};
+            case 't': return MacKey{17};
+            case '1': return MacKey{18};
+            case '2': return MacKey{19};
+            case '3': return MacKey{20};
+            case '4': return MacKey{21};
+            case '6': return MacKey{22};
+            case '5': return MacKey{23};
+            case '9': return MacKey{25};
+            case '7': return MacKey{26};
+            case '8': return MacKey{28};
+            case '0': return MacKey{29};
+            case 'o': return MacKey{31};
+            case 'u': return MacKey{32};
+            case 'i': return MacKey{34};
+            case 'p': return MacKey{35};
+            case 'l': return MacKey{37};
+            case 'j': return MacKey{38};
+            case 'k': return MacKey{40};
+            case 'n': return MacKey{45};
+            case 'm': return MacKey{46};
+            default: break;
+        }
+    }
+
+    if (name == "enter" || name == "return") return MacKey{36};
+    if (name == "esc" || name == "escape") return MacKey{53};
+    if (name == "space") return MacKey{49};
+    if (name == "tab") return MacKey{48};
+    if (name == "backspace" || name == "delete") return MacKey{51};
+    if (name == "forward-delete" || name == "del") return MacKey{117};
+    if (name == "left") return MacKey{123};
+    if (name == "right") return MacKey{124};
+    if (name == "down") return MacKey{125};
+    if (name == "up") return MacKey{126};
+    if (name == "home") return MacKey{115};
+    if (name == "end") return MacKey{119};
+    if (name == "pageup") return MacKey{116};
+    if (name == "pagedown") return MacKey{121};
+    if (name == "minus") return MacKey{27};
+    if (name == "equal") return MacKey{24};
+    if (name == "leftbracket") return MacKey{33};
+    if (name == "rightbracket") return MacKey{30};
+    if (name == "semicolon") return MacKey{41};
+    if (name == "quote") return MacKey{39};
+    if (name == "backslash") return MacKey{42};
+    if (name == "comma") return MacKey{43};
+    if (name == "period") return MacKey{47};
+    if (name == "slash") return MacKey{44};
+    if (name == "grave") return MacKey{50};
+    if (name == "shift") return MacKey{56, kCGEventFlagMaskShift, true};
+    if (name == "ctrl" || name == "control") return MacKey{59, kCGEventFlagMaskControl, true};
+    if (name == "alt" || name == "option") return MacKey{58, kCGEventFlagMaskAlternate, true};
+    if (name == "cmd" || name == "command" || name == "win" || name == "super" || name == "meta") {
+        return MacKey{55, kCGEventFlagMaskCommand, true};
+    }
+    if (name.size() >= 2 && name[0] == 'f') {
+        const int number = std::atoi(name.c_str() + 1);
+        if (number >= 1 && number <= 20) {
+            static constexpr CGKeyCode function_keys[] = {
+                122, 120, 99, 118, 96, 97, 98, 100, 101, 109,
+                103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+            };
+            return MacKey{function_keys[number - 1]};
+        }
+    }
+    return std::nullopt;
+}
+
+bool post_mac_key_event(const MacKey& key, bool down, CGEventFlags flags) {
+    CGEventRef event = CGEventCreateKeyboardEvent(nullptr, key.code, down);
+    if (event == nullptr) {
+        return false;
+    }
+    CGEventSetFlags(event, flags);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+    return true;
+}
+
+OperationResult require_mac_accessibility() {
+    if (AXIsProcessTrusted()) {
+        return ok("accessibility trusted");
+    }
+
+    const void* keys[] = {kAXTrustedCheckOptionPrompt};
+    const void* values[] = {kCFBooleanTrue};
+    CFDictionaryRef options = CFDictionaryCreate(
+        kCFAllocatorDefault,
+        keys,
+        values,
+        1,
+        &kCFTypeDictionaryKeyCallBacks,
+        &kCFTypeDictionaryValueCallBacks);
+    const bool trusted = options != nullptr && AXIsProcessTrustedWithOptions(options);
+    if (options != nullptr) {
+        CFRelease(options);
+    }
+    return trusted ? ok("accessibility trusted")
+                   : fail("macOS Accessibility permission is required for global input; approve the prompt in System Settings and rerun");
+}
+
+OperationResult send_combo_with_cgevent(const std::vector<std::string>& keys) {
+    const auto trust = require_mac_accessibility();
+    if (!trust.ok) {
+        return trust;
+    }
+
+    std::vector<MacKey> keycodes;
+    for (const auto& key : keys) {
+        const auto mapped = mac_key_for_name(key);
+        if (!mapped) {
+            return fail("unsupported key: " + key);
+        }
+        keycodes.push_back(*mapped);
+    }
+
+    CGEventFlags flags = 0;
+    for (const auto& key : keycodes) {
+        const CGEventFlags event_flags = key.modifier ? (flags | key.modifier_flag) : flags;
+        if (!post_mac_key_event(key, true, event_flags)) {
+            return fail("CGEventCreateKeyboardEvent key down failed");
+        }
+        if (key.modifier) {
+            flags |= key.modifier_flag;
+        }
+    }
+    for (auto iter = keycodes.rbegin(); iter != keycodes.rend(); ++iter) {
+        CGEventFlags event_flags = flags;
+        if (iter->modifier) {
+            event_flags = flags & ~iter->modifier_flag;
+        }
+        if (!post_mac_key_event(*iter, false, event_flags)) {
+            return fail("CGEventCreateKeyboardEvent key up failed");
+        }
+        if (iter->modifier) {
+            flags &= ~iter->modifier_flag;
+        }
+    }
+    return ok("input sent through macOS CGEvent");
+}
+
+OperationResult send_text_with_cgevent(const std::string& text) {
+    const auto trust = require_mac_accessibility();
+    if (!trust.ok) {
+        return trust;
+    }
+
+    CFStringRef value = CFStringCreateWithCString(kCFAllocatorDefault, text.c_str(), kCFStringEncodingUTF8);
+    if (value == nullptr) {
+        return fail("failed to decode text");
+    }
+
+    const CFIndex length = CFStringGetLength(value);
+    std::vector<UniChar> characters(static_cast<std::size_t>(length));
+    if (length > 0) {
+        CFStringGetCharacters(value, CFRangeMake(0, length), characters.data());
+    }
+    CFRelease(value);
+
+    constexpr CFIndex chunk_size = 64;
+    for (CFIndex offset = 0; offset < length; offset += chunk_size) {
+        const auto chunk = static_cast<UniCharCount>(std::min(chunk_size, length - offset));
+        CGEventRef down = CGEventCreateKeyboardEvent(nullptr, 0, true);
+        CGEventRef up = CGEventCreateKeyboardEvent(nullptr, 0, false);
+        if (down == nullptr || up == nullptr) {
+            if (down != nullptr) CFRelease(down);
+            if (up != nullptr) CFRelease(up);
+            return fail("CGEventCreateKeyboardEvent text failed");
+        }
+        CGEventKeyboardSetUnicodeString(down, chunk, characters.data() + offset);
+        CGEventKeyboardSetUnicodeString(up, chunk, characters.data() + offset);
+        CGEventPost(kCGHIDEventTap, down);
+        CGEventPost(kCGHIDEventTap, up);
+        CFRelease(down);
+        CFRelease(up);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return ok("text input sent through macOS CGEvent");
+}
+
+CGPoint current_mouse_location() {
+    CGEventRef event = CGEventCreate(nullptr);
+    if (event == nullptr) {
+        return CGPointMake(0.0, 0.0);
+    }
+    const CGPoint point = CGEventGetLocation(event);
+    CFRelease(event);
+    return point;
+}
+
+struct MacMouseButton {
+    CGMouseButton button = kCGMouseButtonLeft;
+    CGEventType down = kCGEventLeftMouseDown;
+    CGEventType up = kCGEventLeftMouseUp;
+    CGEventType drag = kCGEventLeftMouseDragged;
+};
+
+MacMouseButton mac_mouse_button_for_click(const std::string& click) {
+    if (click.find("right") == 0) {
+        return MacMouseButton{kCGMouseButtonRight, kCGEventRightMouseDown, kCGEventRightMouseUp, kCGEventRightMouseDragged};
+    }
+    if (click.find("middle") == 0) {
+        return MacMouseButton{kCGMouseButtonCenter, kCGEventOtherMouseDown, kCGEventOtherMouseUp, kCGEventOtherMouseDragged};
+    }
+    return {};
+}
+
+bool post_mac_mouse_event(CGEventType type, CGPoint point, CGMouseButton button) {
+    CGEventRef event = CGEventCreateMouseEvent(nullptr, type, point, button);
+    if (event == nullptr) {
+        return false;
+    }
+    if (button == kCGMouseButtonCenter) {
+        CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, 2);
+    }
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+    return true;
+}
+
+OperationResult mac_background_input_unavailable() {
+    return fail("macOS target-window background input backend is not implemented; use global input or a target-specific automation backend");
+}
+
 #else
 #ifdef KISEKI_HAS_X11
 
@@ -727,6 +981,8 @@ OperationResult send_background_text_key_x11(Display* display, Window window, un
 bool system_input_available() {
 #ifdef _WIN32
     return true;
+#elif defined(__APPLE__)
+    return AXIsProcessTrusted();
 #else
 #ifdef KISEKI_HAS_X11
     const char* display = std::getenv("DISPLAY");
@@ -758,6 +1014,8 @@ bool driver_input_available() {
 bool background_window_input_available() {
 #ifdef _WIN32
     return true;
+#elif defined(__APPLE__)
+    return false;
 #else
 #ifdef KISEKI_HAS_X11
     return kiseki::platform::target::target_window_available();
@@ -811,6 +1069,11 @@ OperationResult key_combo(const std::string& keys, const std::string& backend) {
         return fail("IbInputSimulator is not available");
     }
     return send_combo_with_sendinput(key_list);
+#elif defined(__APPLE__)
+    if (selected_backend == "driver") {
+        return fail("macOS driver backend is not available; system CGEvent input is available when Accessibility permits it");
+    }
+    return send_combo_with_cgevent(key_list);
 #else
 #ifdef KISEKI_HAS_X11
     if (selected_backend == "driver") {
@@ -840,6 +1103,8 @@ OperationResult type_text(const std::string& text) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return ok("text input sent");
+#elif defined(__APPLE__)
+    return send_text_with_cgevent(text);
 #else
 #ifdef KISEKI_HAS_X11
     return send_text_with_xtest(text);
@@ -914,6 +1179,31 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const
         return fail("SendInput drag release failed");
     }
     return ok("mouse drag sent");
+#elif defined(__APPLE__)
+    if (selected_backend == "driver") {
+        return fail("macOS driver backend is not available; system CGEvent input is available when Accessibility permits it");
+    }
+    const auto trust = require_mac_accessibility();
+    if (!trust.ok) {
+        return trust;
+    }
+    if (!post_mac_mouse_event(kCGEventMouseMoved, CGPointMake(points.front().x, points.front().y), kCGMouseButtonLeft)) {
+        return fail("CGEventCreateMouseEvent drag start move failed");
+    }
+    if (!post_mac_mouse_event(kCGEventLeftMouseDown, CGPointMake(points.front().x, points.front().y), kCGMouseButtonLeft)) {
+        return fail("CGEventCreateMouseEvent drag down failed");
+    }
+    for (const auto& point : points) {
+        if (!post_mac_mouse_event(kCGEventLeftMouseDragged, CGPointMake(point.x, point.y), kCGMouseButtonLeft)) {
+            post_mac_mouse_event(kCGEventLeftMouseUp, CGPointMake(point.x, point.y), kCGMouseButtonLeft);
+            return fail("CGEventCreateMouseEvent drag move failed");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    if (!post_mac_mouse_event(kCGEventLeftMouseUp, CGPointMake(points.back().x, points.back().y), kCGMouseButtonLeft)) {
+        return fail("CGEventCreateMouseEvent drag release failed");
+    }
+    return ok("mouse drag sent through macOS CGEvent");
 #else
 #ifdef KISEKI_HAS_X11
     if (selected_backend == "driver") {
@@ -1008,6 +1298,40 @@ OperationResult mouse_action(const MouseOptions& options) {
         return fail("SendInput mouse failed");
     }
     return ok("mouse input sent");
+#elif defined(__APPLE__)
+    if (selected_backend == "driver") {
+        return fail("macOS driver backend is not available; system CGEvent input is available when Accessibility permits it");
+    }
+    const auto trust = require_mac_accessibility();
+    if (!trust.ok) {
+        return trust;
+    }
+
+    CGPoint point = options.absolute ? CGPointMake(options.x, options.y) : current_mouse_location();
+    if (!options.absolute) {
+        point.x += options.dx;
+        point.y += options.dy;
+    }
+
+    if (!post_mac_mouse_event(kCGEventMouseMoved, point, kCGMouseButtonLeft)) {
+        return fail("CGEventCreateMouseEvent move failed");
+    }
+    if (click == "none") {
+        return ok("mouse input sent through macOS CGEvent");
+    }
+
+    const MacMouseButton button = mac_mouse_button_for_click(click);
+    if (click == "left" || click == "right" || click == "middle" || click.ends_with("-down")) {
+        if (!post_mac_mouse_event(button.down, point, button.button)) {
+            return fail("CGEventCreateMouseEvent mouse down failed");
+        }
+    }
+    if (click == "left" || click == "right" || click == "middle" || click.ends_with("-up")) {
+        if (!post_mac_mouse_event(button.up, point, button.button)) {
+            return fail("CGEventCreateMouseEvent mouse up failed");
+        }
+    }
+    return ok("mouse input sent through macOS CGEvent");
 #else
 #ifdef KISEKI_HAS_X11
     if (selected_backend == "driver") {
@@ -1059,6 +1383,9 @@ OperationResult background_type_text(const kiseki::platform::target::TargetQuery
         }
         return ok("background text input sent");
     });
+#elif defined(__APPLE__)
+    static_cast<void>(target);
+    return mac_background_input_unavailable();
 #else
 #ifdef KISEKI_HAS_X11
     return with_target_window(target, [&](Display* display, Window window) {
@@ -1097,6 +1424,9 @@ OperationResult background_tap_key(const kiseki::platform::target::TargetQuery& 
         }
         return ok("background key input sent");
     });
+#elif defined(__APPLE__)
+    static_cast<void>(target);
+    return mac_background_input_unavailable();
 #else
 #ifdef KISEKI_HAS_X11
     return with_target_window(target, [&](Display* display, Window window) {
@@ -1135,6 +1465,8 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
         }
         return post_mouse_button(receiver, WM_MBUTTONDOWN, WM_MBUTTONUP, MK_MBUTTON, point, click);
     });
+#elif defined(__APPLE__)
+    return mac_background_input_unavailable();
 #else
 #ifdef KISEKI_HAS_X11
     return with_target_window(options.target, [&](Display* display, Window window) {
@@ -1228,6 +1560,8 @@ OperationResult background_mouse_drag(const BackgroundDragOptions& options) {
         }
         return ok("background mouse drag sent");
     });
+#elif defined(__APPLE__)
+    return mac_background_input_unavailable();
 #else
 #ifdef KISEKI_HAS_X11
     return with_target_window(options.target, [&](Display* display, Window window) {

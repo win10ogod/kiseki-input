@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -14,8 +15,13 @@
 #include "platform/capture/bitmap_writer.hpp"
 
 #ifdef _WIN32
+#include "platform/capture/d3d11_capture.hpp"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__APPLE__)
+#include "platform/capture/mac_capture.hpp"
+
+#include <ApplicationServices/ApplicationServices.h>
 #else
 #ifdef KISEKI_HAS_X11
 #include <X11/Xlib.h>
@@ -129,6 +135,22 @@ CaptureResult capture_hwnd_bmp(HWND hwnd, const std::filesystem::path& output_pa
 }
 #endif
 
+#ifdef __APPLE__
+std::optional<CGWindowID> cg_window_id_from_string(const std::string& id) {
+    try {
+        std::size_t consumed = 0;
+        const auto value = std::stoull(id, &consumed, 0);
+        if (consumed != id.size() || value > static_cast<unsigned long long>(std::numeric_limits<std::uint32_t>::max())) {
+            return std::nullopt;
+        }
+        return static_cast<CGWindowID>(value);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+#endif
+
 #ifndef _WIN32
 #ifdef KISEKI_HAS_X11
 std::uint8_t component_from_mask(unsigned long pixel, unsigned long mask) {
@@ -171,7 +193,9 @@ bool x11_get_image_supported(Display* display, Window root) {
 
 bool desktop_capture_available() {
 #ifdef _WIN32
-    return true;
+    return d3d11_desktop_capture_available();
+#elif defined(__APPLE__)
+    return CGPreflightScreenCaptureAccess();
 #else
 #ifdef KISEKI_HAS_X11
     const char* display = std::getenv("DISPLAY");
@@ -195,6 +219,8 @@ bool desktop_capture_available() {
 bool window_capture_available() {
 #ifdef _WIN32
     return true;
+#elif defined(__APPLE__)
+    return CGPreflightScreenCaptureAccess() && kiseki::platform::target::target_window_available();
 #else
 #ifdef KISEKI_HAS_X11
     return kiseki::platform::target::target_window_available();
@@ -206,59 +232,12 @@ bool window_capture_available() {
 
 CaptureResult capture_desktop_bmp(const std::filesystem::path& output_path) {
 #ifdef _WIN32
-    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    if (width <= 0 || height <= 0) {
-        return fail_capture(output_path, "failed to read virtual screen dimensions");
+    return capture_desktop_bmp_d3d11(output_path);
+#elif defined(__APPLE__)
+    if (!CGPreflightScreenCaptureAccess() && !CGRequestScreenCaptureAccess()) {
+        return fail_capture(output_path, "macOS Screen Recording permission is required for desktop screenshots; approve the prompt in System Settings and rerun");
     }
-
-    HDC screen_dc = GetDC(nullptr);
-    if (screen_dc == nullptr) {
-        return fail_capture(output_path, "GetDC failed");
-    }
-
-    HDC memory_dc = CreateCompatibleDC(screen_dc);
-    if (memory_dc == nullptr) {
-        ReleaseDC(nullptr, screen_dc);
-        return fail_capture(output_path, "CreateCompatibleDC failed");
-    }
-
-    HBITMAP bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-    if (bitmap == nullptr) {
-        DeleteDC(memory_dc);
-        ReleaseDC(nullptr, screen_dc);
-        return fail_capture(output_path, "CreateCompatibleBitmap failed");
-    }
-
-    const HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
-    const BOOL copied = BitBlt(memory_dc, 0, 0, width, height, screen_dc, left, top, SRCCOPY | CAPTUREBLT);
-
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4U);
-    BITMAPINFO info{};
-    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    info.bmiHeader.biWidth = width;
-    info.bmiHeader.biHeight = -height;
-    info.bmiHeader.biPlanes = 1;
-    info.bmiHeader.biBitCount = 32;
-    info.bmiHeader.biCompression = BI_RGB;
-
-    const int lines = copied ? GetDIBits(memory_dc, bitmap, 0, static_cast<UINT>(height), pixels.data(), &info, DIB_RGB_COLORS) : 0;
-
-    SelectObject(memory_dc, old_bitmap);
-    DeleteObject(bitmap);
-    DeleteDC(memory_dc);
-    ReleaseDC(nullptr, screen_dc);
-
-    if (!copied) {
-        return fail_capture(output_path, "BitBlt failed");
-    }
-    if (lines != height) {
-        return fail_capture(output_path, "GetDIBits failed");
-    }
-
-    return write_bgra_bmp(output_path, width, height, pixels);
+    return capture_desktop_bmp_screencapturekit(output_path);
 #else
 #ifdef KISEKI_HAS_X11
     Display* display = XOpenDisplay(nullptr);
@@ -326,6 +305,17 @@ CaptureResult capture_window_bmp(const kiseki::platform::target::TargetQuery& ta
         return fail_capture(output_path, "resolved target window is no longer valid");
     }
     return capture_hwnd_bmp(*hwnd, output_path);
+#elif defined(__APPLE__)
+    if (!CGPreflightScreenCaptureAccess() && !CGRequestScreenCaptureAccess()) {
+        return fail_capture(output_path, "macOS Screen Recording permission is required for window screenshots; approve the prompt in System Settings and rerun");
+    }
+
+    const auto window_id = cg_window_id_from_string(resolved.window.id);
+    if (!window_id) {
+        return fail_capture(output_path, "resolved target window id is invalid");
+    }
+
+    return capture_window_bmp_screencapturekit(*window_id, output_path);
 #else
 #ifdef KISEKI_HAS_X11
     Display* display = XOpenDisplay(nullptr);
