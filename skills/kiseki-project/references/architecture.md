@@ -9,7 +9,7 @@
 - `src/platform/input/`: keyboard, text, mouse, and drag backends.
 - `src/platform/notification/`: heartbeat notification and daemon loop.
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.
-- `src/platform/session/`: Linux Xvfb background desktop lifecycle.
+- `src/platform/session/`: Linux Xvfb background desktop lifecycle and optional macOS CUA provider wrapper.
 - `src/platform/target/`: platform target-window listing and resolver for title, PID, and window id selectors.
 - `src/webui/`: embedded static assets, config-only API, HTTP server.
 - `test/`: Catch2 unit tests.
@@ -61,6 +61,13 @@ Linux:
 - For WSL, report unsupported compositor/session behavior clearly.
 - True Linux behavior needs a real graphical Linux test environment.
 - Linux background desktop support is Xvfb-based and should stay separate from the current physical `DISPLAY`. Use scoped environment changes when routing screenshot or input commands to an isolated `DISPLAY`.
+
+macOS:
+
+- Keep native ScreenCaptureKit/Quartz support separate from the optional CUA provider.
+- `src/platform/session/macos_cua.*` shells out to `cua-driver`; do not make CUA a hard build dependency.
+- `mac-background` commands are CLI-only and must not add WebUI operation routes.
+- Treat CUA support as live only after verifying `status`, launch/window listing, screenshot/state, and at least one action command on a real logged-in macOS GUI session with permissions granted.
 
 Windows selected-window:
 

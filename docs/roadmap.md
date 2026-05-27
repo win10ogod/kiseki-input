@@ -37,6 +37,8 @@ Windows keeps background work scoped to observation: `screenshot background-wind
 
 Linux first uses true background desktop operation: create an isolated X11 desktop with Xvfb, launch applications inside that `DISPLAY`, then use the normal Linux X11 screenshot and XTest input paths against that isolated desktop. This avoids taking over the user's physical Linux desktop session.
 
+macOS uses a separate optional provider line for true background app operation: Cua Driver. Kiseki keeps the native ScreenCaptureKit/Quartz paths for baseline platform support, and exposes CUA through `mac-background` for agent workflows that need background launch, per-window observation, and target-routed actions.
+
 ## macOS Line
 
 macOS support now has an initial native backend in the codebase, but it is not marked release-grade until it passes real macOS build, permission, and live desktop verification.
@@ -81,6 +83,13 @@ For agent workflows, structured automation and Accessibility-backed interaction 
 - Target-aware screenshots and burst capture.
 - Target-aware action routing through the best available backend.
 - Macro examples that demonstrate observation, action, verification, and fallback behavior.
+
+### macOS Phase 5: CUA Background Provider
+
+- Detect `cua-driver` from `PATH`, `KISEKI_CUA_DRIVER`, or `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`.
+- Expose CLI-only `mac-background` commands for CUA permission status, background app launch, window listing, window state, screenshot, click, text, key, hotkey, and drag.
+- Keep CUA as an optional provider, not a hard dependency, so the native macOS backend remains usable without it.
+- Validate on real macOS hardware with Accessibility and Screen Recording grants before marking the CUA line release-grade.
 
 ## Contribution Notes
 

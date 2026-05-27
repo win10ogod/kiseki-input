@@ -17,6 +17,7 @@ CapabilityMatrix foundation_capabilities() {
         },
         .session = SessionCapabilities{
             .background_desktop = false,
+            .macos_cua_background = false,
         },
         .limitations = {
             "foundation build exposes configuration and WebUI only",
@@ -41,6 +42,7 @@ nlohmann::json to_json(const CapabilityMatrix& capabilities) {
         }},
         {"session", {
             {"backgroundDesktop", capabilities.session.background_desktop},
+            {"macosCuaBackground", capabilities.session.macos_cua_background},
         }},
         {"limitations", capabilities.limitations},
     };

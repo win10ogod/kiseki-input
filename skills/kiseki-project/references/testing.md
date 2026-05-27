@@ -203,3 +203,22 @@ mkdir -p artifacts/live-test
 ```
 
 Expected result: the BMP shows the virtual X11 desktop and launched app. The physical desktop cursor and focus should not move during the sequence.
+
+## macOS CUA Background Recipe
+
+Run only on a logged-in macOS GUI session with Cua Driver installed.
+
+```bash
+cmake -S . -B build -DKISEKI_BUILD_TESTING=ON
+cmake --build build
+ctest --test-dir build --output-on-failure
+./build/kiseki mac-background status --prompt
+./build/kiseki mac-background launch --bundle-id com.apple.Safari --url about:blank
+./build/kiseki mac-background windows
+./build/kiseki mac-background state --pid <pid> --window-id <window_id> --output artifacts/live-test/mac-cua-state.jpg
+./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-window.png
+./build/kiseki mac-background click --pid <pid> --window-id <window_id> --x 100 --y 100
+./build/kiseki mac-background text --pid <pid> --text "kiseki mac cua"
+```
+
+Expected result: CUA reports granted Accessibility and Screen Recording permissions, captures the selected window, and routes at least one action to the target without taking over the user's cursor or foreground workflow. Do not claim live CUA support if the Mac cannot be reached or permissions are missing.

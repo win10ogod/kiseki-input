@@ -16,6 +16,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - On Windows, use the Windows executable for live UI verification from WSL; WSL is only the orchestration shell.
 - Do not claim Linux support from WSL-only results. Linux screenshot/input must be tested on a real Linux graphical session when the user asks for Linux proof.
 - Do not overclaim game background input. It depends on whether the target accepts system window messages or public automation events.
+- macOS true background app operation uses the optional Cua Driver provider through `kiseki mac-background ...`. Do not claim it is available unless `cua-driver` is installed and the Mac has Accessibility and Screen Recording permissions.
 
 ## Project Anchors
 
@@ -24,6 +25,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - Windows executable: `build/Debug/kiseki.exe`
 - Live-test artifacts: `artifacts/live-test/`
 - Windows IbInputSimulator source: `F:\輝色臻至\原始參考\IbInputSimulator`
+- macOS CUA binary lookup: `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, or `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`
 
 ## Quick Verification
 
@@ -33,6 +35,8 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 ```
 
 Before final claims, also run `git diff --check` after edits. For live Windows UI work, capture screenshots under `artifacts/live-test/` and report the paths.
+
+For macOS CUA work, verify `kiseki mac-background status`, `launch`, `windows`, `state`, `screenshot`, and at least one action command on a real logged-in macOS GUI session before claiming live support.
 
 ## References
 

@@ -22,6 +22,7 @@
 #include "platform/notification/notification.hpp"
 #include "platform/runtime_capabilities.hpp"
 #include "platform/session/background_desktop.hpp"
+#include "platform/session/macos_cua.hpp"
 #include "platform/target/target.hpp"
 #include "webui/web_server.hpp"
 
@@ -162,6 +163,25 @@ void add_target_options(CLI::App* command, TargetOptions& options) {
     command->add_option("--target-title", options.title, "Target window title substring");
     command->add_option("--target-pid", options.pid, "Target process id");
     command->add_option("--target-window-id", options.window_id, "Target platform window id");
+}
+
+std::vector<std::string> split_delimited_values(const std::string& value) {
+    std::vector<std::string> parts;
+    std::string current;
+    for (const char c : value) {
+        if (c == ',' || c == '+') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+        } else if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+            current.push_back(c);
+        }
+    }
+    if (!current.empty()) {
+        parts.push_back(current);
+    }
+    return parts;
 }
 
 std::vector<kiseki::platform::input::MousePoint> read_mouse_points_file(const std::filesystem::path& path) {
@@ -633,6 +653,118 @@ Dependencies default_dependencies() {
                 }),
                 io);
         },
+        .mac_background_status = [](const MacBackgroundStatusOptions& options, Io io) {
+            return print_operation_result(kiseki::platform::session::macos_cua_status(options.prompt), io);
+        },
+        .mac_background_launch = [](const MacBackgroundLaunchOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_launch(kiseki::platform::session::MacCuaLaunchOptions{
+                    .bundle_id = options.bundle_id,
+                    .name = options.name,
+                    .urls = options.urls,
+                    .creates_new_instance = options.new_instance,
+                    .additional_arguments = options.arguments,
+                }),
+                io);
+        },
+        .mac_background_windows = [](const MacBackgroundWindowsOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_list_windows(kiseki::platform::session::MacCuaWindowListOptions{
+                    .pid = options.pid,
+                    .has_pid = options.has_pid,
+                    .on_screen_only = options.on_screen_only,
+                }),
+                io);
+        },
+        .mac_background_state = [](const MacBackgroundStateOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_window_state(kiseki::platform::session::MacCuaWindowStateOptions{
+                    .pid = options.pid,
+                    .window_id = options.window_id,
+                    .output_path = options.output_path,
+                    .query = options.query,
+                }),
+                io);
+        },
+        .mac_background_screenshot = [](const MacBackgroundScreenshotOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_screenshot(kiseki::platform::session::MacCuaScreenshotOptions{
+                    .window_id = options.window_id,
+                    .output_path = options.output_path,
+                    .format = options.format,
+                    .quality = options.quality,
+                }),
+                io);
+        },
+        .mac_background_click = [](const MacBackgroundClickOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_click(kiseki::platform::session::MacCuaClickOptions{
+                    .pid = options.pid,
+                    .window_id = options.window_id,
+                    .has_window_id = options.has_window_id,
+                    .element_index = options.element_index,
+                    .has_element_index = options.has_element_index,
+                    .x = options.x,
+                    .y = options.y,
+                    .has_xy = options.has_xy,
+                    .button = options.button,
+                    .modifiers = options.modifiers,
+                }),
+                io);
+        },
+        .mac_background_text = [](const MacBackgroundTextOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_type_text(kiseki::platform::session::MacCuaTextOptions{
+                    .pid = options.pid,
+                    .text = options.text,
+                    .window_id = options.window_id,
+                    .has_window_id = options.has_window_id,
+                    .element_index = options.element_index,
+                    .has_element_index = options.has_element_index,
+                    .delay_ms = options.delay_ms,
+                }),
+                io);
+        },
+        .mac_background_key = [](const MacBackgroundKeyOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_press_key(kiseki::platform::session::MacCuaKeyOptions{
+                    .pid = options.pid,
+                    .key = options.key,
+                    .window_id = options.window_id,
+                    .has_window_id = options.has_window_id,
+                    .element_index = options.element_index,
+                    .has_element_index = options.has_element_index,
+                    .modifiers = options.modifiers,
+                }),
+                io);
+        },
+        .mac_background_hotkey = [](const MacBackgroundHotkeyOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_hotkey(kiseki::platform::session::MacCuaHotkeyOptions{
+                    .pid = options.pid,
+                    .keys = options.keys,
+                    .window_id = options.window_id,
+                    .has_window_id = options.has_window_id,
+                }),
+                io);
+        },
+        .mac_background_drag = [](const MacBackgroundDragOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_drag(kiseki::platform::session::MacCuaDragOptions{
+                    .pid = options.pid,
+                    .window_id = options.window_id,
+                    .has_window_id = options.has_window_id,
+                    .from_x = options.from_x,
+                    .from_y = options.from_y,
+                    .to_x = options.to_x,
+                    .to_y = options.to_y,
+                    .duration_ms = options.duration_ms,
+                    .steps = options.steps,
+                    .button = options.button,
+                    .modifiers = options.modifiers,
+                }),
+                io);
+        },
         .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
             return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
         },
@@ -772,6 +904,87 @@ int run(
         .y = 0,
         .click = "none",
     };
+    MacBackgroundStatusOptions mac_background_status_options{
+        .prompt = false,
+    };
+    MacBackgroundLaunchOptions mac_background_launch_options{
+        .bundle_id = "",
+        .name = "",
+        .urls = {},
+        .new_instance = false,
+        .arguments = {},
+    };
+    MacBackgroundWindowsOptions mac_background_windows_options{
+        .pid = 0,
+        .has_pid = false,
+        .on_screen_only = false,
+    };
+    MacBackgroundStateOptions mac_background_state_options{
+        .pid = 0,
+        .window_id = 0,
+        .output_path = {},
+        .query = "",
+    };
+    MacBackgroundScreenshotOptions mac_background_screenshot_options{
+        .window_id = 0,
+        .output_path = {},
+        .format = "png",
+        .quality = 95,
+    };
+    MacBackgroundClickOptions mac_background_click_options{
+        .pid = 0,
+        .window_id = 0,
+        .has_window_id = false,
+        .element_index = 0,
+        .has_element_index = false,
+        .x = 0.0,
+        .y = 0.0,
+        .has_xy = false,
+        .button = "left",
+        .modifiers = {},
+    };
+    MacBackgroundTextOptions mac_background_text_options{
+        .pid = 0,
+        .text = "",
+        .text_file = {},
+        .window_id = 0,
+        .has_window_id = false,
+        .element_index = 0,
+        .has_element_index = false,
+        .delay_ms = 30,
+    };
+    MacBackgroundKeyOptions mac_background_key_options{
+        .pid = 0,
+        .key = "",
+        .window_id = 0,
+        .has_window_id = false,
+        .element_index = 0,
+        .has_element_index = false,
+        .modifiers = {},
+    };
+    MacBackgroundHotkeyOptions mac_background_hotkey_options{
+        .pid = 0,
+        .keys = {},
+        .window_id = 0,
+        .has_window_id = false,
+    };
+    MacBackgroundDragOptions mac_background_drag_options{
+        .pid = 0,
+        .window_id = 0,
+        .has_window_id = false,
+        .from_x = 0.0,
+        .from_y = 0.0,
+        .to_x = 0.0,
+        .to_y = 0.0,
+        .duration_ms = 500,
+        .steps = 20,
+        .button = "left",
+        .modifiers = {},
+    };
+    std::string mac_background_click_modifiers;
+    std::string mac_background_key_modifiers;
+    std::string mac_background_hotkey_keys;
+    std::string mac_background_drag_modifiers;
     DaemonOptions daemon_options{
         .once = false,
     };
@@ -1214,6 +1427,221 @@ int run(
         exit_code = dependencies.background_desktop_mouse(background_desktop_mouse_options, io);
     });
 
+    auto* mac_background = app.add_subcommand("mac-background", "Operate macOS background apps through optional Cua Driver");
+    mac_background->require_subcommand(1);
+
+    auto* mac_background_status = mac_background->add_subcommand("status", "Check Cua Driver permissions and availability");
+    mac_background_status->add_flag("--prompt", mac_background_status_options.prompt, "Request missing Accessibility and Screen Recording permissions");
+    mac_background_status->callback([&]() {
+        if (!dependencies.mac_background_status) {
+            io.err << "mac-background status backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_status(mac_background_status_options, io);
+    });
+
+    auto* mac_background_launch = mac_background->add_subcommand("launch", "Launch a macOS app without stealing focus through Cua Driver");
+    mac_background_launch->add_option("--bundle-id", mac_background_launch_options.bundle_id, "macOS bundle id, such as com.apple.Safari");
+    mac_background_launch->add_option("--name", mac_background_launch_options.name, "Application display name when bundle id is unknown");
+    mac_background_launch->add_option("--url", mac_background_launch_options.urls, "URL or file path to hand to the app; repeat for multiple values");
+    mac_background_launch->add_flag("--new-instance", mac_background_launch_options.new_instance, "Ask Cua Driver to create a new app instance when supported");
+    mac_background_launch->add_option("--arg", mac_background_launch_options.arguments, "Additional argv entry for the launched process; repeat for multiple values");
+    mac_background_launch->callback([&]() {
+        if (!dependencies.mac_background_launch) {
+            io.err << "mac-background launch backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        if (mac_background_launch_options.bundle_id.empty() && mac_background_launch_options.name.empty()) {
+            io.err << "mac-background launch requires --bundle-id or --name\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_launch(mac_background_launch_options, io);
+    });
+
+    auto* mac_background_windows = mac_background->add_subcommand("windows", "List Cua Driver target windows");
+    auto* mac_background_windows_pid = mac_background_windows->add_option("--pid", mac_background_windows_options.pid, "Restrict windows to a process id");
+    mac_background_windows->add_flag("--on-screen-only", mac_background_windows_options.on_screen_only, "Drop off-screen, minimized, or off-Space windows");
+    mac_background_windows->callback([&]() {
+        if (!dependencies.mac_background_windows) {
+            io.err << "mac-background windows backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_windows_options.has_pid = mac_background_windows_pid->count() > 0;
+        exit_code = dependencies.mac_background_windows(mac_background_windows_options, io);
+    });
+
+    auto* mac_background_state = mac_background->add_subcommand("state", "Read a Cua Driver AX/window snapshot and optionally write a screenshot");
+    mac_background_state->add_option("--pid", mac_background_state_options.pid, "Target process id")->required();
+    mac_background_state->add_option("--window-id", mac_background_state_options.window_id, "Target CGWindowID")->required();
+    mac_background_state->add_option("-o,--output", mac_background_state_options.output_path, "Optional screenshot output path");
+    mac_background_state->add_option("--query", mac_background_state_options.query, "Optional case-insensitive AX tree filter");
+    mac_background_state->callback([&]() {
+        if (!dependencies.mac_background_state) {
+            io.err << "mac-background state backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_state(mac_background_state_options, io);
+    });
+
+    auto* mac_background_screenshot = mac_background->add_subcommand("screenshot", "Capture a Cua Driver target window to an image file");
+    mac_background_screenshot->add_option("--window-id", mac_background_screenshot_options.window_id, "Target CGWindowID")->required();
+    mac_background_screenshot->add_option("-o,--output", mac_background_screenshot_options.output_path, "Output image path")->required();
+    mac_background_screenshot->add_option("--format", mac_background_screenshot_options.format, "png or jpeg");
+    mac_background_screenshot->add_option("--quality", mac_background_screenshot_options.quality, "JPEG quality 1-95");
+    mac_background_screenshot->callback([&]() {
+        if (!dependencies.mac_background_screenshot) {
+            io.err << "mac-background screenshot backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_screenshot(mac_background_screenshot_options, io);
+    });
+
+    auto* mac_background_click = mac_background->add_subcommand("click", "Click a macOS target pid by element index or window-local pixels");
+    mac_background_click->add_option("--pid", mac_background_click_options.pid, "Target process id")->required();
+    auto* mac_background_click_window_id = mac_background_click->add_option("--window-id", mac_background_click_options.window_id, "Target CGWindowID");
+    auto* mac_background_click_element = mac_background_click->add_option("--element-index", mac_background_click_options.element_index, "Element index from the last state call");
+    auto* mac_background_click_x = mac_background_click->add_option("--x", mac_background_click_options.x, "Window-local screenshot pixel X");
+    auto* mac_background_click_y = mac_background_click->add_option("--y", mac_background_click_options.y, "Window-local screenshot pixel Y");
+    mac_background_click->add_option("--button", mac_background_click_options.button, "left, right, or double");
+    mac_background_click->add_option("--modifiers", mac_background_click_modifiers, "Comma or plus separated modifier keys");
+    mac_background_click->callback([&]() {
+        if (!dependencies.mac_background_click) {
+            io.err << "mac-background click backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        const bool has_x = mac_background_click_x->count() > 0;
+        const bool has_y = mac_background_click_y->count() > 0;
+        mac_background_click_options.has_window_id = mac_background_click_window_id->count() > 0;
+        mac_background_click_options.has_element_index = mac_background_click_element->count() > 0;
+        mac_background_click_options.has_xy = has_x && has_y;
+        mac_background_click_options.modifiers = split_delimited_values(mac_background_click_modifiers);
+        if (has_x != has_y) {
+            io.err << "mac-background click requires both --x and --y\n";
+            exit_code = 2;
+            return;
+        }
+        if (mac_background_click_options.has_element_index == mac_background_click_options.has_xy) {
+            io.err << "mac-background click requires either --element-index or both --x and --y\n";
+            exit_code = 2;
+            return;
+        }
+        if (mac_background_click_options.has_element_index && !mac_background_click_options.has_window_id) {
+            io.err << "mac-background click with --element-index requires --window-id\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_click(mac_background_click_options, io);
+    });
+
+    auto* mac_background_text = mac_background->add_subcommand("text", "Type text into a macOS target pid through Cua Driver");
+    mac_background_text->add_option("--pid", mac_background_text_options.pid, "Target process id")->required();
+    mac_background_text->add_option("--text", mac_background_text_options.text, "Text to type");
+    mac_background_text->add_option("--file", mac_background_text_options.text_file, "UTF-8 text file to type");
+    auto* mac_background_text_window_id = mac_background_text->add_option("--window-id", mac_background_text_options.window_id, "Target CGWindowID");
+    auto* mac_background_text_element = mac_background_text->add_option("--element-index", mac_background_text_options.element_index, "Element index from the last state call");
+    mac_background_text->add_option("--delay-ms", mac_background_text_options.delay_ms, "Character delay for CGEvent fallback");
+    mac_background_text->callback([&]() {
+        if (!dependencies.mac_background_text) {
+            io.err << "mac-background text backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        if (!mac_background_text_options.text_file.empty()) {
+            try {
+                mac_background_text_options.text = read_text_file(mac_background_text_options.text_file);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                exit_code = 2;
+                return;
+            }
+        }
+        if (mac_background_text_options.text.empty()) {
+            io.err << "mac-background text requires --text or --file\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_text_options.has_window_id = mac_background_text_window_id->count() > 0;
+        mac_background_text_options.has_element_index = mac_background_text_element->count() > 0;
+        if (mac_background_text_options.has_element_index && !mac_background_text_options.has_window_id) {
+            io.err << "mac-background text with --element-index requires --window-id\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_text(mac_background_text_options, io);
+    });
+
+    auto* mac_background_key = mac_background->add_subcommand("key", "Press a key in a macOS target pid through Cua Driver");
+    mac_background_key->add_option("--pid", mac_background_key_options.pid, "Target process id")->required();
+    mac_background_key->add_option("--key", mac_background_key_options.key, "Key name")->required();
+    auto* mac_background_key_window_id = mac_background_key->add_option("--window-id", mac_background_key_options.window_id, "Target CGWindowID");
+    auto* mac_background_key_element = mac_background_key->add_option("--element-index", mac_background_key_options.element_index, "Element index from the last state call");
+    mac_background_key->add_option("--modifiers", mac_background_key_modifiers, "Comma or plus separated modifier keys");
+    mac_background_key->callback([&]() {
+        if (!dependencies.mac_background_key) {
+            io.err << "mac-background key backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_key_options.has_window_id = mac_background_key_window_id->count() > 0;
+        mac_background_key_options.has_element_index = mac_background_key_element->count() > 0;
+        mac_background_key_options.modifiers = split_delimited_values(mac_background_key_modifiers);
+        if (mac_background_key_options.has_element_index && !mac_background_key_options.has_window_id) {
+            io.err << "mac-background key with --element-index requires --window-id\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_key(mac_background_key_options, io);
+    });
+
+    auto* mac_background_hotkey = mac_background->add_subcommand("hotkey", "Press a key combination in a macOS target pid through Cua Driver");
+    mac_background_hotkey->add_option("--pid", mac_background_hotkey_options.pid, "Target process id")->required();
+    mac_background_hotkey->add_option("--keys", mac_background_hotkey_keys, "Comma or plus separated key combo, such as cmd+c")->required();
+    auto* mac_background_hotkey_window_id = mac_background_hotkey->add_option("--window-id", mac_background_hotkey_options.window_id, "Target CGWindowID");
+    mac_background_hotkey->callback([&]() {
+        if (!dependencies.mac_background_hotkey) {
+            io.err << "mac-background hotkey backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_hotkey_options.keys = split_delimited_values(mac_background_hotkey_keys);
+        mac_background_hotkey_options.has_window_id = mac_background_hotkey_window_id->count() > 0;
+        if (mac_background_hotkey_options.keys.size() < 2) {
+            io.err << "mac-background hotkey requires at least two keys in --keys\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_hotkey(mac_background_hotkey_options, io);
+    });
+
+    auto* mac_background_drag = mac_background->add_subcommand("drag", "Drag inside a macOS target window through Cua Driver");
+    mac_background_drag->add_option("--pid", mac_background_drag_options.pid, "Target process id")->required();
+    auto* mac_background_drag_window_id = mac_background_drag->add_option("--window-id", mac_background_drag_options.window_id, "Target CGWindowID");
+    mac_background_drag->add_option("--from-x", mac_background_drag_options.from_x, "Drag start X")->required();
+    mac_background_drag->add_option("--from-y", mac_background_drag_options.from_y, "Drag start Y")->required();
+    mac_background_drag->add_option("--to-x", mac_background_drag_options.to_x, "Drag end X")->required();
+    mac_background_drag->add_option("--to-y", mac_background_drag_options.to_y, "Drag end Y")->required();
+    mac_background_drag->add_option("--duration-ms", mac_background_drag_options.duration_ms, "Drag duration in milliseconds");
+    mac_background_drag->add_option("--steps", mac_background_drag_options.steps, "Number of drag interpolation steps");
+    mac_background_drag->add_option("--button", mac_background_drag_options.button, "left, right, or middle");
+    mac_background_drag->add_option("--modifiers", mac_background_drag_modifiers, "Comma or plus separated modifier keys");
+    mac_background_drag->callback([&]() {
+        if (!dependencies.mac_background_drag) {
+            io.err << "mac-background drag backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_drag_options.has_window_id = mac_background_drag_window_id->count() > 0;
+        mac_background_drag_options.modifiers = split_delimited_values(mac_background_drag_modifiers);
+        exit_code = dependencies.mac_background_drag(mac_background_drag_options, io);
+    });
+
     auto* daemon = app.add_subcommand("daemon", "Background daemon commands");
     daemon->require_subcommand(1);
     auto* daemon_run = daemon->add_subcommand("run", "Run heartbeat notification daemon");
@@ -1267,6 +1695,7 @@ int run(
         io.out << "  Window screenshot: " << availability(capabilities.capture.window) << '\n';
         io.out << "  Screenshot burst: " << availability(capabilities.capture.burst) << '\n';
         io.out << "  Background desktop session: " << availability(capabilities.session.background_desktop) << '\n';
+        io.out << "  macOS CUA background operation: " << availability(capabilities.session.macos_cua_background) << '\n';
 
         io.out << "Limitations:\n";
         for (const auto& limitation : capabilities.limitations) {

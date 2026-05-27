@@ -65,6 +65,20 @@ Linux background desktop:
 - `kiseki background-desktop key --display :99 --key <name>`
 - `kiseki background-desktop mouse --display :99 --x <n> --y <n> [--click ...]`
 
+macOS CUA background provider:
+
+- `kiseki mac-background status [--prompt]`
+- `kiseki mac-background launch --bundle-id <id> [--url <url>] [--new-instance]`
+- `kiseki mac-background windows [--pid <pid>] [--on-screen-only]`
+- `kiseki mac-background state --pid <pid> --window-id <id> [--output <image>] [--query <text>]`
+- `kiseki mac-background screenshot --window-id <id> --output <image> [--format png|jpeg]`
+- `kiseki mac-background click --pid <pid> --window-id <id> --x <n> --y <n> [--button left|right|double]`
+- `kiseki mac-background click --pid <pid> --window-id <id> --element-index <n>`
+- `kiseki mac-background text --pid <pid> --text <text>`
+- `kiseki mac-background key --pid <pid> --key <name>`
+- `kiseki mac-background hotkey --pid <pid> --keys <cmd+c>`
+- `kiseki mac-background drag --pid <pid> --window-id <id> --from-x <n> --from-y <n> --to-x <n> --to-y <n>`
+
 Macros:
 
 - `kiseki macro validate --file <macro.json>` validates JSON macro structure.
@@ -166,6 +180,8 @@ macOS:
 - Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission.
 - Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission.
 - Target-window background input is not reported available until a target-specific automation backend exists.
+- Optional CUA background operation uses `cua-driver` when installed and authorized.
+- CUA binary lookup checks `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, then `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`.
 - Release-grade support still requires real macOS build, permission, and live desktop validation.
 - Roadmap details live in `docs/roadmap.md`.
 
@@ -173,6 +189,7 @@ macOS:
 
 - `backgroundWindow` is reported available when the platform/session supports target-window operations.
 - `session.backgroundDesktop` is reported available when `Xvfb` is available on a Linux X11 build.
+- `session.macosCuaBackground` is reported available when a Cua Driver binary is found on macOS.
 - Capture `window` is implemented. Capture `region` is not implemented.
 - Game background input is only expected for targets that accept normal system window messages or public automation interfaces.
 - No guarantee is made for targets that ignore system window messages or public automation events.

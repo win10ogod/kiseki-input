@@ -151,6 +151,7 @@ TEST_CASE("capabilities prints foundation capability json") {
     REQUIRE(json.at("input").at("backgroundWindow").is_boolean());
     REQUIRE(json.at("capture").at("window").is_boolean());
     REQUIRE(json.at("session").at("backgroundDesktop").is_boolean());
+    REQUIRE(json.at("session").at("macosCuaBackground").is_boolean());
     REQUIRE(json.at("limitations").is_array());
     REQUIRE_FALSE(json.at("limitations").empty());
     REQUIRE(result.err.empty());
@@ -172,6 +173,7 @@ TEST_CASE("doctor prints diagnostic text with foundation limitations") {
     REQUIRE(result.out.find("Window screenshot:") != std::string::npos);
     REQUIRE(result.out.find("Screenshot burst:") != std::string::npos);
     REQUIRE(result.out.find("Background desktop session:") != std::string::npos);
+    REQUIRE(result.out.find("macOS CUA background operation:") != std::string::npos);
     REQUIRE(result.out.find("Limitations:") != std::string::npos);
     REQUIRE(result.out.find("WebUI is configuration-only") != std::string::npos);
     REQUIRE(result.err.empty());
@@ -798,6 +800,126 @@ TEST_CASE("background desktop commands call injected backend") {
                 dependencies) == 0);
 
     REQUIRE(calls == std::vector<std::string>{"start", "launch", "screenshot", "text", "key", "mouse", "stop"});
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("mac background commands call injected CUA backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto screenshot_path = temp.file("safari.png");
+    const auto text_path = temp.file("input.txt");
+    write_text(text_path, "hello");
+    std::vector<std::string> calls;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.mac_background_status = [&](const kiseki::cli::MacBackgroundStatusOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.prompt);
+        calls.push_back("status");
+        return 0;
+    };
+    dependencies.mac_background_launch = [&](const kiseki::cli::MacBackgroundLaunchOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.bundle_id == "com.apple.Safari");
+        REQUIRE(options.urls == std::vector<std::string>{"about:blank"});
+        REQUIRE(options.new_instance);
+        REQUIRE(options.arguments == std::vector<std::string>{"--test"});
+        calls.push_back("launch");
+        return 0;
+    };
+    dependencies.mac_background_windows = [&](const kiseki::cli::MacBackgroundWindowsOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.has_pid);
+        REQUIRE(options.on_screen_only);
+        calls.push_back("windows");
+        return 0;
+    };
+    dependencies.mac_background_state = [&](const kiseki::cli::MacBackgroundStateOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.output_path == screenshot_path);
+        REQUIRE(options.query == "button");
+        calls.push_back("state");
+        return 0;
+    };
+    dependencies.mac_background_screenshot = [&](const kiseki::cli::MacBackgroundScreenshotOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.output_path == screenshot_path);
+        REQUIRE(options.format == "jpeg");
+        REQUIRE(options.quality == 80);
+        calls.push_back("screenshot");
+        return 0;
+    };
+    dependencies.mac_background_click = [&](const kiseki::cli::MacBackgroundClickOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.has_window_id);
+        REQUIRE(options.x == 10.0);
+        REQUIRE(options.y == 20.0);
+        REQUIRE(options.has_xy);
+        REQUIRE_FALSE(options.has_element_index);
+        REQUIRE(options.button == "double");
+        REQUIRE(options.modifiers == std::vector<std::string>{"cmd", "shift"});
+        calls.push_back("click");
+        return 0;
+    };
+    dependencies.mac_background_text = [&](const kiseki::cli::MacBackgroundTextOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.text == "hello");
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.has_window_id);
+        REQUIRE(options.element_index == 7);
+        REQUIRE(options.has_element_index);
+        REQUIRE(options.delay_ms == 15);
+        calls.push_back("text");
+        return 0;
+    };
+    dependencies.mac_background_key = [&](const kiseki::cli::MacBackgroundKeyOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.key == "return");
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.has_window_id);
+        REQUIRE(options.modifiers == std::vector<std::string>{"cmd"});
+        calls.push_back("key");
+        return 0;
+    };
+    dependencies.mac_background_hotkey = [&](const kiseki::cli::MacBackgroundHotkeyOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.has_window_id);
+        REQUIRE(options.keys == std::vector<std::string>{"cmd", "c"});
+        calls.push_back("hotkey");
+        return 0;
+    };
+    dependencies.mac_background_drag = [&](const kiseki::cli::MacBackgroundDragOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.has_window_id);
+        REQUIRE(options.from_x == 1.0);
+        REQUIRE(options.from_y == 2.0);
+        REQUIRE(options.to_x == 3.0);
+        REQUIRE(options.to_y == 4.0);
+        REQUIRE(options.duration_ms == 250);
+        REQUIRE(options.steps == 12);
+        REQUIRE(options.button == "left");
+        REQUIRE(options.modifiers == std::vector<std::string>{"option"});
+        calls.push_back("drag");
+        return 0;
+    };
+
+    REQUIRE(kiseki::cli::run({"mac-background", "status", "--prompt"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "launch", "--bundle-id", "com.apple.Safari", "--url", "about:blank", "--new-instance", "--arg=--test"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "windows", "--pid", "123", "--on-screen-only"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "state", "--pid", "123", "--window-id", "456", "--output", screenshot_path.string(), "--query", "button"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "screenshot", "--window-id", "456", "--output", screenshot_path.string(), "--format", "jpeg", "--quality", "80"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "click", "--pid", "123", "--window-id", "456", "--x", "10", "--y", "20", "--button", "double", "--modifiers", "cmd+shift"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "text", "--pid", "123", "--window-id", "456", "--element-index", "7", "--file", text_path.string(), "--delay-ms", "15"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "key", "--pid", "123", "--window-id", "456", "--key", "return", "--modifiers", "cmd"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "hotkey", "--pid", "123", "--window-id", "456", "--keys", "cmd+c"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "drag", "--pid", "123", "--window-id", "456", "--from-x", "1", "--from-y", "2", "--to-x", "3", "--to-y", "4", "--duration-ms", "250", "--steps", "12", "--button", "left", "--modifiers", "option"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+
+    REQUIRE(calls == std::vector<std::string>{"status", "launch", "windows", "state", "screenshot", "click", "text", "key", "hotkey", "drag"});
     REQUIRE(out.str().empty());
     REQUIRE(err.str().empty());
 }

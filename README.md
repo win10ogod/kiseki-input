@@ -11,6 +11,7 @@ It is built for developers who want a practical automation lab instead of a pile
 - Burst screenshots can grab short frame sequences such as 8 frames at 60 FPS.
 - Target-window and explicit background-window screenshots are available for windows that accept the platform APIs.
 - Linux can run an isolated Xvfb background desktop so GUI apps execute on a separate DISPLAY instead of the user's current desktop.
+- macOS can use the optional Cua Driver backend for background app launch, per-window screenshots, AX/window state, targeted clicks, text, keys, hotkeys, and drags when `cua-driver` is installed and authorized.
 - WebUI is intentionally configuration-only, so opening it does not create a remote control surface.
 - Windows can use `IbInputSimulator.dll` when available and falls back to system input when it is not.
 - Linux support uses native X11/XTest paths where the session permits it.
@@ -61,6 +62,7 @@ This build includes:
 - CLI message-based background keyboard/mouse input for target windows that accept it
 - CLI Linux background desktop lifecycle and input/screenshot commands when built with X11 and `Xvfb` is installed
 - Initial macOS native backend for config path, target listing, desktop/window screenshots, burst screenshots, and global keyboard/mouse input
+- Optional macOS CUA background operation commands through `kiseki mac-background ...`
 - CLI JSON macros for sequencing input, screenshots, and waits
 - Configurable heartbeat daemon with dismissible notifications
 - Machine-readable capabilities: `kiseki capabilities`
@@ -104,6 +106,15 @@ kiseki background-desktop mouse --display :99 --x 20 --y 20 --click left
 kiseki background-desktop text --display :99 --text "hello"
 kiseki background-desktop screenshot --display :99 --output background.bmp
 kiseki background-desktop stop --display :99
+kiseki mac-background status --prompt
+kiseki mac-background launch --bundle-id com.apple.Safari --url about:blank
+kiseki mac-background windows --pid 1234
+kiseki mac-background state --pid 1234 --window-id 5678 --output safari.jpg
+kiseki mac-background screenshot --window-id 5678 --output safari.png
+kiseki mac-background click --pid 1234 --window-id 5678 --x 100 --y 200
+kiseki mac-background text --pid 1234 --text "hello"
+kiseki mac-background hotkey --pid 1234 --window-id 5678 --keys cmd+c
+kiseki mac-background drag --pid 1234 --window-id 5678 --from-x 10 --from-y 20 --to-x 180 --to-y 120
 kiseki macro validate --file macro.json
 kiseki macro run --file macro.json
 kiseki daemon run
@@ -155,7 +166,7 @@ Linux support is implemented through X11/XTest and X11 window APIs. `kiseki targ
 
 Windows background screenshot uses selected-window capture through `screenshot background-window`. It is the Windows background observation path for this project; it does not require a VM, Docker, or separate session backend. Windows selected-window input remains a compatibility helper for ordinary Win32 controls and apps that accept public window messages.
 
-macOS has an initial native backend using Apple desktop APIs. Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission in the active GUI session. Target listing uses Window Services. Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission. Target-window background input is not reported as available on macOS until a target-specific automation backend exists. See [docs/roadmap.md](docs/roadmap.md).
+macOS has a native backend using Apple desktop APIs. Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission in the active GUI session. Target listing uses Window Services. Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission. For true macOS background app operation, Kiseki exposes an optional Cua Driver provider through `mac-background`; it requires `cua-driver`, Accessibility permission, and Screen Recording permission. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Roadmap
 
@@ -174,5 +185,7 @@ When building with a multi-config generator, the executable is usually under `bu
 ## Credits
 
 Special thanks to [Chaoses-Ib/IbInputSimulator](https://github.com/Chaoses-Ib/IbInputSimulator). Kiseki Input's Windows driver backend is designed around `IbInputSimulator.dll` from that project.
+
+Thank you to [trycua/cua](https://github.com/trycua/cua) for Cua Driver, which provides the macOS background computer-use backend that Kiseki can call when installed.
 
 Thanks to Codex and GPT-5.5 for implementation assistance, live Windows testing, macro verification, and demo production.

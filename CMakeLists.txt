@@ -56,6 +56,7 @@ add_library(kiseki_platform STATIC
     src/platform/notification/notification.cpp
     src/platform/runtime_capabilities.cpp
     src/platform/session/background_desktop.cpp
+    src/platform/session/macos_cua.cpp
     src/platform/target/target.cpp
 )
 target_compile_features(kiseki_platform PUBLIC cxx_std_20)

@@ -3,6 +3,7 @@
 #include "platform/capture/screenshot.hpp"
 #include "platform/input/input.hpp"
 #include "platform/session/background_desktop.hpp"
+#include "platform/session/macos_cua.hpp"
 
 namespace kiseki::platform {
 
@@ -15,12 +16,13 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
     capabilities.capture.window = capture::window_capture_available();
     capabilities.capture.burst = capabilities.capture.desktop || capabilities.capture.window;
     capabilities.session.background_desktop = session::background_desktop_available();
+    capabilities.session.macos_cua_background = session::macos_cua_background_available();
     capabilities.limitations = {
         "WebUI is configuration-only; operational input, screenshot, notification, and daemon actions are CLI-only",
 #if defined(__APPLE__)
         "macOS desktop and selected-window screenshots require Screen Recording permission in the active GUI session",
         "macOS global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission",
-        "macOS selected-window background input is not implemented; use global input or a target-specific automation backend",
+        "macOS CUA background operation is available only when cua-driver is installed and authorized",
         "macOS screenshots use ScreenCaptureKit in the current user GUI session; target listing uses Window Services",
 #else
         "background-window input depends on whether the target accepts system window messages or public automation events",

@@ -156,6 +156,93 @@ struct BackgroundDesktopMouseOptions {
     std::string click;
 };
 
+struct MacBackgroundStatusOptions {
+    bool prompt;
+};
+
+struct MacBackgroundLaunchOptions {
+    std::string bundle_id;
+    std::string name;
+    std::vector<std::string> urls;
+    bool new_instance;
+    std::vector<std::string> arguments;
+};
+
+struct MacBackgroundWindowsOptions {
+    int pid;
+    bool has_pid;
+    bool on_screen_only;
+};
+
+struct MacBackgroundStateOptions {
+    int pid;
+    unsigned int window_id;
+    std::filesystem::path output_path;
+    std::string query;
+};
+
+struct MacBackgroundScreenshotOptions {
+    unsigned int window_id;
+    std::filesystem::path output_path;
+    std::string format;
+    int quality;
+};
+
+struct MacBackgroundClickOptions {
+    int pid;
+    unsigned int window_id;
+    bool has_window_id;
+    int element_index;
+    bool has_element_index;
+    double x;
+    double y;
+    bool has_xy;
+    std::string button;
+    std::vector<std::string> modifiers;
+};
+
+struct MacBackgroundTextOptions {
+    int pid;
+    std::string text;
+    std::filesystem::path text_file;
+    unsigned int window_id;
+    bool has_window_id;
+    int element_index;
+    bool has_element_index;
+    int delay_ms;
+};
+
+struct MacBackgroundKeyOptions {
+    int pid;
+    std::string key;
+    unsigned int window_id;
+    bool has_window_id;
+    int element_index;
+    bool has_element_index;
+    std::vector<std::string> modifiers;
+};
+
+struct MacBackgroundHotkeyOptions {
+    int pid;
+    std::vector<std::string> keys;
+    unsigned int window_id;
+    bool has_window_id;
+};
+
+struct MacBackgroundDragOptions {
+    int pid;
+    unsigned int window_id;
+    bool has_window_id;
+    double from_x;
+    double from_y;
+    double to_x;
+    double to_y;
+    int duration_ms;
+    int steps;
+    std::string button;
+    std::vector<std::string> modifiers;
+};
+
 struct DaemonOptions {
     bool once;
 };
@@ -189,6 +276,16 @@ struct Dependencies {
     std::function<int(const BackgroundDesktopTextOptions&, Io)> background_desktop_text;
     std::function<int(const BackgroundDesktopKeyOptions&, Io)> background_desktop_key;
     std::function<int(const BackgroundDesktopMouseOptions&, Io)> background_desktop_mouse;
+    std::function<int(const MacBackgroundStatusOptions&, Io)> mac_background_status;
+    std::function<int(const MacBackgroundLaunchOptions&, Io)> mac_background_launch;
+    std::function<int(const MacBackgroundWindowsOptions&, Io)> mac_background_windows;
+    std::function<int(const MacBackgroundStateOptions&, Io)> mac_background_state;
+    std::function<int(const MacBackgroundScreenshotOptions&, Io)> mac_background_screenshot;
+    std::function<int(const MacBackgroundClickOptions&, Io)> mac_background_click;
+    std::function<int(const MacBackgroundTextOptions&, Io)> mac_background_text;
+    std::function<int(const MacBackgroundKeyOptions&, Io)> mac_background_key;
+    std::function<int(const MacBackgroundHotkeyOptions&, Io)> mac_background_hotkey;
+    std::function<int(const MacBackgroundDragOptions&, Io)> mac_background_drag;
     std::function<int(const DaemonOptions&, const std::filesystem::path&, Io)> run_daemon;
 };
 
