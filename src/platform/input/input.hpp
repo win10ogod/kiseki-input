@@ -43,7 +43,12 @@ OperationResult tap_key(const std::string& key, const std::string& backend = "au
 OperationResult key_combo(const std::string& keys, const std::string& backend = "auto");
 OperationResult type_text(const std::string& text);
 OperationResult mouse_action(const MouseOptions& options);
-OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const std::string& backend = "auto");
+OperationResult mouse_drag_absolute(
+    const std::vector<MousePoint>& points,
+    const std::string& backend = "auto",
+    int step_delay_ms = 2,
+    int start_hold_ms = 0,
+    int end_hold_ms = 0);
 OperationResult background_type_text(const kiseki::platform::target::TargetQuery& target, const std::string& text);
 OperationResult background_tap_key(const kiseki::platform::target::TargetQuery& target, const std::string& key);
 OperationResult background_mouse_action(const BackgroundMouseOptions& options);

@@ -29,6 +29,15 @@ Linux support currently targets graphical X11 sessions and true-machine validati
 
 Wayland and compositor-restricted sessions need their own backend work. WSL-only results are not treated as Linux desktop proof.
 
+### macOS
+
+macOS support is split into two explicit paths.
+
+- Native current-session backend: config, diagnostics, config-only WebUI, target listing, ScreenCaptureKit screenshots, burst screenshots, and Quartz CGEvent global input.
+- Optional CUA background provider: background app launch, CUA window listing/state, per-window screenshot, targeted click/text/key/hotkey/drag, point-path drawing, and configurable agent-cursor visual feedback.
+- Native input commands can affect the active GUI session and real pointer/focus. CUA commands live under `mac-background` and require a target PID/window id where applicable.
+- Both paths depend on the user's macOS permissions: Screen Recording for capture and Accessibility for input/action routing.
+
 ## Current Background Strategy
 
 Hyper-V, Virtual Desktop, and Desktop Object are not part of the current implementation track.
@@ -41,9 +50,7 @@ macOS uses a separate optional provider line for true background app operation: 
 
 ## macOS Line
 
-macOS support now has an initial native backend in the codebase, but it is not marked release-grade until it passes real macOS build, permission, and live desktop verification.
-
-The remaining gap is validation and backend expansion, not lack of interest in macOS support. The project should distinguish between compiled backend support and live-verified behavior on a real macOS desktop with the required user permissions.
+macOS support is a first-class platform line with native current-session support and an optional CUA background provider. The project distinguishes compiled support, permission availability, and live-verified behavior on a real logged-in macOS desktop.
 
 ### macOS Phase 0: Capability Design
 
@@ -87,9 +94,9 @@ For agent workflows, structured automation and Accessibility-backed interaction 
 ### macOS Phase 5: CUA Background Provider
 
 - Detect `cua-driver` from `PATH`, `KISEKI_CUA_DRIVER`, or `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`.
-- Expose CLI-only `mac-background` commands for CUA permission status, background app launch, window listing, window state, screenshot, click, text, key, hotkey, and drag.
+- Expose CLI-only `mac-background` commands for CUA permission status, background app launch, window listing, window state, screenshot, click, text, key, hotkey, drag, point-path drawing, and agent-cursor feedback.
 - Keep CUA as an optional provider, not a hard dependency, so the native macOS backend remains usable without it.
-- Validate on real macOS hardware with Accessibility and Screen Recording grants before marking the CUA line release-grade.
+- Continue validating on real macOS hardware with Accessibility and Screen Recording grants before expanding public claims or demos.
 
 ## Contribution Notes
 

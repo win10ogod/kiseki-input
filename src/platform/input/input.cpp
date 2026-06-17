@@ -1114,14 +1114,33 @@ OperationResult type_text(const std::string& text) {
 #endif
 }
 
-OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const std::string& backend) {
+OperationResult mouse_drag_absolute(
+    const std::vector<MousePoint>& points,
+    const std::string& backend,
+    int step_delay_ms,
+    int start_hold_ms,
+    int end_hold_ms) {
     if (points.size() < 2) {
         return fail("mouse drag requires at least two points");
+    }
+    if (step_delay_ms < 0) {
+        return fail("mouse drag --step-delay-ms must be non-negative");
+    }
+    if (start_hold_ms < 0) {
+        return fail("mouse drag --start-hold-ms must be non-negative");
+    }
+    if (end_hold_ms < 0) {
+        return fail("mouse drag --end-hold-ms must be non-negative");
     }
     const std::string selected_backend = lower_copy(backend.empty() ? "auto" : backend);
     if (!supported_backend(selected_backend)) {
         return fail("backend must be auto, driver, or system");
     }
+    const auto sleep_ms = [](int milliseconds) {
+        if (milliseconds > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
+        }
+    };
 
 #ifdef _WIN32
     if (selected_backend != "system") {
@@ -1134,14 +1153,16 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const
             if (!simulator.mouse_move(first.first, first.second, 0) || !simulator.mouse_click(0x02)) {
                 return fail("IbInputSimulator drag start failed");
             }
+            sleep_ms(start_hold_ms);
             for (const auto& point : points) {
                 const auto [x, y] = normalized_absolute_position(point.x, point.y);
                 if (!simulator.mouse_move(x, y, 0)) {
                     simulator.mouse_click(0x04);
                     return fail("IbInputSimulator drag move failed");
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                sleep_ms(step_delay_ms);
             }
+            sleep_ms(end_hold_ms);
             if (!simulator.mouse_click(0x04)) {
                 return fail("IbInputSimulator drag release failed");
             }
@@ -1168,13 +1189,15 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const
     if (!send_absolute_move(points.front().x, points.front().y) || !send_button(MOUSEEVENTF_LEFTDOWN)) {
         return fail("SendInput drag start failed");
     }
+    sleep_ms(start_hold_ms);
     for (const auto& point : points) {
         if (!send_absolute_move(point.x, point.y)) {
             send_button(MOUSEEVENTF_LEFTUP);
             return fail("SendInput drag move failed");
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        sleep_ms(step_delay_ms);
     }
+    sleep_ms(end_hold_ms);
     if (!send_button(MOUSEEVENTF_LEFTUP)) {
         return fail("SendInput drag release failed");
     }
@@ -1193,13 +1216,15 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const
     if (!post_mac_mouse_event(kCGEventLeftMouseDown, CGPointMake(points.front().x, points.front().y), kCGMouseButtonLeft)) {
         return fail("CGEventCreateMouseEvent drag down failed");
     }
+    sleep_ms(start_hold_ms);
     for (const auto& point : points) {
         if (!post_mac_mouse_event(kCGEventLeftMouseDragged, CGPointMake(point.x, point.y), kCGMouseButtonLeft)) {
             post_mac_mouse_event(kCGEventLeftMouseUp, CGPointMake(point.x, point.y), kCGMouseButtonLeft);
             return fail("CGEventCreateMouseEvent drag move failed");
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        sleep_ms(step_delay_ms);
     }
+    sleep_ms(end_hold_ms);
     if (!post_mac_mouse_event(kCGEventLeftMouseUp, CGPointMake(points.back().x, points.back().y), kCGMouseButtonLeft)) {
         return fail("CGEventCreateMouseEvent drag release failed");
     }
@@ -1212,10 +1237,12 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint>& points, const
     return with_display([&](Display* display, const XTestApi& xtest) {
         XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, points.front().x, points.front().y);
         xtest.fake_button(display, 1, True, CurrentTime);
+        sleep_ms(start_hold_ms);
         for (const auto& point : points) {
             XWarpPointer(display, None, DefaultRootWindow(display), 0, 0, 0, 0, point.x, point.y);
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            sleep_ms(step_delay_ms);
         }
+        sleep_ms(end_hold_ms);
         xtest.fake_button(display, 1, False, CurrentTime);
         return ok("mouse drag sent");
     });

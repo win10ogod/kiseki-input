@@ -90,6 +90,60 @@ struct MacCuaDragOptions {
     std::vector<std::string> modifiers;
 };
 
+struct MacCuaPoint {
+    double x = 0.0;
+    double y = 0.0;
+};
+
+struct MacCuaDrawOptions {
+    int pid = 0;
+    unsigned int window_id = 0;
+    std::vector<MacCuaPoint> points;
+    int duration_ms = 120;
+    int steps = 6;
+    int stroke_gap_ms = 0;
+    int max_segments = 96;
+    std::string button = "left";
+    std::vector<std::string> modifiers;
+};
+
+struct MacCuaFeedbackEnableOptions {
+    bool enabled = true;
+};
+
+struct MacCuaFeedbackMotionOptions {
+    bool has_start_handle = false;
+    double start_handle = 0.0;
+    bool has_end_handle = false;
+    double end_handle = 0.0;
+    bool has_arc_size = false;
+    double arc_size = 0.0;
+    bool has_arc_flow = false;
+    double arc_flow = 0.0;
+    bool has_spring = false;
+    double spring = 0.0;
+    bool has_glide_duration_ms = false;
+    double glide_duration_ms = 0.0;
+    bool has_dwell_after_click_ms = false;
+    double dwell_after_click_ms = 0.0;
+    bool has_idle_hide_ms = false;
+    double idle_hide_ms = 0.0;
+};
+
+struct MacCuaFeedbackStyleOptions {
+    bool has_gradient_colors = false;
+    std::vector<std::string> gradient_colors;
+    bool has_bloom_color = false;
+    std::string bloom_color;
+    bool has_image_path = false;
+    std::filesystem::path image_path;
+    bool reset = false;
+};
+
+struct MacCuaFeedbackPresetOptions {
+    std::string name = "natural";
+};
+
 bool macos_cua_background_available();
 
 OperationResult macos_cua_status(bool prompt);
@@ -102,5 +156,11 @@ OperationResult macos_cua_type_text(const MacCuaTextOptions& options);
 OperationResult macos_cua_press_key(const MacCuaKeyOptions& options);
 OperationResult macos_cua_hotkey(const MacCuaHotkeyOptions& options);
 OperationResult macos_cua_drag(const MacCuaDragOptions& options);
+OperationResult macos_cua_draw(const MacCuaDrawOptions& options);
+OperationResult macos_cua_feedback_state();
+OperationResult macos_cua_feedback_enable(const MacCuaFeedbackEnableOptions& options);
+OperationResult macos_cua_feedback_motion(const MacCuaFeedbackMotionOptions& options);
+OperationResult macos_cua_feedback_style(const MacCuaFeedbackStyleOptions& options);
+OperationResult macos_cua_feedback_preset(const MacCuaFeedbackPresetOptions& options);
 
 }

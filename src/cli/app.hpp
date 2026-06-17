@@ -44,6 +44,13 @@ struct TargetInspectOptions {
     TargetOptions target;
 };
 
+struct ObserveUiOptions {
+    TargetOptions target;
+    std::string provider;
+    int max_depth;
+    int max_elements;
+};
+
 struct ScreenshotWindowOptions {
     TargetOptions target;
     std::filesystem::path output_path;
@@ -90,6 +97,9 @@ struct InputMouseOptions {
 struct InputDragOptions {
     std::filesystem::path path;
     std::string backend;
+    int step_delay_ms;
+    int start_hold_ms;
+    int end_hold_ms;
 };
 
 struct BackgroundTextOptions {
@@ -243,6 +253,57 @@ struct MacBackgroundDragOptions {
     std::vector<std::string> modifiers;
 };
 
+struct MacBackgroundDrawOptions {
+    int pid;
+    unsigned int window_id;
+    std::filesystem::path path;
+    int duration_ms;
+    int steps;
+    int stroke_gap_ms;
+    int max_segments;
+    std::string button;
+    std::vector<std::string> modifiers;
+};
+
+struct MacBackgroundFeedbackStatusOptions {};
+
+struct MacBackgroundFeedbackEnableOptions {
+    bool enabled;
+};
+
+struct MacBackgroundFeedbackMotionOptions {
+    bool has_start_handle;
+    double start_handle;
+    bool has_end_handle;
+    double end_handle;
+    bool has_arc_size;
+    double arc_size;
+    bool has_arc_flow;
+    double arc_flow;
+    bool has_spring;
+    double spring;
+    bool has_glide_duration_ms;
+    double glide_duration_ms;
+    bool has_dwell_after_click_ms;
+    double dwell_after_click_ms;
+    bool has_idle_hide_ms;
+    double idle_hide_ms;
+};
+
+struct MacBackgroundFeedbackStyleOptions {
+    bool reset;
+    bool has_gradient_colors;
+    std::vector<std::string> gradient_colors;
+    bool has_bloom_color;
+    std::string bloom_color;
+    bool has_image_path;
+    std::filesystem::path image_path;
+};
+
+struct MacBackgroundFeedbackPresetOptions {
+    std::string name;
+};
+
 struct DaemonOptions {
     bool once;
 };
@@ -255,6 +316,7 @@ struct Dependencies {
     std::function<int(const WebUiLaunchOptions&, const std::filesystem::path&, Io)> launch_config_ui;
     std::function<int(const TargetListOptions&, Io)> list_targets;
     std::function<int(const TargetInspectOptions&, Io)> inspect_target;
+    std::function<int(const ObserveUiOptions&, Io)> observe_ui;
     std::function<int(const ScreenshotDesktopOptions&, Io)> capture_desktop;
     std::function<int(const ScreenshotBurstOptions&, Io)> capture_burst;
     std::function<int(const ScreenshotWindowOptions&, Io)> capture_window;
@@ -286,6 +348,12 @@ struct Dependencies {
     std::function<int(const MacBackgroundKeyOptions&, Io)> mac_background_key;
     std::function<int(const MacBackgroundHotkeyOptions&, Io)> mac_background_hotkey;
     std::function<int(const MacBackgroundDragOptions&, Io)> mac_background_drag;
+    std::function<int(const MacBackgroundDrawOptions&, Io)> mac_background_draw;
+    std::function<int(const MacBackgroundFeedbackStatusOptions&, Io)> mac_background_feedback_status;
+    std::function<int(const MacBackgroundFeedbackEnableOptions&, Io)> mac_background_feedback_enable;
+    std::function<int(const MacBackgroundFeedbackMotionOptions&, Io)> mac_background_feedback_motion;
+    std::function<int(const MacBackgroundFeedbackStyleOptions&, Io)> mac_background_feedback_style;
+    std::function<int(const MacBackgroundFeedbackPresetOptions&, Io)> mac_background_feedback_preset;
     std::function<int(const DaemonOptions&, const std::filesystem::path&, Io)> run_daemon;
 };
 

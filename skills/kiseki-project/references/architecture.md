@@ -23,6 +23,7 @@ Keep these boundaries intact:
 
 - WebUI can read/write config and show capabilities.
 - WebUI must not trigger input, screenshots, daemon operations, notifications, shell commands, or process launch.
+- Observation commands such as `observe ui` are CLI-only. They should read structured system/app state and must not call screenshot/OCR/vision backends. Windows `uia` uses UI Automation; macOS `ax` uses Accessibility API data equivalent to the Accessibility Inspector element tree. Provider fallback must be explicit in the output; strict provider requests should fail instead of silently downgrading.
 - Platform code should expose small C++ functions returning `OperationResult` or `CaptureResult`.
 - CLI commands should be testable through injected dependencies in `kiseki::cli::Dependencies`.
 
@@ -67,6 +68,9 @@ macOS:
 - Keep native ScreenCaptureKit/Quartz support separate from the optional CUA provider.
 - `src/platform/session/macos_cua.*` shells out to `cua-driver`; do not make CUA a hard build dependency.
 - `mac-background` commands are CLI-only and must not add WebUI operation routes.
+- Treat `kiseki input ...` on macOS as global/current-session input. Treat `kiseki mac-background ...` as the target-routed CUA background path.
+- For drawing workflows, keep foreground `input drag --file` and CUA `mac-background draw --file` separate. The former uses the active pointer path and is appropriate for dense sampled strokes with configurable delay; the latter sends sparse window-local CUA drag segments and must be verified with CUA screenshot/state.
+- `mac-background feedback ...` is only visual agent-cursor feedback for CUA actions. It must not be described as moving the real system pointer.
 - Treat CUA support as live only after verifying `status`, launch/window listing, screenshot/state, and at least one action command on a real logged-in macOS GUI session with permissions granted.
 
 Windows selected-window:

@@ -100,11 +100,25 @@ Then run:
 ./build/Debug/kiseki.exe input combo --keys win+r --backend system
 ./build/Debug/kiseki.exe input text --text "mspaint.exe"
 ./build/Debug/kiseki.exe input key --key enter --backend system
+./build/Debug/kiseki.exe observe ui --target-title "Paint"
 ./build/Debug/kiseki.exe input drag --file artifacts/live-test/heart-points.txt --backend system
 ./build/Debug/kiseki.exe screenshot desktop --output artifacts/live-test/paint-heart.bmp
 ```
 
 Use `input drag` instead of separate `mouse left-down`, move, and `left-up` commands for drawing tests, because one process preserves button state more reliably.
+Use `observe ui` before screenshot-based verification when the task can be answered from platform/app structure. It must produce structured JSON without invoking screenshots, OCR, or visual model parsing. On Windows, verify both strict UIA and fallback behavior when relevant:
+
+```bash
+./build/Debug/kiseki.exe observe ui --target-title "Chrome" --provider uia --max-depth 4 --max-elements 256
+./build/Debug/kiseki.exe observe ui --target-title "Chrome" --provider window-tree
+```
+
+On macOS, verify AX observation against a real GUI target after granting Accessibility permission to the terminal/Codex host:
+
+```bash
+./build/kiseki observe ui --target-title "Krita" --provider ax --max-depth 4 --max-elements 256
+./build/kiseki observe ui --target-title "Krita" --provider auto --max-depth 4 --max-elements 256
+```
 
 ## Paint Macro Recipe
 
@@ -219,6 +233,25 @@ ctest --test-dir build --output-on-failure
 ./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-window.png
 ./build/kiseki mac-background click --pid <pid> --window-id <window_id> --x 100 --y 100
 ./build/kiseki mac-background text --pid <pid> --text "kiseki mac cua"
+./build/kiseki mac-background feedback preset --name natural
+./build/kiseki mac-background feedback status
+./build/kiseki mac-background draw --pid <pid> --window-id <window_id> --file artifacts/live-test/mac-cua-points.txt --duration-ms 80 --steps 5 --max-segments 96
+./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-draw.png
 ```
 
-Expected result: CUA reports granted Accessibility and Screen Recording permissions, captures the selected window, and routes at least one action to the target without taking over the user's cursor or foreground workflow. Do not claim live CUA support if the Mac cannot be reached or permissions are missing.
+Expected result: CUA reports granted Accessibility and Screen Recording permissions, captures the selected window, and routes at least one action to the target. For backgrounded targets, CUA drag should use the pid-routed path and not take over the user's real cursor; for frontmost targets, CUA may use a HID-style drag path and the real cursor can visibly move. For drawing, inspect the after-screenshot; a successful return code alone is not enough. Do not claim live CUA support if the Mac cannot be reached or permissions are missing.
+
+For visible CUA agent-cursor feedback across multiple CLI calls, set a fresh session id for that run:
+
+```bash
+export KISEKI_CUA_SESSION=kiseki-$(date +%s)
+```
+
+Do not reuse an old CUA session id after CUA reports `session ended`; choose a new id.
+
+When testing macOS drawing:
+
+- Use `input drag --file` only for foreground/global drawing tests where taking the current pointer/focus is acceptable. Before judging the input path, select the intended drawing tool and set a visible foreground color; pale/white foreground color can make successful input look blank.
+- Use `mac-background draw --file` only for CUA target-routed drawing. Coordinates must be window-local screenshot coordinates, and point files should contain sparse control points rather than dense per-pixel samples.
+- Prefer a controlled canvas or simple drawing app and capture before/after CUA screenshots.
+- If the target ignores background drag events, report that target behavior exactly instead of converting the claim into general macOS failure.

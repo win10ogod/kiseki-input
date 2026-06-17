@@ -7,6 +7,7 @@
 using kiseki::core::capabilities::foundation_capabilities;
 using kiseki::core::capabilities::CaptureCapabilities;
 using kiseki::core::capabilities::InputCapabilities;
+using kiseki::core::capabilities::ObservationCapabilities;
 using kiseki::core::capabilities::SessionCapabilities;
 using kiseki::core::capabilities::to_json;
 
@@ -27,12 +28,18 @@ consteval bool default_session_capabilities_fail_closed() {
     return !capabilities.background_desktop && !capabilities.macos_cua_background;
 }
 
+consteval bool default_observation_capabilities_fail_closed() {
+    ObservationCapabilities capabilities;
+    return !capabilities.window_tree && !capabilities.windows_uia && !capabilities.macos_ax;
+}
+
 }
 
 TEST_CASE("default capability structs fail closed") {
     STATIC_REQUIRE(default_input_capabilities_fail_closed());
     STATIC_REQUIRE(default_capture_capabilities_fail_closed());
     STATIC_REQUIRE(default_session_capabilities_fail_closed());
+    STATIC_REQUIRE(default_observation_capabilities_fail_closed());
 }
 
 TEST_CASE("foundation capabilities include explicit limitations") {
@@ -47,10 +54,13 @@ TEST_CASE("foundation capabilities include explicit limitations") {
     REQUIRE(json["capture"]["burst"].get<bool>() == false);
     REQUIRE(json["session"]["backgroundDesktop"].get<bool>() == false);
     REQUIRE(json["session"]["macosCuaBackground"].get<bool>() == false);
+    REQUIRE(json["observation"]["windowTree"].get<bool>() == false);
+    REQUIRE(json["observation"]["windowsUia"].get<bool>() == false);
+    REQUIRE(json["observation"]["macosAx"].get<bool>() == false);
     REQUIRE_FALSE(json["limitations"].empty());
 
     const auto limitations = json["limitations"].dump();
     REQUIRE(limitations.find("configuration and WebUI only") != std::string::npos);
-    REQUIRE(limitations.find("separate implementation slices") != std::string::npos);
+    REQUIRE(limitations.find("observation") != std::string::npos);
     REQUIRE(limitations.find("background-window input depends") != std::string::npos);
 }

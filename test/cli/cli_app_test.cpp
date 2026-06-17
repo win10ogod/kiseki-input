@@ -152,6 +152,9 @@ TEST_CASE("capabilities prints foundation capability json") {
     REQUIRE(json.at("capture").at("window").is_boolean());
     REQUIRE(json.at("session").at("backgroundDesktop").is_boolean());
     REQUIRE(json.at("session").at("macosCuaBackground").is_boolean());
+    REQUIRE(json.at("observation").at("windowTree").is_boolean());
+    REQUIRE(json.at("observation").at("windowsUia").is_boolean());
+    REQUIRE(json.at("observation").at("macosAx").is_boolean());
     REQUIRE(json.at("limitations").is_array());
     REQUIRE_FALSE(json.at("limitations").empty());
     REQUIRE(result.err.empty());
@@ -508,6 +511,46 @@ TEST_CASE("target inspect command passes selected window to backend") {
     REQUIRE(err.str().empty());
 }
 
+TEST_CASE("observe ui command passes selected target to non-visual backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.observe_ui = [&](const kiseki::cli::ObserveUiOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.target.title == "Krita");
+        REQUIRE(options.target.pid == 17532);
+        REQUIRE(options.target.window_id == "610");
+        REQUIRE(options.provider == "uia");
+        REQUIRE(options.max_depth == 6);
+        REQUIRE(options.max_elements == 512);
+        called = true;
+        io.out << "observe ui ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {
+            "observe", "ui",
+            "--target-title", "Krita",
+            "--target-pid", "17532",
+            "--target-window-id", "610",
+            "--provider", "uia",
+            "--max-depth", "6",
+            "--max-elements", "512",
+        },
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "observe ui ok\n");
+    REQUIRE(err.str().empty());
+}
+
 TEST_CASE("input commands call injected backend") {
     std::ostringstream out;
     std::ostringstream err;
@@ -689,12 +732,22 @@ TEST_CASE("input drag command passes path and backend") {
     dependencies.input_drag = [&](const kiseki::cli::InputDragOptions& options, kiseki::cli::Io) {
         REQUIRE(options.path == points_path);
         REQUIRE(options.backend == "system");
+        REQUIRE(options.step_delay_ms == 7);
+        REQUIRE(options.start_hold_ms == 20);
+        REQUIRE(options.end_hold_ms == 30);
         called = true;
         return 0;
     };
 
     const int code = kiseki::cli::run(
-        {"input", "drag", "--file", points_path.string(), "--backend", "system"},
+        {
+            "input", "drag",
+            "--file", points_path.string(),
+            "--backend", "system",
+            "--step-delay-ms", "7",
+            "--start-hold-ms", "20",
+            "--end-hold-ms", "30",
+        },
         config_path,
         kiseki::cli::Io{out, err},
         dependencies);
@@ -811,7 +864,9 @@ TEST_CASE("mac background commands call injected CUA backend") {
     const auto config_path = temp.file("config.json");
     const auto screenshot_path = temp.file("safari.png");
     const auto text_path = temp.file("input.txt");
+    const auto points_path = temp.file("points.txt");
     write_text(text_path, "hello");
+    write_text(points_path, "1 2\n3 4\n5 6\n");
     std::vector<std::string> calls;
 
     kiseki::cli::Dependencies dependencies;
@@ -907,6 +962,58 @@ TEST_CASE("mac background commands call injected CUA backend") {
         calls.push_back("drag");
         return 0;
     };
+    dependencies.mac_background_draw = [&](const kiseki::cli::MacBackgroundDrawOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.pid == 123);
+        REQUIRE(options.window_id == 456);
+        REQUIRE(options.path == points_path);
+        REQUIRE(options.duration_ms == 80);
+        REQUIRE(options.steps == 5);
+        REQUIRE(options.stroke_gap_ms == 10);
+        REQUIRE(options.max_segments == 24);
+        REQUIRE(options.button == "left");
+        REQUIRE(options.modifiers == std::vector<std::string>{"shift"});
+        calls.push_back("draw");
+        return 0;
+    };
+    dependencies.mac_background_feedback_status = [&](const kiseki::cli::MacBackgroundFeedbackStatusOptions&, kiseki::cli::Io) {
+        calls.push_back("feedback-status");
+        return 0;
+    };
+    dependencies.mac_background_feedback_enable = [&](const kiseki::cli::MacBackgroundFeedbackEnableOptions& options, kiseki::cli::Io) {
+        REQUIRE_FALSE(options.enabled);
+        calls.push_back("feedback-enable");
+        return 0;
+    };
+    dependencies.mac_background_feedback_motion = [&](const kiseki::cli::MacBackgroundFeedbackMotionOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.has_start_handle);
+        REQUIRE(options.start_handle == 0.25);
+        REQUIRE_FALSE(options.has_end_handle);
+        REQUIRE(options.has_arc_size);
+        REQUIRE(options.arc_size == 0.35);
+        REQUIRE(options.has_glide_duration_ms);
+        REQUIRE(options.glide_duration_ms == 900.0);
+        REQUIRE(options.has_dwell_after_click_ms);
+        REQUIRE(options.dwell_after_click_ms == 250.0);
+        REQUIRE(options.has_idle_hide_ms);
+        REQUIRE(options.idle_hide_ms == 5000.0);
+        calls.push_back("feedback-motion");
+        return 0;
+    };
+    dependencies.mac_background_feedback_style = [&](const kiseki::cli::MacBackgroundFeedbackStyleOptions& options, kiseki::cli::Io) {
+        REQUIRE_FALSE(options.reset);
+        REQUIRE(options.has_gradient_colors);
+        REQUIRE(options.gradient_colors == std::vector<std::string>{"#00AAFF", "#22CC88"});
+        REQUIRE(options.has_bloom_color);
+        REQUIRE(options.bloom_color == "#00AAFF");
+        REQUIRE_FALSE(options.has_image_path);
+        calls.push_back("feedback-style");
+        return 0;
+    };
+    dependencies.mac_background_feedback_preset = [&](const kiseki::cli::MacBackgroundFeedbackPresetOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.name == "natural");
+        calls.push_back("feedback-preset");
+        return 0;
+    };
 
     REQUIRE(kiseki::cli::run({"mac-background", "status", "--prompt"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"mac-background", "launch", "--bundle-id", "com.apple.Safari", "--url", "about:blank", "--new-instance", "--arg=--test"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
@@ -918,8 +1025,30 @@ TEST_CASE("mac background commands call injected CUA backend") {
     REQUIRE(kiseki::cli::run({"mac-background", "key", "--pid", "123", "--window-id", "456", "--key", "return", "--modifiers", "cmd"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"mac-background", "hotkey", "--pid", "123", "--window-id", "456", "--keys", "cmd+c"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"mac-background", "drag", "--pid", "123", "--window-id", "456", "--from-x", "1", "--from-y", "2", "--to-x", "3", "--to-y", "4", "--duration-ms", "250", "--steps", "12", "--button", "left", "--modifiers", "option"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "draw", "--pid", "123", "--window-id", "456", "--file", points_path.string(), "--duration-ms", "80", "--steps", "5", "--stroke-gap-ms", "10", "--max-segments", "24", "--button", "left", "--modifiers", "shift"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "feedback", "status"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "feedback", "enable", "--enabled", "false"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "feedback", "motion", "--start-handle", "0.25", "--arc-size", "0.35", "--glide-duration-ms", "900", "--dwell-after-click-ms", "250", "--idle-hide-ms", "5000"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "feedback", "style", "--gradient-colors", "#00AAFF,#22CC88", "--bloom-color", "#00AAFF"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"mac-background", "feedback", "preset", "--name", "natural"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
 
-    REQUIRE(calls == std::vector<std::string>{"status", "launch", "windows", "state", "screenshot", "click", "text", "key", "hotkey", "drag"});
+    REQUIRE(calls == std::vector<std::string>{
+        "status",
+        "launch",
+        "windows",
+        "state",
+        "screenshot",
+        "click",
+        "text",
+        "key",
+        "hotkey",
+        "drag",
+        "draw",
+        "feedback-status",
+        "feedback-enable",
+        "feedback-motion",
+        "feedback-style",
+        "feedback-preset"});
     REQUIRE(out.str().empty());
     REQUIRE(err.str().empty());
 }
@@ -1085,6 +1214,9 @@ TEST_CASE("macro run executes steps through injected dependencies") {
     dependencies.input_drag = [&](const kiseki::cli::InputDragOptions& options, kiseki::cli::Io) {
         REQUIRE(options.path == points_path);
         REQUIRE(options.backend == "system");
+        REQUIRE(options.step_delay_ms == 2);
+        REQUIRE(options.start_hold_ms == 0);
+        REQUIRE(options.end_hold_ms == 0);
         calls.push_back("drag");
         return 0;
     };

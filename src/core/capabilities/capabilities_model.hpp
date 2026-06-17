@@ -25,10 +25,17 @@ struct SessionCapabilities {
     bool macos_cua_background = false;
 };
 
+struct ObservationCapabilities {
+    bool window_tree = false;
+    bool windows_uia = false;
+    bool macos_ax = false;
+};
+
 struct CapabilityMatrix {
     InputCapabilities input;
     CaptureCapabilities capture;
     SessionCapabilities session;
+    ObservationCapabilities observation;
     std::vector<std::string> limitations;
 };
 

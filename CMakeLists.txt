@@ -54,6 +54,7 @@ add_library(kiseki_platform STATIC
     src/platform/capture/screenshot.cpp
     src/platform/input/input.cpp
     src/platform/notification/notification.cpp
+    src/platform/observe/ui_observation.cpp
     src/platform/runtime_capabilities.cpp
     src/platform/session/background_desktop.cpp
     src/platform/session/macos_cua.cpp
@@ -64,7 +65,7 @@ target_include_directories(kiseki_platform PUBLIC src)
 target_link_libraries(kiseki_platform PUBLIC kiseki_core)
 if(WIN32)
     target_sources(kiseki_platform PRIVATE src/platform/capture/d3d11_capture.cpp)
-    target_link_libraries(kiseki_platform PUBLIC user32 gdi32 d3d11.lib dxgi.lib)
+    target_link_libraries(kiseki_platform PUBLIC user32 gdi32 d3d11.lib dxgi.lib uiautomationcore ole32 oleaut32)
 elseif(APPLE)
     enable_language(OBJCXX)
     target_sources(kiseki_platform PRIVATE src/platform/capture/mac_capture.mm)

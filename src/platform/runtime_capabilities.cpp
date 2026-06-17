@@ -4,6 +4,11 @@
 #include "platform/input/input.hpp"
 #include "platform/session/background_desktop.hpp"
 #include "platform/session/macos_cua.hpp"
+#include "platform/target/target.hpp"
+
+#ifdef __APPLE__
+#include <ApplicationServices/ApplicationServices.h>
+#endif
 
 namespace kiseki::platform {
 
@@ -17,18 +22,34 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
     capabilities.capture.burst = capabilities.capture.desktop || capabilities.capture.window;
     capabilities.session.background_desktop = session::background_desktop_available();
     capabilities.session.macos_cua_background = session::macos_cua_background_available();
+    capabilities.observation.window_tree = target::target_window_available();
+#ifdef _WIN32
+    capabilities.observation.windows_uia = true;
+    capabilities.observation.macos_ax = false;
+#elif defined(__APPLE__)
+    capabilities.observation.windows_uia = false;
+    capabilities.observation.macos_ax = AXIsProcessTrusted();
+#else
+    capabilities.observation.windows_uia = false;
+    capabilities.observation.macos_ax = false;
+#endif
     capabilities.limitations = {
         "WebUI is configuration-only; operational input, screenshot, notification, and daemon actions are CLI-only",
 #if defined(__APPLE__)
         "macOS desktop and selected-window screenshots require Screen Recording permission in the active GUI session",
         "macOS global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission",
+        "macOS input commands are global/current-session operations; CUA background operations are exposed separately under mac-background",
         "macOS CUA background operation is available only when cua-driver is installed and authorized",
+        "macOS CUA drag may use visible HID-style movement when the target is frontmost; backgrounded pid-routed drags can be rejected by some canvas/OpenGL-style targets",
+        "macOS CUA agent-cursor feedback is an overlay and is not the real system pointer; set KISEKI_CUA_SESSION to a fresh per-run id when actions should declare a visible CUA session",
         "macOS screenshots use ScreenCaptureKit in the current user GUI session; target listing uses Window Services",
+        "macOS observe ui can use Accessibility AX data when the active CLI host has Accessibility permission",
 #else
         "background-window input depends on whether the target accepts system window messages or public automation events",
 #if defined(_WIN32)
         "Windows background screenshot uses selected-window capture and does not require VM or Docker",
         "Windows selected-window input commands are compatibility helpers for targets that accept system window messages",
+        "Windows observe ui can use UI Automation for structured non-visual UI trees when the target exposes UIA data",
 #else
         "Linux true background desktop requires Xvfb and runs applications inside an isolated X11 DISPLAY",
 #endif

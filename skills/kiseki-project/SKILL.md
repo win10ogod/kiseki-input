@@ -17,6 +17,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - Do not claim Linux support from WSL-only results. Linux screenshot/input must be tested on a real Linux graphical session when the user asks for Linux proof.
 - Do not overclaim game background input. It depends on whether the target accepts system window messages or public automation events.
 - macOS true background app operation uses the optional Cua Driver provider through `kiseki mac-background ...`. Do not claim it is available unless `cua-driver` is installed and the Mac has Accessibility and Screen Recording permissions.
+- On macOS, distinguish global/current-session `kiseki input ...` commands from target-routed CUA `kiseki mac-background ...` commands. Do not describe the CUA overlay cursor as the real system pointer.
 
 ## Project Anchors
 
@@ -36,7 +37,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 
 Before final claims, also run `git diff --check` after edits. For live Windows UI work, capture screenshots under `artifacts/live-test/` and report the paths.
 
-For macOS CUA work, verify `kiseki mac-background status`, `launch`, `windows`, `state`, `screenshot`, and at least one action command on a real logged-in macOS GUI session before claiming live support.
+For macOS CUA work, verify `kiseki mac-background status`, `launch`, `windows`, `state`, `screenshot`, and at least one action command on a real logged-in macOS GUI session before claiming live support. For drawing changes, inspect a before/after screenshot from the same target window.
 
 ## References
 

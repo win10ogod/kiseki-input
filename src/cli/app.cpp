@@ -20,6 +20,7 @@
 #include "platform/capture/screenshot.hpp"
 #include "platform/input/input.hpp"
 #include "platform/notification/notification.hpp"
+#include "platform/observe/ui_observation.hpp"
 #include "platform/runtime_capabilities.hpp"
 #include "platform/session/background_desktop.hpp"
 #include "platform/session/macos_cua.hpp"
@@ -138,6 +139,61 @@ int print_target_inspect_result(const kiseki::platform::target::InspectResult& r
         {"target", target_window_to_json(result.window)},
         {"children", std::move(children)},
     }.dump(2) << '\n';
+    return 0;
+}
+
+int print_observe_ui_result(const kiseki::platform::observe::UiObservationResult& result, Io io) {
+    if (!result.ok) {
+        io.err << result.error << '\n';
+        return result.code;
+    }
+
+    nlohmann::json elements = nlohmann::json::array();
+    for (const auto& element : result.elements) {
+        nlohmann::json item{
+            {"kind", element.kind},
+            {"id", element.id},
+            {"parentId", element.parent_id},
+            {"depth", element.depth},
+        };
+        if (!element.name.empty()) item["name"] = element.name;
+        if (!element.title.empty()) item["title"] = element.title;
+        if (!element.automation_id.empty()) item["automationId"] = element.automation_id;
+        if (!element.class_name.empty()) item["className"] = element.class_name;
+        if (!element.localized_control_type.empty()) item["localizedControlType"] = element.localized_control_type;
+        if (!element.framework_id.empty()) item["frameworkId"] = element.framework_id;
+        if (!element.role.empty()) item["role"] = element.role;
+        if (!element.subrole.empty()) item["subrole"] = element.subrole;
+        if (!element.description.empty()) item["description"] = element.description;
+        if (!element.value.empty()) item["value"] = element.value;
+        if (element.control_type != 0) item["controlType"] = element.control_type;
+        if (element.process_id != 0) item["processId"] = element.process_id;
+        if (element.has_enabled) item["enabled"] = element.enabled;
+        if (element.has_offscreen) item["offscreen"] = element.offscreen;
+        if (element.has_bounds) {
+            item["bounds"] = {
+                {"x", element.x},
+                {"y", element.y},
+                {"width", element.width},
+                {"height", element.height},
+            };
+        }
+        elements.push_back(std::move(item));
+    }
+
+    nlohmann::json output{
+        {"source", "platform-window-tree"},
+        {"visual", result.visual},
+        {"coordinateSpace", result.coordinate_space},
+        {"truncated", result.truncated},
+        {"target", target_window_to_json(result.target)},
+        {"elements", std::move(elements)},
+    };
+    output["source"] = result.source;
+    if (!result.fallback_reason.empty()) {
+        output["fallbackReason"] = result.fallback_reason;
+    }
+    io.out << output.dump(2) << '\n';
     return 0;
 }
 
@@ -436,7 +492,15 @@ int run_macro_step(
             io);
     } else if (step.type == "drag") {
         if (!dependencies.input_drag) return missing_backend("input drag");
-        code = dependencies.input_drag(InputDragOptions{.path = step.path, .backend = step.backend}, io);
+        code = dependencies.input_drag(
+            InputDragOptions{
+                .path = step.path,
+                .backend = step.backend,
+                .step_delay_ms = 2,
+                .start_hold_ms = 0,
+                .end_hold_ms = 0,
+            },
+            io);
     } else if (step.type == "background-drag") {
         if (!dependencies.input_background_drag) return missing_backend("background drag");
         code = dependencies.input_background_drag(BackgroundDragOptions{.target = step.target, .path = step.path}, io);
@@ -492,6 +556,16 @@ Dependencies default_dependencies() {
         },
         .inspect_target = [](const TargetInspectOptions& options, Io io) {
             return print_target_inspect_result(kiseki::platform::target::inspect_window(to_target_query(options.target)), io);
+        },
+        .observe_ui = [](const ObserveUiOptions& options, Io io) {
+            return print_observe_ui_result(
+                kiseki::platform::observe::observe_ui(kiseki::platform::observe::UiObservationOptions{
+                    .target = to_target_query(options.target),
+                    .provider = options.provider,
+                    .max_depth = options.max_depth,
+                    .max_elements = options.max_elements,
+                }),
+                io);
         },
         .capture_desktop = [](const ScreenshotDesktopOptions& options, Io io) {
             return print_capture_result(kiseki::platform::capture::capture_desktop_bmp(options.output_path), io);
@@ -552,7 +626,12 @@ Dependencies default_dependencies() {
         .input_drag = [](const InputDragOptions& options, Io io) {
             try {
                 return print_operation_result(
-                    kiseki::platform::input::mouse_drag_absolute(read_mouse_points_file(options.path), options.backend),
+                    kiseki::platform::input::mouse_drag_absolute(
+                        read_mouse_points_file(options.path),
+                        options.backend,
+                        options.step_delay_ms,
+                        options.start_hold_ms,
+                        options.end_hold_ms),
                     io);
             } catch (const std::exception& error) {
                 io.err << error.what() << '\n';
@@ -765,6 +844,85 @@ Dependencies default_dependencies() {
                 }),
                 io);
         },
+        .mac_background_draw = [](const MacBackgroundDrawOptions& options, Io io) {
+            try {
+                std::vector<kiseki::platform::session::MacCuaPoint> points;
+                for (const auto& point : read_mouse_points_file(options.path)) {
+                    points.push_back(kiseki::platform::session::MacCuaPoint{
+                        .x = static_cast<double>(point.x),
+                        .y = static_cast<double>(point.y),
+                    });
+                }
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_draw(kiseki::platform::session::MacCuaDrawOptions{
+                        .pid = options.pid,
+                        .window_id = options.window_id,
+                        .points = std::move(points),
+                        .duration_ms = options.duration_ms,
+                        .steps = options.steps,
+                        .stroke_gap_ms = options.stroke_gap_ms,
+                        .max_segments = options.max_segments,
+                        .button = options.button,
+                        .modifiers = options.modifiers,
+                    }),
+                    io);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                return 2;
+            }
+        },
+        .mac_background_feedback_status = [](const MacBackgroundFeedbackStatusOptions&, Io io) {
+            return print_operation_result(kiseki::platform::session::macos_cua_feedback_state(), io);
+        },
+        .mac_background_feedback_enable = [](const MacBackgroundFeedbackEnableOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_feedback_enable(kiseki::platform::session::MacCuaFeedbackEnableOptions{
+                    .enabled = options.enabled,
+                }),
+                io);
+        },
+        .mac_background_feedback_motion = [](const MacBackgroundFeedbackMotionOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_feedback_motion(kiseki::platform::session::MacCuaFeedbackMotionOptions{
+                    .has_start_handle = options.has_start_handle,
+                    .start_handle = options.start_handle,
+                    .has_end_handle = options.has_end_handle,
+                    .end_handle = options.end_handle,
+                    .has_arc_size = options.has_arc_size,
+                    .arc_size = options.arc_size,
+                    .has_arc_flow = options.has_arc_flow,
+                    .arc_flow = options.arc_flow,
+                    .has_spring = options.has_spring,
+                    .spring = options.spring,
+                    .has_glide_duration_ms = options.has_glide_duration_ms,
+                    .glide_duration_ms = options.glide_duration_ms,
+                    .has_dwell_after_click_ms = options.has_dwell_after_click_ms,
+                    .dwell_after_click_ms = options.dwell_after_click_ms,
+                    .has_idle_hide_ms = options.has_idle_hide_ms,
+                    .idle_hide_ms = options.idle_hide_ms,
+                }),
+                io);
+        },
+        .mac_background_feedback_style = [](const MacBackgroundFeedbackStyleOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_feedback_style(kiseki::platform::session::MacCuaFeedbackStyleOptions{
+                    .has_gradient_colors = options.has_gradient_colors,
+                    .gradient_colors = options.gradient_colors,
+                    .has_bloom_color = options.has_bloom_color,
+                    .bloom_color = options.bloom_color,
+                    .has_image_path = options.has_image_path,
+                    .image_path = options.image_path,
+                    .reset = options.reset,
+                }),
+                io);
+        },
+        .mac_background_feedback_preset = [](const MacBackgroundFeedbackPresetOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::session::macos_cua_feedback_preset(kiseki::platform::session::MacCuaFeedbackPresetOptions{
+                    .name = options.name,
+                }),
+                io);
+        },
         .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
             return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
         },
@@ -811,6 +969,12 @@ int run(
     TargetInspectOptions target_inspect_options{
         .target = {},
     };
+    ObserveUiOptions observe_ui_options{
+        .target = {},
+        .provider = "auto",
+        .max_depth = 4,
+        .max_elements = 256,
+    };
     ScreenshotWindowOptions window_options{
         .target = {},
         .output_path = {},
@@ -850,6 +1014,9 @@ int run(
     InputDragOptions drag_options{
         .path = {},
         .backend = "auto",
+        .step_delay_ms = 2,
+        .start_hold_ms = 0,
+        .end_hold_ms = 0,
     };
     BackgroundTextOptions background_text_options{
         .target = {},
@@ -981,10 +1148,57 @@ int run(
         .button = "left",
         .modifiers = {},
     };
+    MacBackgroundDrawOptions mac_background_draw_options{
+        .pid = 0,
+        .window_id = 0,
+        .path = {},
+        .duration_ms = 120,
+        .steps = 6,
+        .stroke_gap_ms = 0,
+        .max_segments = 96,
+        .button = "left",
+        .modifiers = {},
+    };
+    MacBackgroundFeedbackStatusOptions mac_background_feedback_status_options{};
+    MacBackgroundFeedbackEnableOptions mac_background_feedback_enable_options{
+        .enabled = true,
+    };
+    MacBackgroundFeedbackMotionOptions mac_background_feedback_motion_options{
+        .has_start_handle = false,
+        .start_handle = 0.0,
+        .has_end_handle = false,
+        .end_handle = 0.0,
+        .has_arc_size = false,
+        .arc_size = 0.0,
+        .has_arc_flow = false,
+        .arc_flow = 0.0,
+        .has_spring = false,
+        .spring = 0.0,
+        .has_glide_duration_ms = false,
+        .glide_duration_ms = 0.0,
+        .has_dwell_after_click_ms = false,
+        .dwell_after_click_ms = 0.0,
+        .has_idle_hide_ms = false,
+        .idle_hide_ms = 0.0,
+    };
+    MacBackgroundFeedbackStyleOptions mac_background_feedback_style_options{
+        .reset = false,
+        .has_gradient_colors = false,
+        .gradient_colors = {},
+        .has_bloom_color = false,
+        .bloom_color = "",
+        .has_image_path = false,
+        .image_path = {},
+    };
+    MacBackgroundFeedbackPresetOptions mac_background_feedback_preset_options{
+        .name = "natural",
+    };
     std::string mac_background_click_modifiers;
     std::string mac_background_key_modifiers;
     std::string mac_background_hotkey_keys;
     std::string mac_background_drag_modifiers;
+    std::string mac_background_draw_modifiers;
+    std::string mac_background_feedback_style_gradient_colors;
     DaemonOptions daemon_options{
         .once = false,
     };
@@ -1058,6 +1272,22 @@ int run(
             return;
         }
         exit_code = dependencies.inspect_target(target_inspect_options, io);
+    });
+
+    auto* observe = app.add_subcommand("observe", "Non-visual observation commands");
+    observe->require_subcommand(1);
+    auto* observe_ui = observe->add_subcommand("ui", "Read non-visual UI/window structure for a target");
+    add_target_options(observe_ui, observe_ui_options.target);
+    observe_ui->add_option("--provider", observe_ui_options.provider, "auto, window-tree, uia, or ax");
+    observe_ui->add_option("--max-depth", observe_ui_options.max_depth, "Maximum UI tree depth for structured providers");
+    observe_ui->add_option("--max-elements", observe_ui_options.max_elements, "Maximum UI elements to return before marking output truncated");
+    observe_ui->callback([&]() {
+        if (!dependencies.observe_ui) {
+            io.err << "observe ui backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.observe_ui(observe_ui_options, io);
     });
 
     auto* screenshot = app.add_subcommand("screenshot", "Screenshot commands");
@@ -1247,6 +1477,9 @@ int run(
     auto* input_drag = input->add_subcommand("drag", "Drag the left mouse button through absolute points from a text file");
     input_drag->add_option("--file", drag_options.path, "Mouse path file: one 'x y' point per line")->required();
     input_drag->add_option("--backend", drag_options.backend, "auto, driver, or system");
+    input_drag->add_option("--step-delay-ms", drag_options.step_delay_ms, "Delay after each drag point in milliseconds");
+    input_drag->add_option("--start-hold-ms", drag_options.start_hold_ms, "Delay after mouse down before movement starts");
+    input_drag->add_option("--end-hold-ms", drag_options.end_hold_ms, "Delay before mouse up after the last point");
     input_drag->callback([&]() {
         if (!dependencies.input_drag) {
             io.err << "input drag backend is not configured\n";
@@ -1640,6 +1873,125 @@ int run(
         mac_background_drag_options.has_window_id = mac_background_drag_window_id->count() > 0;
         mac_background_drag_options.modifiers = split_delimited_values(mac_background_drag_modifiers);
         exit_code = dependencies.mac_background_drag(mac_background_drag_options, io);
+    });
+
+    auto* mac_background_draw = mac_background->add_subcommand("draw", "Draw a point path inside a macOS target window through Cua Driver");
+    mac_background_draw->add_option("--pid", mac_background_draw_options.pid, "Target process id")->required();
+    mac_background_draw->add_option("--window-id", mac_background_draw_options.window_id, "Target CGWindowID")->required();
+    mac_background_draw->add_option("--file", mac_background_draw_options.path, "Plain text point path file: one 'x y' point per line")->required();
+    mac_background_draw->add_option("--duration-ms", mac_background_draw_options.duration_ms, "Duration for each drag segment in milliseconds");
+    mac_background_draw->add_option("--steps", mac_background_draw_options.steps, "Interpolation steps for each drag segment");
+    mac_background_draw->add_option("--stroke-gap-ms", mac_background_draw_options.stroke_gap_ms, "Delay between drag segments in milliseconds");
+    mac_background_draw->add_option("--max-segments", mac_background_draw_options.max_segments, "Maximum CUA drag segments accepted from the point file");
+    mac_background_draw->add_option("--button", mac_background_draw_options.button, "left, right, or middle");
+    mac_background_draw->add_option("--modifiers", mac_background_draw_modifiers, "Comma or plus separated modifier keys");
+    mac_background_draw->callback([&]() {
+        if (!dependencies.mac_background_draw) {
+            io.err << "mac-background draw backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_draw_options.modifiers = split_delimited_values(mac_background_draw_modifiers);
+        exit_code = dependencies.mac_background_draw(mac_background_draw_options, io);
+    });
+
+    auto* mac_background_feedback = mac_background->add_subcommand("feedback", "Tune Cua Driver's visual agent-cursor feedback");
+    mac_background_feedback->require_subcommand(1);
+
+    auto* mac_background_feedback_status = mac_background_feedback->add_subcommand("status", "Print the current Cua Driver agent-cursor state");
+    mac_background_feedback_status->callback([&]() {
+        if (!dependencies.mac_background_feedback_status) {
+            io.err << "mac-background feedback status backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_feedback_status(mac_background_feedback_status_options, io);
+    });
+
+    auto* mac_background_feedback_enable = mac_background_feedback->add_subcommand("enable", "Enable or disable the Cua Driver visual agent cursor");
+    mac_background_feedback_enable->add_option("--enabled", mac_background_feedback_enable_options.enabled, "true to show the overlay cursor, false to hide it")->required();
+    mac_background_feedback_enable->callback([&]() {
+        if (!dependencies.mac_background_feedback_enable) {
+            io.err << "mac-background feedback enable backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_feedback_enable(mac_background_feedback_enable_options, io);
+    });
+
+    auto* mac_background_feedback_motion = mac_background_feedback->add_subcommand("motion", "Tune Cua Driver agent-cursor motion knobs");
+    auto* mac_background_feedback_motion_start = mac_background_feedback_motion->add_option("--start-handle", mac_background_feedback_motion_options.start_handle, "Bezier start handle fraction");
+    auto* mac_background_feedback_motion_end = mac_background_feedback_motion->add_option("--end-handle", mac_background_feedback_motion_options.end_handle, "Bezier end handle fraction");
+    auto* mac_background_feedback_motion_arc_size = mac_background_feedback_motion->add_option("--arc-size", mac_background_feedback_motion_options.arc_size, "Perpendicular arc deflection fraction");
+    auto* mac_background_feedback_motion_arc_flow = mac_background_feedback_motion->add_option("--arc-flow", mac_background_feedback_motion_options.arc_flow, "Arc asymmetry bias");
+    auto* mac_background_feedback_motion_spring = mac_background_feedback_motion->add_option("--spring", mac_background_feedback_motion_options.spring, "Settle damping");
+    auto* mac_background_feedback_motion_glide = mac_background_feedback_motion->add_option("--glide-duration-ms", mac_background_feedback_motion_options.glide_duration_ms, "Cursor flight duration");
+    auto* mac_background_feedback_motion_dwell = mac_background_feedback_motion->add_option("--dwell-after-click-ms", mac_background_feedback_motion_options.dwell_after_click_ms, "Pause after click ripple");
+    auto* mac_background_feedback_motion_idle = mac_background_feedback_motion->add_option("--idle-hide-ms", mac_background_feedback_motion_options.idle_hide_ms, "Overlay linger time after last action");
+    mac_background_feedback_motion->callback([&]() {
+        if (!dependencies.mac_background_feedback_motion) {
+            io.err << "mac-background feedback motion backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_feedback_motion_options.has_start_handle = mac_background_feedback_motion_start->count() > 0;
+        mac_background_feedback_motion_options.has_end_handle = mac_background_feedback_motion_end->count() > 0;
+        mac_background_feedback_motion_options.has_arc_size = mac_background_feedback_motion_arc_size->count() > 0;
+        mac_background_feedback_motion_options.has_arc_flow = mac_background_feedback_motion_arc_flow->count() > 0;
+        mac_background_feedback_motion_options.has_spring = mac_background_feedback_motion_spring->count() > 0;
+        mac_background_feedback_motion_options.has_glide_duration_ms = mac_background_feedback_motion_glide->count() > 0;
+        mac_background_feedback_motion_options.has_dwell_after_click_ms = mac_background_feedback_motion_dwell->count() > 0;
+        mac_background_feedback_motion_options.has_idle_hide_ms = mac_background_feedback_motion_idle->count() > 0;
+        if (!(mac_background_feedback_motion_options.has_start_handle ||
+              mac_background_feedback_motion_options.has_end_handle ||
+              mac_background_feedback_motion_options.has_arc_size ||
+              mac_background_feedback_motion_options.has_arc_flow ||
+              mac_background_feedback_motion_options.has_spring ||
+              mac_background_feedback_motion_options.has_glide_duration_ms ||
+              mac_background_feedback_motion_options.has_dwell_after_click_ms ||
+              mac_background_feedback_motion_options.has_idle_hide_ms)) {
+            io.err << "mac-background feedback motion requires at least one motion option\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_feedback_motion(mac_background_feedback_motion_options, io);
+    });
+
+    auto* mac_background_feedback_style = mac_background_feedback->add_subcommand("style", "Tune Cua Driver agent-cursor colors or custom image");
+    mac_background_feedback_style->add_flag("--reset", mac_background_feedback_style_options.reset, "Reset agent-cursor style to Cua Driver defaults");
+    auto* mac_background_feedback_style_gradient = mac_background_feedback_style->add_option("--gradient-colors", mac_background_feedback_style_gradient_colors, "Comma or plus separated CSS hex colors");
+    auto* mac_background_feedback_style_bloom = mac_background_feedback_style->add_option("--bloom-color", mac_background_feedback_style_options.bloom_color, "CSS hex color for halo and focus rect");
+    auto* mac_background_feedback_style_image = mac_background_feedback_style->add_option("--image-path", mac_background_feedback_style_options.image_path, "Path to PNG/JPEG/PDF/SVG cursor image, or empty path to clear");
+    mac_background_feedback_style->callback([&]() {
+        if (!dependencies.mac_background_feedback_style) {
+            io.err << "mac-background feedback style backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        mac_background_feedback_style_options.has_gradient_colors = mac_background_feedback_style_gradient->count() > 0;
+        mac_background_feedback_style_options.gradient_colors = split_delimited_values(mac_background_feedback_style_gradient_colors);
+        mac_background_feedback_style_options.has_bloom_color = mac_background_feedback_style_bloom->count() > 0;
+        mac_background_feedback_style_options.has_image_path = mac_background_feedback_style_image->count() > 0;
+        if (!(mac_background_feedback_style_options.reset ||
+              mac_background_feedback_style_options.has_gradient_colors ||
+              mac_background_feedback_style_options.has_bloom_color ||
+              mac_background_feedback_style_options.has_image_path)) {
+            io.err << "mac-background feedback style requires --reset or at least one style option\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_feedback_style(mac_background_feedback_style_options, io);
+    });
+
+    auto* mac_background_feedback_preset = mac_background_feedback->add_subcommand("preset", "Apply a named Cua Driver agent-cursor feedback preset");
+    mac_background_feedback_preset->add_option("--name", mac_background_feedback_preset_options.name, "natural, fast, recording, or quiet");
+    mac_background_feedback_preset->callback([&]() {
+        if (!dependencies.mac_background_feedback_preset) {
+            io.err << "mac-background feedback preset backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.mac_background_feedback_preset(mac_background_feedback_preset_options, io);
     });
 
     auto* daemon = app.add_subcommand("daemon", "Background daemon commands");

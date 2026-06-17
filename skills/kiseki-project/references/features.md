@@ -40,6 +40,16 @@ Screenshots:
 - If burst options are omitted or zero, defaults come from config.
 - Supported format is currently BMP.
 
+Non-visual observation:
+
+- `kiseki observe ui --target-title <text> [--provider auto|window-tree|uia|ax] [--max-depth <n>] [--max-elements <n>]` reads structured UI data without screenshots, OCR, or vision models.
+- `window-tree` source is `platform-window-tree`: selected top-level window plus child receiver handles when the platform backend exposes them.
+- `uia` source is `windows-uia`: Windows UI Automation control-view data with names, automation ids, class names, localized control types, bounds, enabled/offscreen state, and process id when the target exposes them.
+- `ax` source is `macos-ax`: macOS Accessibility API data, matching the structured element surface used by Accessibility Inspector, with role, subrole, title/name, description, value, identifier, bounds, and enabled state when the target exposes them.
+- `auto` prefers the deepest native provider available and reports the actual `source`. If it falls back, JSON includes `fallbackReason`; explicit providers fail instead of silently downgrading.
+- Future deeper providers should keep the same shape: CUA state, Linux AT-SPI, browser CDP, and app-native scripting APIs.
+- Do not describe `observe ui` as visual understanding. It is structured observation from platform/app APIs and must report its source in JSON.
+
 Input:
 
 - `kiseki input key --key <name> [--backend auto|driver|system]`
@@ -48,7 +58,7 @@ Input:
 - `kiseki input text --file <utf8-file>`
 - `kiseki input mouse --dx <n> --dy <n> [--click ...] [--backend ...]`
 - `kiseki input mouse --x <n> --y <n> [--absolute] [--click ...] [--backend ...]`
-- `kiseki input drag --file <points.txt> [--backend auto|driver|system]`
+- `kiseki input drag --file <points.txt> [--backend auto|driver|system] [--step-delay-ms <n>] [--start-hold-ms <n>] [--end-hold-ms <n>]`
 - `kiseki input background-text --target-title <text> --text <text>`
 - `kiseki input background-key --target-title <text> --key <name>`
 - `kiseki input background-mouse --target-title <text> --x <n> --y <n> [--click ...]`
@@ -78,6 +88,12 @@ macOS CUA background provider:
 - `kiseki mac-background key --pid <pid> --key <name>`
 - `kiseki mac-background hotkey --pid <pid> --keys <cmd+c>`
 - `kiseki mac-background drag --pid <pid> --window-id <id> --from-x <n> --from-y <n> --to-x <n> --to-y <n>`
+- `kiseki mac-background draw --pid <pid> --window-id <id> --file <points.txt> [--duration-ms <n>] [--steps <n>]`
+- `kiseki mac-background feedback status`
+- `kiseki mac-background feedback enable --enabled <true|false>`
+- `kiseki mac-background feedback motion [--start-handle <n>] [--end-handle <n>] [--arc-size <n>] [--arc-flow <n>] [--spring <n>] [--glide-duration-ms <n>] [--dwell-after-click-ms <n>] [--idle-hide-ms <n>]`
+- `kiseki mac-background feedback style [--reset] [--gradient-colors <#hex,#hex>] [--bloom-color <#hex>] [--image-path <path>]`
+- `kiseki mac-background feedback preset --name natural|fast|recording|quiet`
 
 Macros:
 
@@ -174,15 +190,22 @@ Linux:
 
 macOS:
 
-- macOS has an initial native backend in the codebase.
+- macOS has a native current-session backend and an optional CUA background provider.
 - Config path uses `~/Library/Application Support/KisekiInput/config.json`.
 - Target listing uses Apple Window Services in the active GUI session.
 - Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission.
 - Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission.
+- `kiseki input ...` commands are global/current-session operations; they can move the real pointer or depend on focus.
 - Target-window background input is not reported available until a target-specific automation backend exists.
-- Optional CUA background operation uses `cua-driver` when installed and authorized.
+- Optional CUA background operation uses `cua-driver` when installed and authorized, and is exposed only through `kiseki mac-background ...`.
 - CUA binary lookup checks `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, then `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`.
-- Release-grade support still requires real macOS build, permission, and live desktop validation.
+- CUA coordinates are window-local screenshot coordinates for commands that take `--window-id`.
+- CUA action commands run without a declared session by default for reliable one-shot CLI use. Set `KISEKI_CUA_SESSION` to a fresh per-run id when the agent-cursor overlay should follow a sequence of actions.
+- Use `input drag --file` for continuous foreground drawing when taking the current pointer/focus is acceptable. For drawing apps, prepare the target state first: pick the brush/shape tool, set a visible foreground color, and use `--start-hold-ms`/`--step-delay-ms` when the app needs slower pointer cadence.
+- Use `mac-background draw --file` for target-routed CUA drawing; it composes sparse point paths into drag segments and should be verified with `mac-background screenshot` or `mac-background state`. Dense sampled paths should stay on foreground `input drag`; CUA draw has `--max-segments` to prevent accidental long-running segment storms.
+- CUA drag behavior still depends on target state: a frontmost target may use a HID-style path with visible real-cursor movement, while a backgrounded target uses CUA's pid-routed cursor-neutral path. Some canvas/OpenGL-style surfaces can reject pid-routed dragged events and must be reported as target-specific behavior.
+- `mac-background feedback ...` controls CUA's visual agent-cursor overlay only; it is not the system pointer.
+- Public support claims require real macOS build, permission, and live desktop validation.
 - Roadmap details live in `docs/roadmap.md`.
 
 ## Capability Limits

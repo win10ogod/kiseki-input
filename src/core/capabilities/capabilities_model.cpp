@@ -19,9 +19,14 @@ CapabilityMatrix foundation_capabilities() {
             .background_desktop = false,
             .macos_cua_background = false,
         },
+        .observation = ObservationCapabilities{
+            .window_tree = false,
+            .windows_uia = false,
+            .macos_ax = false,
+        },
         .limitations = {
             "foundation build exposes configuration and WebUI only",
-            "input, screenshot, target, notification, and daemon backends are separate implementation slices",
+            "input, screenshot, target, observation, notification, and daemon backends are separate implementation slices",
             "background-window input depends on whether the target accepts system window messages or public automation events",
         },
     };
@@ -43,6 +48,11 @@ nlohmann::json to_json(const CapabilityMatrix& capabilities) {
         {"session", {
             {"backgroundDesktop", capabilities.session.background_desktop},
             {"macosCuaBackground", capabilities.session.macos_cua_background},
+        }},
+        {"observation", {
+            {"windowTree", capabilities.observation.window_tree},
+            {"windowsUia", capabilities.observation.windows_uia},
+            {"macosAx", capabilities.observation.macos_ax},
         }},
         {"limitations", capabilities.limitations},
     };
