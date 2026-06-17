@@ -80,6 +80,8 @@ Visually inspect the screenshot. Expected visible text: `WSADFGHJKL, 你好`.
 
 ## Paint Drag Recipe
 
+For nontrivial drawing app work, read `references/drawing-apps.md` first. The short recipe below is only a smoke test; real drawing tests must verify target, mode, coordinate space, tool, visible color, and before/after screenshots.
+
 Create `artifacts/live-test/heart-points.txt` with `apply_patch`:
 
 ```text
@@ -105,7 +107,7 @@ Then run:
 ./build/Debug/kiseki.exe screenshot desktop --output artifacts/live-test/paint-heart.bmp
 ```
 
-Use `input drag` instead of separate `mouse left-down`, move, and `left-up` commands for drawing tests, because one process preserves button state more reliably.
+Use `input drag` instead of separate `mouse left-down`, move, and `left-up` commands for drawing tests, because one process preserves button state more reliably. If the after-screenshot is blank, check tool, visible foreground color, canvas coordinates, and timing before blaming the input backend.
 Use `observe ui` before screenshot-based verification when the task can be answered from platform/app structure. It must produce structured JSON without invoking screenshots, OCR, or visual model parsing. On Windows, verify both strict UIA and fallback behavior when relevant:
 
 ```bash

@@ -1,6 +1,6 @@
 ---
 name: kiseki-project
-description: Use when working inside the Kiseki Input repository on CLI commands, configuration WebUI, screenshot capture, keyboard or mouse input, heartbeat notifications, platform backends, live Windows tests, Linux true-machine tests, build/test verification, or project documentation.
+description: Use when working inside the Kiseki Input repository on CLI commands, configuration WebUI, screenshot capture, keyboard or mouse input, drawing-app automation, heartbeat notifications, platform backends, live Windows tests, Linux true-machine tests, build/test verification, or project documentation.
 ---
 
 # Kiseki Project
@@ -18,6 +18,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - Do not overclaim game background input. It depends on whether the target accepts system window messages or public automation events.
 - macOS true background app operation uses the optional Cua Driver provider through `kiseki mac-background ...`. Do not claim it is available unless `cua-driver` is installed and the Mac has Accessibility and Screen Recording permissions.
 - On macOS, distinguish global/current-session `kiseki input ...` commands from target-routed CUA `kiseki mac-background ...` commands. Do not describe the CUA overlay cursor as the real system pointer.
+- For drawing software work, read `references/drawing-apps.md` before acting. Do not draw until the target window, operation mode, canvas area, tool, visible color, and before-screenshot are established.
 
 ## Project Anchors
 
@@ -44,3 +45,4 @@ For macOS CUA work, verify `kiseki mac-background status`, `launch`, `windows`, 
 - Full feature map: `references/features.md`
 - Architecture and extension points: `references/architecture.md`
 - Build, unit tests, and live UI recipes: `references/testing.md`
+- Drawing app operation guide: `references/drawing-apps.md`
