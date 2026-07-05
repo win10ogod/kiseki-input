@@ -956,6 +956,7 @@ void write_skill_file(
     file << "4. Read `timeline.json` to align actions with selected keyframes.\n";
     file << "5. Inspect only the keyframes listed in `manifest.json` unless more visual detail is needed from `frames.json`.\n";
     file << "6. Apply `annotations.json` as frame/action-specific guidance.\n";
+    file << "7. To turn this recording into a reusable Codex skill, use the repo skill `kiseki-teach-recording` and follow `references/skill-generation.md`; helper scripts validate and scaffold, while the LLM agent performs semantic compilation.\n";
 }
 
 struct FrameRecord {

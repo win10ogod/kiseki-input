@@ -1,13 +1,13 @@
 ---
 name: kiseki-teach-recording
-description: Use when working in the Kiseki Input repo to create, inspect, validate, or document Agivar-style screen teaching recordings, including `kiseki teach record`, keyframe/action timelines, optional video/audio/transcript attachments, `teach annotate`, WebUI Teaching-tab review, or tests proving a teaching bundle is usable by humans and agents.
+description: Use when working in the Kiseki Input repo to create, inspect, validate, document, or compile Agivar-style screen teaching recordings into reusable Codex skills, including `kiseki teach record`, keyframe/action timelines, optional video/audio/transcript attachments, `teach annotate`, WebUI Teaching-tab review, or generating a new skill from a teaching bundle.
 ---
 
 # Kiseki Teach Recording
 
 ## Purpose
 
-Use this skill to turn a human screen demonstration into a compact teaching bundle: native input events plus keyframes, optional human text, optional real video/audio/transcript files, and targeted annotations. Keep the Agivar-style rule intact: the agent-facing source of truth is the action timeline plus selected keyframes, not full video analysis.
+Use this skill to turn a human screen demonstration into a compact teaching bundle and, when requested, compile that bundle into a reusable Codex skill. Keep the Agivar-style rule intact: the agent-facing source of truth is the action timeline plus selected keyframes, not full video analysis.
 
 ## Workflow
 
@@ -55,11 +55,19 @@ rm -rf artifacts/live-test/teach-demo artifacts/live-test/teach-demo-state.json
 
 6. For human review, open `kiseki config-ui`, switch to the Teaching tab, select the bundle directory, and verify keyframes/events/instruction/transcript/annotations render. This is local file viewing only; the WebUI must not gain operational API routes.
 
+7. When the user asks to teach an agent, create a new skill from a recording, or turn a bundle into reusable procedure, read `references/skill-generation.md`. The LLM-driven agent is the semantic compiler. Use scripts only for deterministic validation, indexing, and draft scaffolding:
+
+```bash
+python3 skills/kiseki-teach-recording/scripts/validate_bundle.py artifacts/live-test/teach-demo
+python3 skills/kiseki-teach-recording/scripts/draft_skill_from_bundle.py artifacts/live-test/teach-demo --output-root skills --name <new-skill-name>
+```
+
 ## Rules
 
 - Do not create fake audio, fake transcript, or placeholder media. If audio is unavailable, use `--text` or `--text-file`.
 - Do not claim a teaching bundle is effective unless `manifest.json`, `frames.json`, `actions.json`, `timeline.json`, `events.jsonl`, `annotations.json`, `SKILL.md`, and at least one selected keyframe parse successfully.
 - Treat `actions.json` plus selected keyframes as the primary agent-facing teaching data. `events.jsonl` is the raw native event log.
+- A teaching bundle is not the final reusable skill. The LLM-driven agent must compile it into a new skill by extracting stable intent, prerequisites, procedure, verification, and failure handling from the bundle.
 - If a real `--video-file` is attached, verify `video_keyframes/index.json` when extraction is enabled. Missing `ffmpeg` should be reported as a warning, not silently ignored.
 - Do not use desktop screenshot verification to prove background actions. Teaching recording is current-session capture unless the recorded workflow explicitly uses a background command family and matching background screenshot.
 - On macOS, run `kiseki permissions macos screen-recording --prompt --open-settings` from the same GUI Terminal/app before recording if keyframes fail or no Screen Recording prompt appears. SSH-launched binaries can have different TCC permission context.
@@ -70,3 +78,4 @@ rm -rf artifacts/live-test/teach-demo artifacts/live-test/teach-demo-state.json
 ## References
 
 - Bundle schema and validation checklist: `references/bundle-validation.md`
+- Compile a teaching bundle into a reusable skill: `references/skill-generation.md`
