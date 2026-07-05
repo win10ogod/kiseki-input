@@ -25,7 +25,7 @@ consteval bool default_capture_capabilities_fail_closed() {
 
 consteval bool default_session_capabilities_fail_closed() {
     SessionCapabilities capabilities;
-    return !capabilities.background_desktop && !capabilities.macos_cua_background;
+    return !capabilities.background_desktop && !capabilities.cua_background && !capabilities.macos_cua_background;
 }
 
 consteval bool default_observation_capabilities_fail_closed() {
@@ -53,6 +53,7 @@ TEST_CASE("foundation capabilities include explicit limitations") {
     REQUIRE(json["capture"]["region"].get<bool>() == false);
     REQUIRE(json["capture"]["burst"].get<bool>() == false);
     REQUIRE(json["session"]["backgroundDesktop"].get<bool>() == false);
+    REQUIRE(json["session"]["cuaBackground"].get<bool>() == false);
     REQUIRE(json["session"]["macosCuaBackground"].get<bool>() == false);
     REQUIRE(json["observation"]["windowTree"].get<bool>() == false);
     REQUIRE(json["observation"]["windowsUia"].get<bool>() == false);

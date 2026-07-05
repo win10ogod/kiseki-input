@@ -15,6 +15,8 @@ Windows is the primary live-tested platform today.
 - Global keyboard and mouse input through the configured backend.
 - Direct selected-window input where the selected target accepts the relevant Windows APIs.
 - Optional `IbInputSimulator.dll` integration when the DLL can be built and loaded.
+- Optional CUA Driver provider through `background cua` when `cua-driver` is installed in the interactive desktop session.
+- Operation mode guidance through `modes --json`, separating current-session input, current-session screenshots, background screenshots, isolated background desktops, and CUA target-routed commands.
 
 ### Linux
 
@@ -26,6 +28,7 @@ Linux support currently targets graphical X11 sessions and true-machine validati
 - X11/XTest global input where the active session accepts it.
 - X11 target-window events where the selected target accepts them.
 - Isolated Xvfb background desktops for running, clicking, typing into, and capturing Linux GUI applications on a separate `DISPLAY`.
+- Optional CUA Driver provider through `background cua`; upstream CUA currently marks Linux as pre-release while platform testing continues.
 
 Wayland and compositor-restricted sessions need their own backend work. WSL-only results are not treated as Linux desktop proof.
 
@@ -35,18 +38,29 @@ macOS support is split into two explicit paths.
 
 - Native current-session backend: config, diagnostics, config-only WebUI, target listing, ScreenCaptureKit screenshots, burst screenshots, and Quartz CGEvent global input.
 - Optional CUA background provider: background app launch, CUA window listing/state, per-window screenshot, targeted click/text/key/hotkey/drag, point-path drawing, and configurable agent-cursor visual feedback.
-- Native input commands can affect the active GUI session and real pointer/focus. CUA commands live under `mac-background` and require a target PID/window id where applicable.
+- Native input commands can affect the active GUI session and real pointer/focus. CUA commands live under `background cua`.
 - Both paths depend on the user's macOS permissions: Screen Recording for capture and Accessibility for input/action routing.
 
 ## Current Background Strategy
 
 Hyper-V, Virtual Desktop, and Desktop Object are not part of the current implementation track.
 
-Windows keeps background work scoped to observation: `screenshot background-window` captures a selected target window without introducing a separate Windows session backend. Direct selected-window input remains available where an application accepts the same-session Windows APIs, but it is not presented as a universal background operation method.
+Windows native background work remains scoped to observation: `background window screenshot` captures a selected target window without introducing a separate Windows session backend. Direct selected-window input remains available where an application accepts the same-session Windows APIs, but it is not presented as a universal background operation method. CUA Driver is a separate optional provider line exposed through `background cua`.
 
 Linux first uses true background desktop operation: create an isolated X11 desktop with Xvfb, launch applications inside that `DISPLAY`, then use the normal Linux X11 screenshot and XTest input paths against that isolated desktop. This avoids taking over the user's physical Linux desktop session.
 
-macOS uses a separate optional provider line for true background app operation: Cua Driver. Kiseki keeps the native ScreenCaptureKit/Quartz paths for baseline platform support, and exposes CUA through `mac-background` for agent workflows that need background launch, per-window observation, and target-routed actions.
+CUA Driver is the cross-platform optional provider line for background app operation. Kiseki keeps the native Windows, Linux, and macOS paths for baseline platform support, and exposes CUA through `background cua` for agent workflows that need background launch, per-window observation, and target-routed actions.
+
+## CUA Driver Line
+
+CUA support is optional and runtime-detected. Installing `cua-driver` should not become a build requirement for Kiseki.
+
+- Preferred command surface: `kiseki background cua ...`.
+- Detect `cua-driver` from `PATH` or `KISEKI_CUA_DRIVER`; platform-specific default install locations are probed where known.
+- Windows support requires CUA's installed driver in an interactive desktop session.
+- Linux support follows upstream CUA's pre-release status and needs true graphical Linux validation, not WSL-only proof.
+- macOS support still requires Accessibility and Screen Recording permissions.
+- Public claims should distinguish CUA binary detection, CUA permission/status output, and live-verified target action artifacts.
 
 ## macOS Line
 
@@ -94,7 +108,7 @@ For agent workflows, structured automation and Accessibility-backed interaction 
 ### macOS Phase 5: CUA Background Provider
 
 - Detect `cua-driver` from `PATH`, `KISEKI_CUA_DRIVER`, or `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`.
-- Expose CLI-only `mac-background` commands for CUA permission status, background app launch, window listing, window state, screenshot, click, text, key, hotkey, drag, point-path drawing, and agent-cursor feedback.
+- Expose CLI-only `background cua` commands for CUA permission status, background app launch, window listing, window state, screenshot, click, text, key, hotkey, drag, point-path drawing, and agent-cursor feedback.
 - Keep CUA as an optional provider, not a hard dependency, so the native macOS backend remains usable without it.
 - Continue validating on real macOS hardware with Accessibility and Screen Recording grants before expanding public claims or demos.
 

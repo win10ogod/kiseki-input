@@ -9,7 +9,7 @@
 - `src/platform/input/`: keyboard, text, mouse, and drag backends.
 - `src/platform/notification/`: heartbeat notification and daemon loop.
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.
-- `src/platform/session/`: Linux Xvfb background desktop lifecycle and optional macOS CUA provider wrapper.
+- `src/platform/session/`: Linux Xvfb background desktop lifecycle and optional CUA Driver provider wrapper.
 - `src/platform/target/`: platform target-window listing and resolver for title, PID, and window id selectors.
 - `src/webui/`: embedded static assets, config-only API, HTTP server.
 - `test/`: Catch2 unit tests.
@@ -26,6 +26,8 @@ Keep these boundaries intact:
 - Observation commands such as `observe ui` are CLI-only. They should read structured system/app state and must not call screenshot/OCR/vision backends. Windows `uia` uses UI Automation; macOS `ax` uses Accessibility API data equivalent to the Accessibility Inspector element tree. Provider fallback must be explicit in the output; strict provider requests should fail instead of silently downgrading.
 - Platform code should expose small C++ functions returning `OperationResult` or `CaptureResult`.
 - CLI commands should be testable through injected dependencies in `kiseki::cli::Dependencies`.
+- Keep mode semantics visible at the CLI boundary: `input ...` and `screenshot ...` are current-session/non-background families, while `background ...` owns selected-window, isolated-display, and CUA target-routed background families. `kiseki modes --json` is the machine-readable contract for this split.
+- Background actions must be verified with the matching background screenshot family, not with `screenshot desktop`.
 
 ## Adding CLI Commands
 
@@ -34,6 +36,7 @@ Keep these boundaries intact:
 3. Add focused CLI tests in `test/cli/cli_app_test.cpp`.
 4. Keep operation code in the relevant platform/core module, not directly inside parser callbacks.
 5. Use exit code `2` for user/config/backend errors.
+6. For background operations, prefer the integrated `background ...` command group and route to existing backend slices through command normalization instead of duplicating platform callbacks.
 
 ## Adding Config Fields
 
@@ -66,12 +69,21 @@ Linux:
 macOS:
 
 - Keep native ScreenCaptureKit/Quartz support separate from the optional CUA provider.
-- `src/platform/session/macos_cua.*` shells out to `cua-driver`; do not make CUA a hard build dependency.
-- `mac-background` commands are CLI-only and must not add WebUI operation routes.
-- Treat `kiseki input ...` on macOS as global/current-session input. Treat `kiseki mac-background ...` as the target-routed CUA background path.
-- For drawing workflows, keep foreground `input drag --file` and CUA `mac-background draw --file` separate. The former uses the active pointer path and is appropriate for dense sampled strokes with configurable delay; the latter sends sparse window-local CUA drag segments and must be verified with CUA screenshot/state.
-- `mac-background feedback ...` is only visual agent-cursor feedback for CUA actions. It must not be described as moving the real system pointer.
-- Treat CUA support as live only after verifying `status`, launch/window listing, screenshot/state, and at least one action command on a real logged-in macOS GUI session with permissions granted.
+- `src/platform/session/macos_cua.*` shells out to `cua-driver`; despite the historical filename, the wrapper is the optional cross-platform CUA Driver bridge. Do not make CUA a hard build dependency.
+- `background cua` commands are CLI-only and must not add WebUI operation routes. Older direct CUA/background command families are removed from the public CLI.
+- Treat `kiseki input ...` on macOS as global/current-session input. Treat `kiseki background cua ...` as the target-routed CUA background path.
+- For drawing workflows, keep foreground `input drag --file` and CUA `background cua draw` separate. The former uses the active pointer path and is appropriate for dense sampled strokes with configurable delay; the latter sends sparse window-local CUA drag segments and must be verified with CUA screenshot/state.
+- `background cua feedback ...` is only visual agent-cursor feedback for CUA actions. It must not be described as moving the real system pointer.
+- Treat CUA support as live only after verifying `status`, launch/window listing, screenshot/state, and at least one action command on a real logged-in GUI session with required platform permissions granted.
+
+CUA Driver:
+
+- Keep CUA as an optional runtime provider selected by `background cua`, separate from native screenshot/input implementations.
+- Detect the binary from `KISEKI_CUA_DRIVER`, `PATH`, and known platform install locations.
+- Pass JSON arguments through stdin rather than fragile shell-quoted JSON command-line arguments.
+- Do not infer live support from binary presence. `session.cuaBackground` means the binary is discoverable; live support needs CUA status plus target action artifacts.
+- Windows CUA runs in the interactive desktop session where the installed driver is available.
+- Linux CUA follows upstream pre-release status and requires true graphical Linux validation.
 
 Windows selected-window:
 
@@ -81,9 +93,9 @@ Windows selected-window:
 
 Windows background screenshot:
 
-- Keep Windows background work scoped to observation through `screenshot background-window`.
+- Keep Windows background work scoped to observation through `background window screenshot`.
 - Do not introduce a separate Windows session backend for the current project direction.
-- Selected-window input remains a compatibility helper for targets that accept normal Windows messages; do not describe it as universal background operation.
+- Selected-window input remains a message/API helper for targets that accept normal Windows messages; do not describe it as universal background operation.
 - Background screenshot should use target selectors and the selected-window capture backend without activating the target.
 
 ## WebUI Asset Rule

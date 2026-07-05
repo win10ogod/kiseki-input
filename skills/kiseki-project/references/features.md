@@ -6,6 +6,29 @@ Global:
 
 - `kiseki --config <path> ...` overrides the active config path.
 - `kiseki --version` prints the version.
+- `kiseki modes [--json]` prints the operation and screenshot mode guide. Use `--json` for weak-model or agent handoff.
+
+## Mode Selection Contract
+
+Strict command split:
+
+- `kiseki input ...` is current-session/non-background operation. It may use active focus or the real pointer.
+- `kiseki screenshot ...` is current-session/non-background capture, even when it selects a target window.
+- `kiseki background ...` is background, isolated-session, or target-routed operation/capture.
+- `kiseki observe ui ...` is structured observation. It is neither a screenshot nor an input operation.
+
+Screenshot families:
+
+- Non-background screenshots: `screenshot desktop`, `screenshot burst`, `screenshot window`, `screenshot window-burst`.
+- Background screenshots: `background window screenshot`, `background desktop screenshot`, `background cua screenshot`, `background cua state --output`.
+
+Verification rule:
+
+- Verify foreground/current-session work with `screenshot desktop` or `screenshot window`.
+- Verify selected-window background work with `background window screenshot`.
+- Verify Linux Xvfb work with `background desktop screenshot`.
+- Verify CUA target-routed work with `background cua screenshot` or `background cua state --output`.
+- Do not verify background actions with `screenshot desktop`; it captures the current visible desktop, not necessarily the background context.
 
 Configuration:
 
@@ -31,11 +54,11 @@ Targets:
 
 Screenshots:
 
-- `kiseki screenshot desktop --output <file.bmp>` captures the visible desktop to BMP.
-- `kiseki screenshot burst --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames.
-- `kiseki screenshot window --target-title <text> --output <file.bmp>` captures one target window.
-- `kiseki screenshot background-window --target-title <text> --output <file.bmp>` captures one target window without activating it.
-- `kiseki screenshot window-burst --target-title <text> --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames from one target window.
+- `kiseki screenshot desktop --output <file.bmp>` captures the current visible desktop to BMP. This is non-background.
+- `kiseki screenshot burst --directory <dir> --prefix <name> --frames <n> --fps <n>` captures current visible desktop BMP frames. This is non-background.
+- `kiseki screenshot window --target-title <text> --output <file.bmp>` captures one target window through the current-session screenshot path. This is non-background.
+- `kiseki screenshot window-burst --target-title <text> --directory <dir> --prefix <name> --frames <n> --fps <n>` captures BMP frames from one target window through the current-session screenshot path. This is non-background.
+- `kiseki background window screenshot --target-title <text> --output <file.bmp>` captures one selected target window without activating it when the backend allows it. This is a background screenshot.
 - Target selectors are `--target-title`, `--target-pid`, and `--target-window-id`.
 - If burst options are omitted or zero, defaults come from config.
 - Supported format is currently BMP.
@@ -59,41 +82,49 @@ Input:
 - `kiseki input mouse --dx <n> --dy <n> [--click ...] [--backend ...]`
 - `kiseki input mouse --x <n> --y <n> [--absolute] [--click ...] [--backend ...]`
 - `kiseki input drag --file <points.txt> [--backend auto|driver|system] [--step-delay-ms <n>] [--start-hold-ms <n>] [--end-hold-ms <n>]`
-- `kiseki input background-text --target-title <text> --text <text>`
-- `kiseki input background-key --target-title <text> --key <name>`
-- `kiseki input background-mouse --target-title <text> --x <n> --y <n> [--click ...]`
-- `kiseki input background-drag --target-title <text> --file <points.txt>`
+- `kiseki background window text --target-title <text> --text <text>`
+- `kiseki background window key --target-title <text> --key <name>`
+- `kiseki background window mouse --target-title <text> --x <n> --y <n> [--click ...]`
+- `kiseki background window drag --target-title <text> --file <points.txt>`
+
+Integrated background command group:
+
+- Use `kiseki background ...` for docs, demos, tests, and agent workflows.
+- `kiseki background window screenshot|text|key|mouse|drag ...` is the selected-window background command surface.
+- `kiseki background desktop <subcommand> ...` is the Linux isolated X11 desktop command surface.
+- `kiseki background cua <subcommand> ...` is the optional CUA Driver command surface.
+- Older direct background command families are removed and should fail before reaching platform backends.
 
 Linux background desktop:
 
-- `kiseki background-desktop start --display :99 --width 1280 --height 720 --depth 24`
-- `kiseki background-desktop stop --display :99`
-- `kiseki background-desktop launch --display :99 --command <shell-command>`
-- `kiseki background-desktop screenshot --display :99 --output <file.bmp>`
-- `kiseki background-desktop text --display :99 --text <text>`
-- `kiseki background-desktop text --display :99 --file <utf8-file>`
-- `kiseki background-desktop key --display :99 --key <name>`
-- `kiseki background-desktop mouse --display :99 --x <n> --y <n> [--click ...]`
+- `kiseki background desktop start --display :99 --width 1280 --height 720 --depth 24`
+- `kiseki background desktop stop --display :99`
+- `kiseki background desktop launch --display :99 --command <shell-command>`
+- `kiseki background desktop screenshot --display :99 --output <file.bmp>`
+- `kiseki background desktop text --display :99 --text <text>`
+- `kiseki background desktop text --display :99 --file <utf8-file>`
+- `kiseki background desktop key --display :99 --key <name>`
+- `kiseki background desktop mouse --display :99 --x <n> --y <n> [--click ...]`
 
-macOS CUA background provider:
+CUA background provider:
 
-- `kiseki mac-background status [--prompt]`
-- `kiseki mac-background launch --bundle-id <id> [--url <url>] [--new-instance]`
-- `kiseki mac-background windows [--pid <pid>] [--on-screen-only]`
-- `kiseki mac-background state --pid <pid> --window-id <id> [--output <image>] [--query <text>]`
-- `kiseki mac-background screenshot --window-id <id> --output <image> [--format png|jpeg]`
-- `kiseki mac-background click --pid <pid> --window-id <id> --x <n> --y <n> [--button left|right|double]`
-- `kiseki mac-background click --pid <pid> --window-id <id> --element-index <n>`
-- `kiseki mac-background text --pid <pid> --text <text>`
-- `kiseki mac-background key --pid <pid> --key <name>`
-- `kiseki mac-background hotkey --pid <pid> --keys <cmd+c>`
-- `kiseki mac-background drag --pid <pid> --window-id <id> --from-x <n> --from-y <n> --to-x <n> --to-y <n>`
-- `kiseki mac-background draw --pid <pid> --window-id <id> --file <points.txt> [--duration-ms <n>] [--steps <n>]`
-- `kiseki mac-background feedback status`
-- `kiseki mac-background feedback enable --enabled <true|false>`
-- `kiseki mac-background feedback motion [--start-handle <n>] [--end-handle <n>] [--arc-size <n>] [--arc-flow <n>] [--spring <n>] [--glide-duration-ms <n>] [--dwell-after-click-ms <n>] [--idle-hide-ms <n>]`
-- `kiseki mac-background feedback style [--reset] [--gradient-colors <#hex,#hex>] [--bloom-color <#hex>] [--image-path <path>]`
-- `kiseki mac-background feedback preset --name natural|fast|recording|quiet`
+- `kiseki background cua status [--prompt]`
+- `kiseki background cua launch --bundle-id <id> [--url <url>] [--new-instance]`
+- `kiseki background cua windows [--pid <pid>] [--on-screen-only]`
+- `kiseki background cua state --pid <pid> --window-id <id> [--output <image>] [--query <text>]`
+- `kiseki background cua screenshot --window-id <id> --output <image> [--format png|jpeg]`
+- `kiseki background cua click --pid <pid> --window-id <id> --x <n> --y <n> [--button left|right|double]`
+- `kiseki background cua click --pid <pid> --window-id <id> --element-index <n>`
+- `kiseki background cua text --pid <pid> --text <text>`
+- `kiseki background cua key --pid <pid> --key <name>`
+- `kiseki background cua hotkey --pid <pid> --keys <cmd+c>`
+- `kiseki background cua drag --pid <pid> --window-id <id> --from-x <n> --from-y <n> --to-x <n> --to-y <n>`
+- `kiseki background cua draw --pid <pid> --window-id <id> --file <points.txt> [--duration-ms <n>] [--steps <n>]`
+- `kiseki background cua feedback status`
+- `kiseki background cua feedback enable --enabled <true|false>`
+- `kiseki background cua feedback motion [--start-handle <n>] [--end-handle <n>] [--arc-size <n>] [--arc-flow <n>] [--spring <n>] [--glide-duration-ms <n>] [--dwell-after-click-ms <n>] [--idle-hide-ms <n>]`
+- `kiseki background cua feedback style [--reset] [--gradient-colors <#hex,#hex>] [--bloom-color <#hex>] [--image-path <path>]`
+- `kiseki background cua feedback preset --name natural|fast|recording|quiet`
 
 Macros:
 
@@ -124,6 +155,7 @@ Diagnostics:
 
 - `kiseki capabilities` prints machine-readable capability JSON.
 - `kiseki doctor` prints version, config path, config status, runtime capabilities, and limitations.
+- `kiseki modes --json` prints a machine-readable command selection guide for operation mode, screenshot mode, coordinate space, and matching verification command.
 
 ## Config Schema
 
@@ -171,10 +203,11 @@ Windows:
 - Unicode text input uses `KEYEVENTF_UNICODE`.
 - Absolute mouse coordinates are virtual-screen coordinates.
 - Target-window screenshots use `PrintWindow`.
-- Explicit background-window screenshots use the same selected-window capture backend and must not activate the target.
+- Explicit background window screenshots use the same selected-window capture backend and must not activate the target.
 - Background-window input uses normal Win32 window messages and targets text-like child controls when possible.
 - `target inspect` reports child HWNDs, class names, bounds, and titles so selected-window automation can choose concrete receivers.
 - Windows background screenshot is the supported Windows background observation path; it does not require a VM, Docker, or separate session backend.
+- Optional CUA background operation uses `cua-driver` when installed in the interactive desktop session and is exposed through `kiseki background cua ...`.
 
 Linux:
 
@@ -183,37 +216,42 @@ Linux:
 - Screenshot uses X11 root `XGetImage` when the session permits it.
 - Target-window background input uses X11 events.
 - Target-window screenshots use X11 `XGetImage` on the selected window.
-- Explicit background-window screenshots use the same selected-window X11 capture backend.
+- Explicit background window screenshots use the same selected-window X11 capture backend.
 - Background desktop support starts `Xvfb` and runs applications on an isolated `DISPLAY`.
 - Background desktop screenshot/input commands temporarily select that `DISPLAY` and use the same X11 screenshot and XTest input paths.
+- Optional CUA background operation uses `cua-driver` when installed; upstream marks Linux CUA support as pre-release, so true graphical Linux validation is required before claims.
 - Some compositor sessions block capture; the CLI should report unavailable/failure clearly, not crash.
+
+CUA Driver:
+
+- Optional CUA background operation uses `cua-driver` when installed and authorized, and is exposed through `kiseki background cua ...`.
+- CUA binary lookup checks `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, Windows `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`, macOS `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`, and Linux `~/.local/bin/cua-driver`.
+- CUA coordinates are window-local screenshot coordinates for commands that take `--window-id`.
+- CUA action commands run without a declared session by default for reliable one-shot CLI use. Set `KISEKI_CUA_SESSION` to a fresh per-run id when the agent-cursor overlay should follow a sequence of actions.
+- CUA drag behavior depends on target state and the platform driver. Verify with before/after screenshots rather than return code alone.
+- `background cua feedback ...` controls CUA's visual agent-cursor overlay only; it is not the system pointer.
+- Public support claims require real platform build, permission/status checks, and live desktop validation. WSL is not Linux CUA proof.
 
 macOS:
 
-- macOS has a native current-session backend and an optional CUA background provider.
+- macOS has a native current-session backend and can also use the optional CUA background provider.
 - Config path uses `~/Library/Application Support/KisekiInput/config.json`.
 - Target listing uses Apple Window Services in the active GUI session.
 - Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission.
 - Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission.
 - `kiseki input ...` commands are global/current-session operations; they can move the real pointer or depend on focus.
 - Target-window background input is not reported available until a target-specific automation backend exists.
-- Optional CUA background operation uses `cua-driver` when installed and authorized, and is exposed only through `kiseki mac-background ...`.
-- CUA binary lookup checks `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, then `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`.
-- CUA coordinates are window-local screenshot coordinates for commands that take `--window-id`.
-- CUA action commands run without a declared session by default for reliable one-shot CLI use. Set `KISEKI_CUA_SESSION` to a fresh per-run id when the agent-cursor overlay should follow a sequence of actions.
 - Use `input drag --file` for continuous foreground drawing when taking the current pointer/focus is acceptable. For drawing apps, prepare the target state first: pick the brush/shape tool, set a visible foreground color, and use `--start-hold-ms`/`--step-delay-ms` when the app needs slower pointer cadence.
-- Use `mac-background draw --file` for target-routed CUA drawing; it composes sparse point paths into drag segments and should be verified with `mac-background screenshot` or `mac-background state`. Dense sampled paths should stay on foreground `input drag`; CUA draw has `--max-segments` to prevent accidental long-running segment storms.
+- Use `background cua draw` for target-routed CUA drawing; it composes sparse point paths into drag segments and should be verified with `background cua screenshot` or `background cua state`. Dense sampled paths should stay on foreground `input drag`; CUA draw has `--max-segments` to prevent accidental long-running segment storms.
 - Drawing app operation requires before/after screenshots, verified canvas coordinates, selected tool, and visible foreground color. See `references/drawing-apps.md` before operating Krita, Paint, or other canvas-style apps.
-- CUA drag behavior still depends on target state: a frontmost target may use a HID-style path with visible real-cursor movement, while a backgrounded target uses CUA's pid-routed cursor-neutral path. Some canvas/OpenGL-style surfaces can reject pid-routed dragged events and must be reported as target-specific behavior.
-- `mac-background feedback ...` controls CUA's visual agent-cursor overlay only; it is not the system pointer.
-- Public support claims require real macOS build, permission, and live desktop validation.
 - Roadmap details live in `docs/roadmap.md`.
 
 ## Capability Limits
 
 - `backgroundWindow` is reported available when the platform/session supports target-window operations.
 - `session.backgroundDesktop` is reported available when `Xvfb` is available on a Linux X11 build.
-- `session.macosCuaBackground` is reported available when a Cua Driver binary is found on macOS.
+- `session.cuaBackground` is reported available when a Cua Driver binary is found on the current platform.
+- `session.macosCuaBackground` is the macOS-specific CUA detail field and is only true on macOS when a Cua Driver binary is found.
 - Capture `window` is implemented. Capture `region` is not implemented.
 - Game background input is only expected for targets that accept normal system window messages or public automation interfaces.
 - No guarantee is made for targets that ignore system window messages or public automation events.

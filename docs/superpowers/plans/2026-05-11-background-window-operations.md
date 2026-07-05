@@ -26,9 +26,9 @@ Windows will be live-tested. Linux will receive native X11 implementations and n
 2. Add failing CLI tests for:
    - `screenshot window`
    - `screenshot window-burst`
-   - `input background-text`
-   - `input background-key`
-   - `input background-mouse`
+   - `background window text`
+   - `background window key`
+   - `background window mouse`
 3. Add `platform/target`:
    - common `TargetQuery` and `TargetWindow`
    - Windows `EnumWindows` resolver

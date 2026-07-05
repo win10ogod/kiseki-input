@@ -144,6 +144,7 @@ struct MacCuaFeedbackPresetOptions {
     std::string name = "natural";
 };
 
+bool cua_background_available();
 bool macos_cua_background_available();
 
 OperationResult macos_cua_status(bool prompt);

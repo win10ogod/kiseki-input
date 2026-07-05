@@ -13,11 +13,16 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 
 - Keep WebUI configuration-only. Do not add input, screenshot, shell, daemon, or execution routes to the WebUI.
 - Prefer small platform slices: input, screenshot, notification, config, WebUI, and CLI wiring should remain separable.
+- For ambiguous automation or weak-model handoff, run or consult `kiseki modes --json` first. Keep current-session commands, background commands, and verification screenshots in the same mode family.
+- Use the integrated `kiseki background ...` command group for background-operation docs and tests. Older direct background command families are removed and should be treated as errors.
 - On Windows, use the Windows executable for live UI verification from WSL; WSL is only the orchestration shell.
 - Do not claim Linux support from WSL-only results. Linux screenshot/input must be tested on a real Linux graphical session when the user asks for Linux proof.
 - Do not overclaim game background input. It depends on whether the target accepts system window messages or public automation events.
-- macOS true background app operation uses the optional Cua Driver provider through `kiseki mac-background ...`. Do not claim it is available unless `cua-driver` is installed and the Mac has Accessibility and Screen Recording permissions.
-- On macOS, distinguish global/current-session `kiseki input ...` commands from target-routed CUA `kiseki mac-background ...` commands. Do not describe the CUA overlay cursor as the real system pointer.
+- Optional CUA Driver background operation should be invoked through `kiseki background cua ...`. Do not claim it is live unless `cua-driver` is installed, status/permissions are checked, and a real target action is verified on that platform/session.
+- Treat `kiseki input ...` and `kiseki screenshot ...` as current-session/non-background command families. Treat `kiseki background ...` as background, isolated-session, or target-routed command families.
+- On macOS, distinguish global/current-session `kiseki input ...` commands from target-routed CUA `kiseki background cua ...` commands. Do not describe the CUA overlay cursor as the real system pointer.
+- On Windows, distinguish native selected-window/background screenshot support from optional CUA Driver support in the interactive desktop session.
+- On Linux, distinguish native X11/Xvfb support from optional CUA Driver support; upstream CUA Linux support is pre-release and needs true-machine graphical validation.
 - For drawing software work, read `references/drawing-apps.md` before acting. Do not draw until the target window, operation mode, canvas area, tool, visible color, and before-screenshot are established.
 
 ## Project Anchors
@@ -27,7 +32,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - Windows executable: `build/Debug/kiseki.exe`
 - Live-test artifacts: `artifacts/live-test/`
 - Windows IbInputSimulator source: `F:\輝色臻至\原始參考\IbInputSimulator`
-- macOS CUA binary lookup: `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, or `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`
+- CUA binary lookup: `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, Windows `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`, macOS `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`, or Linux `~/.local/bin/cua-driver`
 
 ## Quick Verification
 
@@ -38,7 +43,7 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 
 Before final claims, also run `git diff --check` after edits. For live Windows UI work, capture screenshots under `artifacts/live-test/` and report the paths.
 
-For macOS CUA work, verify `kiseki mac-background status`, `launch`, `windows`, `state`, `screenshot`, and at least one action command on a real logged-in macOS GUI session before claiming live support. For drawing changes, inspect a before/after screenshot from the same target window.
+For CUA work, verify `kiseki background cua status`, `launch`, `windows`, `state`, `screenshot`, and at least one action command on a real logged-in GUI session before claiming live support. For drawing changes, inspect a before/after screenshot from the same target window. Do not treat WSL as Linux CUA proof.
 
 ## References
 

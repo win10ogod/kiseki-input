@@ -11,7 +11,7 @@ Implement the current practical background track:
 
 Linux background desktop is backed by `Xvfb`. Kiseki starts a separate `DISPLAY`, launches applications into it, and routes screenshot/input commands to that display. The physical Linux desktop is not used for those actions.
 
-Windows selected-window observation resolves a target HWND, can inspect child receiver windows, and captures the selected target through `screenshot background-window` without introducing a VM, Docker, or separate Windows session backend. Message-based selected-window input remains a compatibility helper where the selected application accepts normal Windows APIs.
+Windows selected-window observation resolves a target HWND, can inspect child receiver windows, and captures the selected target through `background window screenshot` without introducing a VM, Docker, or separate Windows session backend. Message-based selected-window input remains a selected-window helper where the selected application accepts normal Windows APIs.
 
 ## Non-Goals
 
@@ -27,14 +27,14 @@ WSL-only behavior is not treated as Linux desktop proof. Linux background deskto
 kiseki target inspect --target-title <text>
 kiseki target inspect --target-window-id <id>
 
-kiseki background-desktop start --display :99 --width 1280 --height 720 --depth 24
-kiseki background-desktop stop --display :99
-kiseki background-desktop launch --display :99 --command <shell-command>
-kiseki background-desktop screenshot --display :99 --output <file.bmp>
-kiseki background-desktop text --display :99 --text <text>
-kiseki background-desktop text --display :99 --file <utf8-file>
-kiseki background-desktop key --display :99 --key <name>
-kiseki background-desktop mouse --display :99 --x <n> --y <n> --click <button>
+kiseki background desktop start --display :99 --width 1280 --height 720 --depth 24
+kiseki background desktop stop --display :99
+kiseki background desktop launch --display :99 --command <shell-command>
+kiseki background desktop screenshot --display :99 --output <file.bmp>
+kiseki background desktop text --display :99 --text <text>
+kiseki background desktop text --display :99 --file <utf8-file>
+kiseki background desktop key --display :99 --key <name>
+kiseki background desktop mouse --display :99 --x <n> --y <n> --click <button>
 ```
 
 ## Architecture

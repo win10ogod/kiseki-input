@@ -17,6 +17,7 @@ CapabilityMatrix foundation_capabilities() {
         },
         .session = SessionCapabilities{
             .background_desktop = false,
+            .cua_background = false,
             .macos_cua_background = false,
         },
         .observation = ObservationCapabilities{
@@ -47,6 +48,7 @@ nlohmann::json to_json(const CapabilityMatrix& capabilities) {
         }},
         {"session", {
             {"backgroundDesktop", capabilities.session.background_desktop},
+            {"cuaBackground", capabilities.session.cua_background},
             {"macosCuaBackground", capabilities.session.macos_cua_background},
         }},
         {"observation", {

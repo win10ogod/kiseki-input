@@ -237,7 +237,7 @@ src/platform/linux/
     notify_send_backend.hpp/.cpp
 ```
 
-The existing user-created folders under `src/windows/keyboard`, `src/windows/mouse`, `src/windows/screenshot`, `src/windows/system`, `src/linux/keyboard`, `src/linux/mouse`, `src/linux/screenshot`, and `src/linux/system` will be replaced by the finer platform layout above during implementation. Empty legacy directories do not need compatibility wrappers because no source files exist in them.
+The existing user-created folders under `src/windows/keyboard`, `src/windows/mouse`, `src/windows/screenshot`, `src/windows/system`, `src/linux/keyboard`, `src/linux/mouse`, `src/linux/screenshot`, and `src/linux/system` will be replaced by the finer platform layout above during implementation. Empty old directories do not need wrappers because no source files exist in them.
 
 ## Input Backends
 

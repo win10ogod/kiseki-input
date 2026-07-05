@@ -26,6 +26,24 @@ ctest --test-dir build --output-on-failure
 
 Do not substitute WSL-only behavior for true Linux proof unless the user explicitly asks for WSL.
 
+## Mode Selection Discipline
+
+Before any live UI test, decide the command family and keep verification in that same family:
+
+- Current-session operation: `input ...`; verify with `screenshot desktop` or `screenshot window`.
+- Current-session screenshot: `screenshot desktop|burst|window|window-burst`; do not call it a background screenshot.
+- Selected-window background: `background window ...`; verify with `background window screenshot`.
+- Linux isolated background: `background desktop ...`; verify with `background desktop screenshot`.
+- CUA target-routed background: `background cua ...`; verify with `background cua screenshot` or `background cua state --output`.
+
+For weak-model handoff or ambiguous tasks, run:
+
+```bash
+./build/Debug/kiseki.exe modes --json
+```
+
+Do not verify a background action with `screenshot desktop`; it captures the current visible desktop and can hide whether the background target actually changed.
+
 ## Windows Live UI Verification
 
 Use the Windows executable from WSL:
@@ -210,38 +228,48 @@ cmake -S . -B build -DKISEKI_BUILD_TESTING=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 mkdir -p artifacts/live-test
-./build/kiseki background-desktop start --display :99 --width 1280 --height 720 --depth 24
-./build/kiseki background-desktop launch --display :99 --command "xterm"
-./build/kiseki background-desktop mouse --display :99 --x 40 --y 40 --click left
-./build/kiseki background-desktop text --display :99 --text "kiseki background desktop"
-./build/kiseki background-desktop screenshot --display :99 --output artifacts/live-test/background-desktop.bmp
-./build/kiseki background-desktop stop --display :99
+./build/kiseki background desktop start --display :99 --width 1280 --height 720 --depth 24
+./build/kiseki background desktop launch --display :99 --command "xterm"
+./build/kiseki background desktop mouse --display :99 --x 40 --y 40 --click left
+./build/kiseki background desktop text --display :99 --text "kiseki background desktop"
+./build/kiseki background desktop screenshot --display :99 --output artifacts/live-test/background desktop.bmp
+./build/kiseki background desktop stop --display :99
 ```
 
 Expected result: the BMP shows the virtual X11 desktop and launched app. The physical desktop cursor and focus should not move during the sequence.
 
-## macOS CUA Background Recipe
+## CUA Background Recipe
 
-Run only on a logged-in macOS GUI session with Cua Driver installed.
+Run only on a logged-in graphical session with Cua Driver installed. On Windows, use the Windows executable from the interactive desktop session. On Linux, use a real graphical Linux session; WSL-only results are not Linux CUA proof. On macOS, Accessibility and Screen Recording permissions are required.
+The launch example below is macOS-oriented; on Windows or Linux, use a platform-appropriate `--name` or launch the target app separately before `windows`.
 
 ```bash
 cmake -S . -B build -DKISEKI_BUILD_TESTING=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/kiseki mac-background status --prompt
-./build/kiseki mac-background launch --bundle-id com.apple.Safari --url about:blank
-./build/kiseki mac-background windows
-./build/kiseki mac-background state --pid <pid> --window-id <window_id> --output artifacts/live-test/mac-cua-state.jpg
-./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-window.png
-./build/kiseki mac-background click --pid <pid> --window-id <window_id> --x 100 --y 100
-./build/kiseki mac-background text --pid <pid> --text "kiseki mac cua"
-./build/kiseki mac-background feedback preset --name natural
-./build/kiseki mac-background feedback status
-./build/kiseki mac-background draw --pid <pid> --window-id <window_id> --file artifacts/live-test/mac-cua-points.txt --duration-ms 80 --steps 5 --max-segments 96
-./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-draw.png
+./build/kiseki background cua status --prompt
+./build/kiseki background cua launch --bundle-id com.apple.Safari --url about:blank
+./build/kiseki background cua windows
+./build/kiseki background cua state --pid <pid> --window-id <window_id> --output artifacts/live-test/mac-cua-state.jpg
+./build/kiseki background cua screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-window.png
+./build/kiseki background cua click --pid <pid> --window-id <window_id> --x 100 --y 100
+./build/kiseki background cua text --pid <pid> --text "kiseki mac cua"
+./build/kiseki background cua feedback preset --name natural
+./build/kiseki background cua feedback status
+./build/kiseki background cua draw --pid <pid> --window-id <window_id> --file artifacts/live-test/mac-cua-points.txt --duration-ms 80 --steps 5 --max-segments 96
+./build/kiseki background cua screenshot --window-id <window_id> --output artifacts/live-test/mac-cua-draw.png
 ```
 
-Expected result: CUA reports granted Accessibility and Screen Recording permissions, captures the selected window, and routes at least one action to the target. For backgrounded targets, CUA drag should use the pid-routed path and not take over the user's real cursor; for frontmost targets, CUA may use a HID-style drag path and the real cursor can visibly move. For drawing, inspect the after-screenshot; a successful return code alone is not enough. Do not claim live CUA support if the Mac cannot be reached or permissions are missing.
+Expected result: CUA status is healthy for that platform/session, captures the selected window, and routes at least one action to the target. For backgrounded targets, CUA drag should use the target-routed path and not take over the user's real cursor when the platform driver supports it; for frontmost targets, the driver may use a visible HID-style path. For drawing, inspect the after-screenshot; a successful return code alone is not enough. Do not claim live CUA support if the host cannot be reached, permissions are missing, or `cua-driver` is only detected but not exercised.
+
+Windows example command prefix:
+
+```bash
+./build/Debug/kiseki.exe background cua status
+./build/Debug/kiseki.exe background cua windows
+```
+
+Linux CUA is pre-release upstream. A Linux CUA test report must state the distro/session type, `cua-driver status`, target app, before/after screenshot paths, and whether the physical cursor/focus moved.
 
 For visible CUA agent-cursor feedback across multiple CLI calls, set a fresh session id for that run:
 
@@ -254,6 +282,6 @@ Do not reuse an old CUA session id after CUA reports `session ended`; choose a n
 When testing macOS drawing:
 
 - Use `input drag --file` only for foreground/global drawing tests where taking the current pointer/focus is acceptable. Before judging the input path, select the intended drawing tool and set a visible foreground color; pale/white foreground color can make successful input look blank.
-- Use `mac-background draw --file` only for CUA target-routed drawing. Coordinates must be window-local screenshot coordinates, and point files should contain sparse control points rather than dense per-pixel samples.
+- Use `background cua draw --file` only for CUA target-routed drawing. Coordinates must be window-local screenshot coordinates, and point files should contain sparse control points rather than dense per-pixel samples.
 - Prefer a controlled canvas or simple drawing app and capture before/after CUA screenshots.
 - If the target ignores background drag events, report that target behavior exactly instead of converting the claim into general macOS failure.

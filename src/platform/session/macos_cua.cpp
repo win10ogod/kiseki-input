@@ -1,8 +1,11 @@
 #include "platform/session/macos_cua.hpp"
 
+#include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -10,9 +13,9 @@
 
 #include <nlohmann/json.hpp>
 
-#ifdef __APPLE__
-#include <array>
-#include <cstdio>
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -39,10 +42,20 @@ OperationResult fail(std::string error, int code = 2) {
     };
 }
 
-#ifdef __APPLE__
-
 bool executable_file(const std::filesystem::path& path) {
+#ifdef _WIN32
+    return !path.empty() && _access(path.string().c_str(), 0) == 0;
+#else
     return !path.empty() && access(path.c_str(), X_OK) == 0;
+#endif
+}
+
+char path_separator() {
+#ifdef _WIN32
+    return ';';
+#else
+    return ':';
+#endif
 }
 
 std::filesystem::path find_on_path(const std::string& name) {
@@ -53,7 +66,7 @@ std::filesystem::path find_on_path(const std::string& name) {
 
     std::istringstream stream{raw_path};
     std::string segment;
-    while (std::getline(stream, segment, ':')) {
+    while (std::getline(stream, segment, path_separator())) {
         if (segment.empty()) {
             segment = ".";
         }
@@ -70,17 +83,54 @@ std::filesystem::path cua_driver_binary() {
         override_path != nullptr && executable_file(override_path)) {
         return override_path;
     }
+#ifdef _WIN32
+    if (const auto path = find_on_path("cua-driver.exe"); !path.empty()) {
+        return path;
+    }
     if (const auto path = find_on_path("cua-driver"); !path.empty()) {
         return path;
     }
+    if (const char* local_app_data = std::getenv("LOCALAPPDATA"); local_app_data != nullptr) {
+        const auto visible_binary =
+            std::filesystem::path{local_app_data} / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe";
+        if (executable_file(visible_binary)) {
+            return visible_binary;
+        }
+    }
+#else
+    if (const auto path = find_on_path("cua-driver"); !path.empty()) {
+        return path;
+    }
+#ifdef __APPLE__
     const auto app_binary = std::filesystem::path{"/Applications/CuaDriver.app/Contents/MacOS/cua-driver"};
     if (executable_file(app_binary)) {
         return app_binary;
     }
+#else
+    if (const char* home = std::getenv("HOME"); home != nullptr) {
+        const auto local_binary = std::filesystem::path{home} / ".local" / "bin" / "cua-driver";
+        if (executable_file(local_binary)) {
+            return local_binary;
+        }
+    }
+#endif
+#endif
     return {};
 }
 
 std::string shell_quote(const std::string& value) {
+#ifdef _WIN32
+    std::string quoted = "\"";
+    for (const char c : value) {
+        if (c == '"') {
+            quoted += "\"\"";
+        } else {
+            quoted.push_back(c);
+        }
+    }
+    quoted.push_back('"');
+    return quoted;
+#else
     std::string quoted = "'";
     for (const char c : value) {
         if (c == '\'') {
@@ -91,6 +141,7 @@ std::string shell_quote(const std::string& value) {
     }
     quoted.push_back('\'');
     return quoted;
+#endif
 }
 
 struct CommandResult {
@@ -102,7 +153,11 @@ CommandResult run_shell_command(const std::string& command) {
     std::array<char, 4096> buffer{};
     std::string output;
 
+#ifdef _WIN32
+    FILE* pipe = _popen((command + " 2>&1").c_str(), "r");
+#else
     FILE* pipe = popen((command + " 2>&1").c_str(), "r");
+#endif
     if (pipe == nullptr) {
         return CommandResult{.code = 2, .output = "failed to launch cua-driver"};
     }
@@ -111,6 +166,13 @@ CommandResult run_shell_command(const std::string& command) {
         output += buffer.data();
     }
 
+#ifdef _WIN32
+    const int status = _pclose(pipe);
+    if (status == -1) {
+        return CommandResult{.code = 2, .output = output.empty() ? "failed to read cua-driver exit status" : output};
+    }
+    return CommandResult{.code = status, .output = output};
+#else
     const int status = pclose(pipe);
     if (status == -1) {
         return CommandResult{.code = 2, .output = output.empty() ? "failed to read cua-driver exit status" : output};
@@ -119,6 +181,33 @@ CommandResult run_shell_command(const std::string& command) {
         return CommandResult{.code = WEXITSTATUS(status), .output = output};
     }
     return CommandResult{.code = 2, .output = output.empty() ? "cua-driver did not exit normally" : output};
+#endif
+}
+
+std::filesystem::path make_temp_json_path() {
+    const auto base = std::filesystem::temp_directory_path();
+    const auto seed = std::chrono::steady_clock::now().time_since_epoch().count();
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        auto candidate = base / ("kiseki-cua-" + std::to_string(seed) + "-" + std::to_string(attempt) + ".json");
+        std::error_code error;
+        if (!std::filesystem::exists(candidate, error)) {
+            return candidate;
+        }
+    }
+    return base / ("kiseki-cua-" + std::to_string(seed) + ".json");
+}
+
+OperationResult write_cua_arguments(const nlohmann::json& arguments, std::filesystem::path& path) {
+    path = make_temp_json_path();
+    std::ofstream file{path, std::ios::binary | std::ios::trunc};
+    if (!file) {
+        return fail("failed to create temporary Cua Driver argument file: " + path.string());
+    }
+    file << arguments.dump();
+    if (!file) {
+        return fail("failed to write temporary Cua Driver argument file: " + path.string());
+    }
+    return ok("");
 }
 
 OperationResult run_cua_tool(
@@ -130,12 +219,21 @@ OperationResult run_cua_tool(
         return fail("cua-driver was not found. Install Cua Driver or set KISEKI_CUA_DRIVER to the cua-driver binary");
     }
 
-    std::string command = shell_quote(binary.string()) + " call " + shell_quote(tool) + " " + shell_quote(arguments.dump());
+    std::filesystem::path argument_path;
+    const auto write_result = write_cua_arguments(arguments, argument_path);
+    if (!write_result.ok) {
+        return write_result;
+    }
+
+    std::string command = shell_quote(binary.string()) + " call " + shell_quote(tool);
     if (!screenshot_output.empty()) {
         command += " --screenshot-out-file " + shell_quote(std::filesystem::absolute(screenshot_output).string());
     }
+    command += " < " + shell_quote(argument_path.string());
 
     const auto result = run_shell_command(command);
+    std::error_code remove_error;
+    std::filesystem::remove(argument_path, remove_error);
     if (result.code == 0) {
         return ok(result.output.empty() ? ("cua-driver " + tool + " completed") : result.output);
     }
@@ -214,39 +312,27 @@ int resolve_pid_for_window_id(unsigned int window_id, std::string& error) {
     }
 }
 
-#endif
-
-OperationResult unsupported() {
-#ifdef __APPLE__
-    return fail("cua-driver was not found. Install Cua Driver or set KISEKI_CUA_DRIVER to the cua-driver binary");
-#else
-    return fail("macOS CUA background operation requires macOS with cua-driver installed");
-#endif
 }
 
+bool cua_background_available() {
+    return !cua_driver_binary().empty();
 }
 
 bool macos_cua_background_available() {
 #ifdef __APPLE__
-    return !cua_driver_binary().empty();
+    return cua_background_available();
 #else
     return false;
 #endif
 }
 
 OperationResult macos_cua_status(bool prompt) {
-#ifdef __APPLE__
     return run_cua_tool("check_permissions", nlohmann::json{{"prompt", prompt}});
-#else
-    (void)prompt;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
-#ifdef __APPLE__
     if (options.bundle_id.empty() && options.name.empty()) {
-        return fail("mac-background launch requires --bundle-id or --name");
+        return fail("background cua launch requires --bundle-id or --name");
     }
     nlohmann::json arguments = nlohmann::json::object();
     if (!options.bundle_id.empty()) {
@@ -265,14 +351,9 @@ OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
         arguments["additional_arguments"] = options.additional_arguments;
     }
     return run_cua_tool("launch_app", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_list_windows(const MacCuaWindowListOptions& options) {
-#ifdef __APPLE__
     nlohmann::json arguments = nlohmann::json::object();
     if (options.has_pid) {
         arguments["pid"] = options.pid;
@@ -281,16 +362,11 @@ OperationResult macos_cua_list_windows(const MacCuaWindowListOptions& options) {
         arguments["on_screen_only"] = true;
     }
     return run_cua_tool("list_windows", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_window_state(const MacCuaWindowStateOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0 || options.window_id == 0) {
-        return fail("mac-background state requires positive --pid and --window-id");
+        return fail("background cua state requires positive --pid and --window-id");
     }
     nlohmann::json arguments = {
         {"pid", options.pid},
@@ -303,19 +379,14 @@ OperationResult macos_cua_window_state(const MacCuaWindowStateOptions& options) 
         arguments["screenshot_out_file"] = std::filesystem::absolute(options.output_path).string();
     }
     return run_cua_tool("get_window_state", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_screenshot(const MacCuaScreenshotOptions& options) {
-#ifdef __APPLE__
     if (options.window_id == 0) {
-        return fail("mac-background screenshot requires --window-id");
+        return fail("background cua screenshot requires --window-id");
     }
     if (options.output_path.empty()) {
-        return fail("mac-background screenshot requires --output");
+        return fail("background cua screenshot requires --output");
     }
     nlohmann::json arguments = {
         {"window_id", options.window_id},
@@ -331,7 +402,7 @@ OperationResult macos_cua_screenshot(const MacCuaScreenshotOptions& options) {
     const int pid = resolve_pid_for_window_id(options.window_id, resolve_error);
     if (pid <= 0) {
         return fail(
-            "mac-background screenshot failed through Cua Driver screenshot tool and fallback pid resolution failed. "
+            "background cua screenshot failed through Cua Driver screenshot tool and fallback pid resolution failed. "
             "screenshot error: " +
                 direct.error + "; fallback error: " + resolve_error,
             direct.code);
@@ -345,7 +416,7 @@ OperationResult macos_cua_screenshot(const MacCuaScreenshotOptions& options) {
     const auto fallback = run_cua_tool("get_window_state", fallback_arguments);
     if (!fallback.ok) {
         return fail(
-            "mac-background screenshot failed through Cua Driver screenshot tool and get_window_state fallback. "
+            "background cua screenshot failed through Cua Driver screenshot tool and get_window_state fallback. "
             "screenshot error: " +
                 direct.error + "; fallback error: " + fallback.error,
             fallback.code);
@@ -354,28 +425,23 @@ OperationResult macos_cua_screenshot(const MacCuaScreenshotOptions& options) {
     if (!std::filesystem::exists(options.output_path, file_error) ||
         std::filesystem::file_size(options.output_path, file_error) == 0) {
         return fail(
-            "mac-background screenshot fallback completed but did not create a non-empty output file: " +
+            "background cua screenshot fallback completed but did not create a non-empty output file: " +
             std::filesystem::absolute(options.output_path).string());
     }
     return ok(
-        "mac-background screenshot captured through get_window_state fallback: " +
+        "background cua screenshot captured through get_window_state fallback: " +
         std::filesystem::absolute(options.output_path).string());
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_click(const MacCuaClickOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0) {
-        return fail("mac-background click requires positive --pid");
+        return fail("background cua click requires positive --pid");
     }
     if (options.has_element_index == options.has_xy) {
-        return fail("mac-background click requires either --element-index or both --x and --y");
+        return fail("background cua click requires either --element-index or both --x and --y");
     }
     if (options.has_element_index && !options.has_window_id) {
-        return fail("mac-background click with --element-index requires --window-id");
+        return fail("background cua click with --element-index requires --window-id");
     }
 
     nlohmann::json arguments = {{"pid", options.pid}};
@@ -398,20 +464,15 @@ OperationResult macos_cua_click(const MacCuaClickOptions& options) {
     if (button == "right") {
         return run_cua_tool("right_click", arguments);
     }
-    return fail("mac-background click --button must be left, right, or double");
-#else
-    (void)options;
-    return unsupported();
-#endif
+    return fail("background cua click --button must be left, right, or double");
 }
 
 OperationResult macos_cua_type_text(const MacCuaTextOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0 || options.text.empty()) {
-        return fail("mac-background text requires positive --pid and non-empty --text or --file");
+        return fail("background cua text requires positive --pid and non-empty --text or --file");
     }
     if (options.has_element_index && !options.has_window_id) {
-        return fail("mac-background text with --element-index requires --window-id");
+        return fail("background cua text with --element-index requires --window-id");
     }
     nlohmann::json arguments = {
         {"pid", options.pid},
@@ -422,19 +483,14 @@ OperationResult macos_cua_type_text(const MacCuaTextOptions& options) {
     add_window_id(arguments, options.window_id, options.has_window_id);
     add_element_index(arguments, options.element_index, options.has_element_index);
     return run_cua_tool("type_text", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_press_key(const MacCuaKeyOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0 || options.key.empty()) {
-        return fail("mac-background key requires positive --pid and --key");
+        return fail("background cua key requires positive --pid and --key");
     }
     if (options.has_element_index && !options.has_window_id) {
-        return fail("mac-background key with --element-index requires --window-id");
+        return fail("background cua key with --element-index requires --window-id");
     }
     nlohmann::json arguments = {
         {"pid", options.pid},
@@ -447,16 +503,11 @@ OperationResult macos_cua_press_key(const MacCuaKeyOptions& options) {
         arguments["modifiers"] = options.modifiers;
     }
     return run_cua_tool("press_key", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_hotkey(const MacCuaHotkeyOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0 || options.keys.size() < 2) {
-        return fail("mac-background hotkey requires positive --pid and at least two --keys entries");
+        return fail("background cua hotkey requires positive --pid and at least two --keys entries");
     }
     nlohmann::json arguments = {
         {"pid", options.pid},
@@ -465,16 +516,11 @@ OperationResult macos_cua_hotkey(const MacCuaHotkeyOptions& options) {
     add_session_if_configured(arguments);
     add_window_id(arguments, options.window_id, options.has_window_id);
     return run_cua_tool("hotkey", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_drag(const MacCuaDragOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0) {
-        return fail("mac-background drag requires positive --pid");
+        return fail("background cua drag requires positive --pid");
     }
     nlohmann::json arguments = {
         {"pid", options.pid},
@@ -490,39 +536,34 @@ OperationResult macos_cua_drag(const MacCuaDragOptions& options) {
     add_window_id(arguments, options.window_id, options.has_window_id);
     add_modifiers(arguments, options.modifiers);
     return run_cua_tool("drag", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_draw(const MacCuaDrawOptions& options) {
-#ifdef __APPLE__
     if (options.pid <= 0) {
-        return fail("mac-background draw requires positive --pid");
+        return fail("background cua draw requires positive --pid");
     }
     if (options.window_id == 0) {
-        return fail("mac-background draw requires --window-id");
+        return fail("background cua draw requires --window-id");
     }
     if (options.points.size() < 2) {
-        return fail("mac-background draw requires at least two points");
+        return fail("background cua draw requires at least two points");
     }
     if (options.duration_ms < 0) {
-        return fail("mac-background draw --duration-ms must be non-negative");
+        return fail("background cua draw --duration-ms must be non-negative");
     }
     if (options.steps < 1) {
-        return fail("mac-background draw --steps must be at least 1");
+        return fail("background cua draw --steps must be at least 1");
     }
     if (options.stroke_gap_ms < 0) {
-        return fail("mac-background draw --stroke-gap-ms must be non-negative");
+        return fail("background cua draw --stroke-gap-ms must be non-negative");
     }
     if (options.max_segments < 1) {
-        return fail("mac-background draw --max-segments must be at least 1");
+        return fail("background cua draw --max-segments must be at least 1");
     }
     const auto segment_count = options.points.size() - 1;
     if (segment_count > static_cast<std::size_t>(options.max_segments)) {
         return fail(
-            "mac-background draw path has " + std::to_string(segment_count) +
+            "background cua draw path has " + std::to_string(segment_count) +
             " segments; reduce the point file, raise --max-segments intentionally, or use foreground input drag for dense drawing");
     }
 
@@ -544,7 +585,7 @@ OperationResult macos_cua_draw(const MacCuaDrawOptions& options) {
         const auto result = run_cua_tool("drag", arguments);
         if (!result.ok) {
             return fail(
-                "mac-background draw segment " + std::to_string(index) + " failed: " + result.error,
+                "background cua draw segment " + std::to_string(index) + " failed: " + result.error,
                 result.code);
         }
         if (options.stroke_gap_ms > 0 && index + 1 < options.points.size()) {
@@ -553,37 +594,23 @@ OperationResult macos_cua_draw(const MacCuaDrawOptions& options) {
     }
 
     return ok(
-        "mac-background draw sent " + std::to_string(options.points.size() - 1) +
+        "background cua draw sent " + std::to_string(options.points.size() - 1) +
         " drag segment(s)");
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_feedback_state() {
-#ifdef __APPLE__
     nlohmann::json arguments = nlohmann::json::object();
     add_cursor_id(arguments);
     return run_cua_tool("get_agent_cursor_state", arguments);
-#else
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_feedback_enable(const MacCuaFeedbackEnableOptions& options) {
-#ifdef __APPLE__
     nlohmann::json arguments = {{"enabled", options.enabled}};
     add_cursor_id(arguments);
     return run_cua_tool("set_agent_cursor_enabled", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_feedback_motion(const MacCuaFeedbackMotionOptions& options) {
-#ifdef __APPLE__
     nlohmann::json arguments = nlohmann::json::object();
     add_cursor_id(arguments);
     if (options.has_start_handle) {
@@ -611,17 +638,12 @@ OperationResult macos_cua_feedback_motion(const MacCuaFeedbackMotionOptions& opt
         arguments["idle_hide_ms"] = options.idle_hide_ms;
     }
     if (arguments.size() == 1) {
-        return fail("mac-background feedback motion requires at least one motion option");
+        return fail("background cua feedback motion requires at least one motion option");
     }
     return run_cua_tool("set_agent_cursor_motion", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_feedback_style(const MacCuaFeedbackStyleOptions& options) {
-#ifdef __APPLE__
     nlohmann::json arguments = nlohmann::json::object();
     add_cursor_id(arguments);
     if (options.reset) {
@@ -639,17 +661,12 @@ OperationResult macos_cua_feedback_style(const MacCuaFeedbackStyleOptions& optio
         arguments["image_path"] = options.image_path.empty() ? "" : options.image_path.string();
     }
     if (arguments.size() == 1) {
-        return fail("mac-background feedback style requires --reset or at least one style option");
+        return fail("background cua feedback style requires --reset or at least one style option");
     }
     return run_cua_tool("set_agent_cursor_style", arguments);
-#else
-    (void)options;
-    return unsupported();
-#endif
 }
 
 OperationResult macos_cua_feedback_preset(const MacCuaFeedbackPresetOptions& options) {
-#ifdef __APPLE__
     const std::string name = options.name.empty() ? "natural" : options.name;
     if (name == "quiet") {
         nlohmann::json enabled_arguments = {{"enabled", false}};
@@ -658,7 +675,7 @@ OperationResult macos_cua_feedback_preset(const MacCuaFeedbackPresetOptions& opt
         if (!enabled.ok) {
             return enabled;
         }
-        return ok("mac-background feedback preset quiet applied");
+        return ok("background cua feedback preset quiet applied");
     }
 
     nlohmann::json motion = nlohmann::json::object();
@@ -709,7 +726,7 @@ OperationResult macos_cua_feedback_preset(const MacCuaFeedbackPresetOptions& opt
             {"bloom_color", "#F59E0B"},
         };
     } else {
-        return fail("mac-background feedback preset must be natural, fast, recording, or quiet");
+        return fail("background cua feedback preset must be natural, fast, recording, or quiet");
     }
 
     nlohmann::json enabled_arguments = {{"enabled", true}};
@@ -728,11 +745,7 @@ OperationResult macos_cua_feedback_preset(const MacCuaFeedbackPresetOptions& opt
     if (!style_result.ok) {
         return style_result;
     }
-    return ok("mac-background feedback preset " + name + " applied");
-#else
-    (void)options;
-    return unsupported();
-#endif
+    return ok("background cua feedback preset " + name + " applied");
 }
 
 }

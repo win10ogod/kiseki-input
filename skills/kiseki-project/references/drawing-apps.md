@@ -9,7 +9,7 @@ The goal is reliable agent operation, not a human-style tutorial. Follow the pha
 Do not send a draw path until these facts are known:
 
 - target process/window id
-- operation mode: foreground/global, Windows selected-window helper, Linux background desktop, or macOS CUA target-routed
+- operation mode: foreground/global, Windows selected-window helper, Linux background desktop, or CUA target-routed
 - coordinate space: screen coordinates or window-local coordinates
 - canvas bounds or a conservative canvas point range
 - active drawing tool
@@ -22,10 +22,12 @@ A successful CLI return code is not proof that drawing changed the canvas. Proof
 
 Choose one mode and keep it explicit in notes and commands:
 
-- Foreground/global: use `kiseki input ...`. Coordinates are screen coordinates. This can move the real pointer and depends on active focus. Use it for dense strokes and visible desktop demonstrations.
-- Windows selected-window helper: use `input background-*` only for apps that accept normal window messages. Do not expect it to control raw canvas/game input.
-- Linux isolated background: use `background-desktop ...` on an Xvfb display. Coordinates are the virtual display's screen coordinates.
-- macOS CUA target-routed: use `mac-background ...`. Coordinates for `--window-id` actions are window-local screenshot coordinates. Verify with `mac-background screenshot` or `mac-background state`.
+- Foreground/global: use `kiseki input ...`. Coordinates are screen coordinates. This can move the real pointer and depends on active focus. Verify with `screenshot desktop` or `screenshot window`. Use it for dense strokes and visible desktop demonstrations.
+- Windows selected-window helper: use `background window text|key|mouse|drag` only for apps that accept normal window messages. Verify with `background window screenshot`. Do not expect it to control raw canvas/game input.
+- Linux isolated background: use `background desktop ...` on an Xvfb display. Coordinates are the virtual display's screen coordinates. Verify with `background desktop screenshot`.
+- CUA target-routed: use `background cua ...`. Coordinates for `--window-id` actions are window-local screenshot coordinates. Verify with `background cua screenshot` or `background cua state --output`.
+
+For weak-model handoff, run `kiseki modes --json` before choosing a path. Do not verify background drawing with `screenshot desktop`; it captures the current visible desktop, not necessarily the background target.
 
 Do not mix screen coordinates with window-local coordinates. Convert AX/window screen bounds to CUA local coordinates with:
 
@@ -43,17 +45,19 @@ kiseki target list
 kiseki observe ui --target-window-id <id> --provider auto --max-depth 4 --max-elements 256
 ```
 
-Then capture a before image:
+Then capture a before image from the same mode that will execute the action:
 
 ```bash
 kiseki screenshot window --target-window-id <id> --output artifacts/live-test/draw-before.bmp
+kiseki background window screenshot --target-window-id <id> --output artifacts/live-test/draw-before-background.bmp
+kiseki background desktop screenshot --display :99 --output artifacts/live-test/draw-before-xvfb.bmp
 ```
 
-For macOS CUA:
+For CUA target-routed operation:
 
 ```bash
-kiseki mac-background windows
-kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/draw-before.png
+kiseki background cua windows
+kiseki background cua screenshot --window-id <window_id> --output artifacts/live-test/draw-before.png
 ```
 
 Use AX/UIA for controls such as toolbar buttons, color wells, sliders, menus, status text, and tool names. Use screenshots for canvas contents; canvas pixels are usually not exposed as AX/UIA elements.
@@ -92,10 +96,10 @@ Foreground/global `input drag` can use dense paths. Use delay and hold time when
 kiseki input drag --file artifacts/live-test/shape-points.txt --backend system --step-delay-ms 6 --start-hold-ms 80 --end-hold-ms 40
 ```
 
-macOS `mac-background draw` should use sparse control points. It sends segments through CUA and protects against excessive segment counts:
+`background cua draw` should use sparse control points. It sends segments through CUA and protects against excessive segment counts:
 
 ```bash
-kiseki mac-background draw --pid <pid> --window-id <window_id> --file artifacts/live-test/shape-local-points.txt --duration-ms 160 --steps 10 --max-segments 128
+kiseki background cua draw --pid <pid> --window-id <window_id> --file artifacts/live-test/shape-local-points.txt --duration-ms 160 --steps 10 --max-segments 128
 ```
 
 Do not feed dense per-pixel paths into CUA draw unless `--max-segments` is intentionally raised and the target has already been tested.
@@ -161,16 +165,16 @@ For foreground drawing, use screen coordinates:
 For CUA target-routed drawing, first get CUA identifiers and a CUA screenshot:
 
 ```bash
-./build/kiseki mac-background status --prompt
-./build/kiseki mac-background windows
-./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/krita-cua-before.png
+./build/kiseki background cua status --prompt
+./build/kiseki background cua windows
+./build/kiseki background cua screenshot --window-id <window_id> --output artifacts/live-test/krita-cua-before.png
 ```
 
 Create window-local points inside the canvas area from the CUA screenshot, then run:
 
 ```bash
-./build/kiseki mac-background draw --pid <pid> --window-id <window_id> --file artifacts/live-test/krita-local-points.txt --duration-ms 180 --steps 10 --max-segments 128
-./build/kiseki mac-background screenshot --window-id <window_id> --output artifacts/live-test/krita-cua-after.png
+./build/kiseki background cua draw --pid <pid> --window-id <window_id> --file artifacts/live-test/krita-local-points.txt --duration-ms 180 --steps 10 --max-segments 128
+./build/kiseki background cua screenshot --window-id <window_id> --output artifacts/live-test/krita-cua-after.png
 ```
 
 If CUA reports success but the screenshot is unchanged, classify the result using the failure checklist below. Do not claim background drawing support from return code alone.
@@ -195,7 +199,7 @@ Only after these checks pass should the backend be suspected.
 Use this shape in final reports:
 
 ```text
-Mode: foreground/global | selected-window helper | Linux Xvfb | macOS CUA
+Mode: foreground/global | selected-window helper | Linux Xvfb | CUA target-routed
 Target: pid=<pid>, window=<id>, title=<title>
 Coordinate space: screen | window-local
 Tool/color: verified | not verified

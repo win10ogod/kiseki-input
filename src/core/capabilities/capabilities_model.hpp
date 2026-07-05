@@ -22,6 +22,7 @@ struct CaptureCapabilities {
 
 struct SessionCapabilities {
     bool background_desktop = false;
+    bool cua_background = false;
     bool macos_cua_background = false;
 };
 
