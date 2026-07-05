@@ -33,6 +33,11 @@ FetchContent_MakeAvailable(CLI11 nlohmann_json cpp_httplib)
 
 if(UNIX AND NOT APPLE AND NOT WIN32)
     find_package(X11)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(KISEKI_GIO QUIET IMPORTED_TARGET gio-2.0)
+        pkg_check_modules(KISEKI_GDK_PIXBUF QUIET IMPORTED_TARGET gdk-pixbuf-2.0)
+    endif()
 endif()
 
 set(KISEKI_CORE_SOURCES
@@ -55,10 +60,12 @@ add_library(kiseki_platform STATIC
     src/platform/input/input.cpp
     src/platform/notification/notification.cpp
     src/platform/observe/ui_observation.cpp
+    src/platform/permissions/permissions.cpp
     src/platform/runtime_capabilities.cpp
     src/platform/session/background_desktop.cpp
     src/platform/session/macos_cua.cpp
     src/platform/target/target.cpp
+    src/platform/teach/recording.cpp
 )
 target_compile_features(kiseki_platform PUBLIC cxx_std_20)
 target_include_directories(kiseki_platform PUBLIC src)
@@ -83,6 +90,11 @@ elseif(APPLE)
 elseif(X11_FOUND)
     target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_X11=1)
     target_link_libraries(kiseki_platform PRIVATE X11::X11 ${CMAKE_DL_LIBS})
+endif()
+if(UNIX AND NOT APPLE AND NOT WIN32 AND KISEKI_GIO_FOUND AND KISEKI_GDK_PIXBUF_FOUND)
+    target_sources(kiseki_platform PRIVATE src/platform/capture/wayland_portal_capture.cpp)
+    target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_XDG_DESKTOP_PORTAL=1)
+    target_link_libraries(kiseki_platform PRIVATE PkgConfig::KISEKI_GIO PkgConfig::KISEKI_GDK_PIXBUF)
 endif()
 set_target_properties(kiseki_platform PROPERTIES CXX_EXTENSIONS OFF)
 

@@ -7,11 +7,11 @@ description: Use when working inside the Kiseki Input repository on CLI commands
 
 ## Overview
 
-Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration only. Operational capabilities are CLI-only: screenshots, input simulation, notifications, daemon mode, capabilities, and diagnostics.
+Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration and local teaching-bundle inspection. Operational capabilities are CLI-only: screenshots, input simulation, teaching recording, notifications, daemon mode, capabilities, and diagnostics.
 
 ## First Rules
 
-- Keep WebUI configuration-only. Do not add input, screenshot, shell, daemon, or execution routes to the WebUI.
+- Keep WebUI non-operational. It may edit config and read user-selected local teaching bundles, but must not add input, screenshot, shell, daemon, process launch, or execution routes.
 - Prefer small platform slices: input, screenshot, notification, config, WebUI, and CLI wiring should remain separable.
 - For ambiguous automation or weak-model handoff, run or consult `kiseki modes --json` first. Keep current-session commands, background commands, and verification screenshots in the same mode family.
 - Use the integrated `kiseki background ...` command group for background-operation docs and tests. Older direct background command families are removed and should be treated as errors.
@@ -21,9 +21,11 @@ Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration on
 - Optional CUA Driver background operation should be invoked through `kiseki background cua ...`. Do not claim it is live unless `cua-driver` is installed, status/permissions are checked, and a real target action is verified on that platform/session.
 - Treat `kiseki input ...` and `kiseki screenshot ...` as current-session/non-background command families. Treat `kiseki background ...` as background, isolated-session, or target-routed command families.
 - On macOS, distinguish global/current-session `kiseki input ...` commands from target-routed CUA `kiseki background cua ...` commands. Do not describe the CUA overlay cursor as the real system pointer.
+- On macOS, when Screen Recording or Accessibility permission is missing or no prompt appears, run `kiseki permissions macos screen-recording --prompt --open-settings` or `kiseki permissions macos accessibility --prompt --open-settings` from the same GUI Terminal/app that will run Kiseki; SSH-launched binaries may not receive the same TCC grant.
 - On Windows, distinguish native selected-window/background screenshot support from optional CUA Driver support in the interactive desktop session.
-- On Linux, distinguish native X11/Xvfb support from optional CUA Driver support; upstream CUA Linux support is pre-release and needs true-machine graphical validation.
+- On Linux, distinguish X11/XTest, Xvfb isolated desktop, Wayland XDG Desktop Portal screenshots, and optional CUA Driver support. Wayland portal is current-session screenshot support only; do not claim Wayland global input from it.
 - For drawing software work, read `references/drawing-apps.md` before acting. Do not draw until the target window, operation mode, canvas area, tool, visible color, and before-screenshot are established.
+- For screen teaching recordings, use `skills/kiseki-teach-recording/SKILL.md` and validate the produced bundle before claiming it is effective.
 
 ## Project Anchors
 

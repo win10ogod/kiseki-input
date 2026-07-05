@@ -7,6 +7,7 @@ Global:
 - `kiseki --config <path> ...` overrides the active config path.
 - `kiseki --version` prints the version.
 - `kiseki modes [--json]` prints the operation and screenshot mode guide. Use `--json` for weak-model or agent handoff.
+- `kiseki teach record|annotate|transcribe ...` records and prepares Agivar-style teaching bundles: action events plus keyframes, optional human text, optional real media, and targeted annotations.
 
 ## Mode Selection Contract
 
@@ -39,9 +40,9 @@ Configuration:
 WebUI:
 
 - `kiseki config-ui [--host <host>] [--port <port>]` starts the embedded local configuration server.
-- The WebUI is configuration-only.
+- The WebUI can edit configuration and read local teaching bundles through browser file inputs.
 - Allowed API routes: `GET /api/config`, `PUT /api/config`, `GET /api/capabilities`.
-- Never expose operational API routes from the WebUI.
+- Never expose operational API routes from the WebUI. Teaching viewing must stay local-file based and must not trigger input, screenshots, notifications, daemon control, shell commands, or process launch.
 
 Targets:
 
@@ -132,6 +133,18 @@ Macros:
 - `kiseki macro run --file <macro.json>` executes a macro step sequence.
 - Macro execution stops at the first failing step and returns that step's nonzero code.
 
+Teaching recordings:
+
+- `kiseki teach record [--output <dir>] [--duration-ms <n>] [--frame-interval-ms <n>] [--event-poll-ms <n>] [--title <text>] [--text <text>|--text-file <file>]` toggles recording. First call starts a detached recorder; the next call stops and finalizes it. `--duration-ms 0` means record until stopped.
+- `kiseki teach record ... [--video-file <file>] [--audio-file <file>] [--transcript-file <file>]` attaches only real existing media/transcript files.
+- `kiseki teach record ... [--video-keyframe-interval-ms <n>] [--video-keyframe-max <n>] [--no-video-keyframes]` controls review JPEG extraction from real video files through `ffmpeg`.
+- `kiseki teach annotate --session <dir> --frame-index <n> --text <text>` attaches guidance to a keyframe.
+- `kiseki teach annotate --session <dir> --event-index <n> --text <text>` attaches guidance to a recorded action.
+- `kiseki teach transcribe --audio-file <file> --output <transcript.json> [--model <local-dir>] [--model-id Systran/faster-whisper-large-v3]` runs the optional faster-whisper transcription path and downloads the model when the local directory is missing or empty.
+- Teaching bundles are model-facing action sequences plus keyframes. Do not feed full video to a teach agent when `actions.json`, `timeline.json`, selected keyframes, instruction text, transcript, and annotations are sufficient.
+- The default transcription model path is `vendor/models/Systran/faster-whisper-large-v3`; model artifacts should be downloaded or pre-bundled there, not committed to git.
+- The standard bundle shape is `manifest.json` schema v2, `frames.json`, `actions.json`, `timeline.json`, `events.jsonl`, `instruction.txt` when text exists, `annotations.json`, selected `keyframes/*.bmp`, generated `SKILL.md`, optional `media/*`, and optional `video_keyframes/index.json`.
+
 Mouse click values:
 
 - `none`, `left`, `right`, `middle`
@@ -214,6 +227,7 @@ Linux:
 - Input uses X11/XTest when compiled with X11 and `DISPLAY` is usable.
 - Linux `driver` backend currently reports unavailable.
 - Screenshot uses X11 root `XGetImage` when the session permits it.
+- Wayland current-session desktop screenshots use XDG Desktop Portal when the build finds `gio-2.0` and `gdk-pixbuf-2.0`; the compositor may require permission or return denial. This does not provide Wayland global input.
 - Target-window background input uses X11 events.
 - Target-window screenshots use X11 `XGetImage` on the selected window.
 - Explicit background window screenshots use the same selected-window X11 capture backend.
@@ -239,6 +253,7 @@ macOS:
 - Target listing uses Apple Window Services in the active GUI session.
 - Desktop and selected-window screenshots use ScreenCaptureKit and require Screen Recording permission.
 - Global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission.
+- Use `kiseki permissions macos screen-recording --prompt --open-settings` and `kiseki permissions macos accessibility --prompt --open-settings` from the same GUI Terminal/app that will run Kiseki when TCC does not show a prompt automatically. Do not treat an SSH-launched denial as proof that the GUI Terminal lacks permission.
 - `kiseki input ...` commands are global/current-session operations; they can move the real pointer or depend on focus.
 - Target-window background input is not reported available until a target-specific automation backend exists.
 - Use `input drag --file` for continuous foreground drawing when taking the current pointer/focus is acceptable. For drawing apps, prepare the target state first: pick the brush/shape tool, set a visible foreground color, and use `--start-hold-ms`/`--step-delay-ms` when the app needs slower pointer cadence.

@@ -182,7 +182,7 @@ TEST_CASE("doctor prints diagnostic text with foundation limitations") {
     REQUIRE(result.out.find("Mode split:") != std::string::npos);
     REQUIRE(result.out.find("Machine-readable guide: kiseki modes --json") != std::string::npos);
     REQUIRE(result.out.find("Limitations:") != std::string::npos);
-    REQUIRE(result.out.find("WebUI is configuration-only") != std::string::npos);
+    REQUIRE(result.out.find("WebUI API is configuration-only") != std::string::npos);
     REQUIRE(result.err.empty());
 }
 
@@ -215,6 +215,62 @@ TEST_CASE("modes json separates screenshot and operation families") {
     REQUIRE(json.at("modeMatrix").at(0).at("background") == false);
     REQUIRE(json.at("modeMatrix").at(1).at("background") == true);
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("macos screen recording permission command routes prompt and settings options") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.macos_screen_recording_permission = [&](const kiseki::cli::MacPermissionOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.prompt);
+        REQUIRE(options.open_settings);
+        called = true;
+        io.out << "screen recording permission ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"permissions", "macos", "screen-recording", "--prompt", "--open-settings"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "screen recording permission ok\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("macos accessibility permission command routes prompt and settings options") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.macos_accessibility_permission = [&](const kiseki::cli::MacPermissionOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.prompt);
+        REQUIRE(options.open_settings);
+        called = true;
+        io.out << "accessibility permission ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"permissions", "macos", "accessibility", "--prompt", "--open-settings"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "accessibility permission ok\n");
+    REQUIRE(err.str().empty());
 }
 
 TEST_CASE("doctor reports invalid config details") {
@@ -1592,6 +1648,200 @@ TEST_CASE("macro validate rejects malformed steps") {
     REQUIRE(result.code == 2);
     REQUIRE(result.out.empty());
     REQUIRE(result.err.find("mouse step requires both x and y") != std::string::npos);
+}
+
+TEST_CASE("teach record passes teaching bundle options to backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto output_dir = temp.file("teach-session");
+    const auto text_path = temp.file("instruction.txt");
+    const auto video_path = temp.file("preview.webm");
+    const auto audio_path = temp.file("note.wav");
+    const auto transcript_path = temp.file("transcript.json");
+    const auto state_path = temp.file("teach-state.json");
+    const auto stop_path = temp.file("teach-stop.json");
+    write_text(text_path, "Use the menu, then click Save.");
+    write_text(video_path, "fake video bytes");
+    write_text(audio_path, "fake audio bytes");
+    write_text(transcript_path, "{}");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.teach_record = [&](const kiseki::cli::TeachRecordOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.output_directory == output_dir);
+        REQUIRE(options.text == "Use the menu, then click Save.");
+        REQUIRE(options.text_file == text_path);
+        REQUIRE(options.video_file == video_path);
+        REQUIRE(options.audio_file == audio_path);
+        REQUIRE(options.transcript_file == transcript_path);
+        REQUIRE(options.state_file == state_path);
+        REQUIRE(options.stop_file == stop_path);
+        REQUIRE(options.duration_ms == 2500);
+        REQUIRE(options.frame_interval_ms == 500);
+        REQUIRE(options.event_poll_ms == 20);
+        REQUIRE(options.stop_timeout_ms == 1200);
+        REQUIRE(options.video_keyframe_interval_ms == 1500);
+        REQUIRE(options.video_keyframe_max == 12);
+        REQUIRE(options.worker);
+        REQUIRE(options.no_video_keyframes);
+        REQUIRE(options.title == "save-flow");
+        called = true;
+        io.out << "teach record ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {
+            "teach", "record",
+            "--output", output_dir.string(),
+            "--duration-ms", "2500",
+            "--frame-interval-ms", "500",
+            "--event-poll-ms", "20",
+            "--stop-timeout-ms", "1200",
+            "--video-keyframe-interval-ms", "1500",
+            "--video-keyframe-max", "12",
+            "--no-video-keyframes",
+            "--worker",
+            "--state-file", state_path.string(),
+            "--stop-file", stop_path.string(),
+            "--title", "save-flow",
+            "--text-file", text_path.string(),
+            "--video-file", video_path.string(),
+            "--audio-file", audio_path.string(),
+            "--transcript-file", transcript_path.string(),
+        },
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "teach record ok\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("teach record can toggle without an explicit output directory") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.teach_record = [&](const kiseki::cli::TeachRecordOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.output_directory.empty());
+        REQUIRE(options.duration_ms == 0);
+        REQUIRE(options.frame_interval_ms == 500);
+        REQUIRE(options.event_poll_ms == 25);
+        REQUIRE(options.stop_timeout_ms == 30000);
+        REQUIRE(options.video_keyframe_interval_ms == 2000);
+        REQUIRE(options.video_keyframe_max == 80);
+        REQUIRE_FALSE(options.worker);
+        called = true;
+        io.out << "teach toggle ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {"teach", "record"},
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "teach toggle ok\n");
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("teach annotate targets a frame or event") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto session_dir = temp.file("teach-session");
+    const auto text_path = temp.file("annotation.txt");
+    write_text(text_path, "This frame shows the expected confirmation.");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.teach_annotate = [&](const kiseki::cli::TeachAnnotateOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.session_directory == session_dir);
+        REQUIRE(options.frame_index == 3);
+        REQUIRE(options.event_index == 12);
+        REQUIRE(options.has_frame_index);
+        REQUIRE(options.has_event_index);
+        REQUIRE(options.text == "This frame shows the expected confirmation.");
+        called = true;
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {
+            "teach", "annotate",
+            "--session", session_dir.string(),
+            "--frame-index", "3",
+            "--event-index", "12",
+            "--file", text_path.string(),
+        },
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str().empty());
+    REQUIRE(err.str().empty());
+}
+
+TEST_CASE("teach transcribe passes faster-whisper paths to backend") {
+    std::ostringstream out;
+    std::ostringstream err;
+    const TempConfigDirectory temp;
+    const auto config_path = temp.file("config.json");
+    const auto audio_path = temp.file("note.wav");
+    const auto output_path = temp.file("transcript.json");
+    const auto model_path = temp.file("faster-whisper-large-v3");
+    const auto script_path = temp.file("teach_transcribe.py");
+    bool called = false;
+
+    kiseki::cli::Dependencies dependencies;
+    dependencies.teach_transcribe = [&](const kiseki::cli::TeachTranscribeOptions& options, kiseki::cli::Io io) {
+        REQUIRE(options.audio_file == audio_path);
+        REQUIRE(options.output_path == output_path);
+        REQUIRE(options.model_path == model_path);
+        REQUIRE(options.script_path == script_path);
+        REQUIRE(options.model_id == "Systran/faster-whisper-large-v3");
+        REQUIRE(options.language == "zh");
+        REQUIRE(options.device == "cpu");
+        REQUIRE(options.compute_type == "int8");
+        called = true;
+        io.out << "transcribe ok\n";
+        return 0;
+    };
+
+    const int code = kiseki::cli::run(
+        {
+            "teach", "transcribe",
+            "--audio-file", audio_path.string(),
+            "--output", output_path.string(),
+            "--model", model_path.string(),
+            "--script", script_path.string(),
+            "--model-id", "Systran/faster-whisper-large-v3",
+            "--language", "zh",
+            "--device", "cpu",
+            "--compute-type", "int8",
+        },
+        config_path,
+        kiseki::cli::Io{out, err},
+        dependencies);
+
+    REQUIRE(code == 0);
+    REQUIRE(called);
+    REQUIRE(out.str() == "transcribe ok\n");
+    REQUIRE(err.str().empty());
 }
 
 TEST_CASE("daemon once sends configured heartbeat notification") {

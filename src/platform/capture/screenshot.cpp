@@ -23,6 +23,9 @@
 
 #include <ApplicationServices/ApplicationServices.h>
 #else
+#ifdef KISEKI_HAS_XDG_DESKTOP_PORTAL
+#include "platform/capture/wayland_portal_capture.hpp"
+#endif
 #ifdef KISEKI_HAS_X11
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -186,6 +189,56 @@ bool x11_get_image_supported(Display* display, Window root) {
     }
     return last_x11_error_code == 0 && image != nullptr;
 }
+
+CaptureResult capture_desktop_bmp_x11(const std::filesystem::path& output_path) {
+    Display* display = XOpenDisplay(nullptr);
+    if (display == nullptr) {
+        return fail_capture(output_path, "XOpenDisplay failed; DISPLAY is not available");
+    }
+
+    const int screen = DefaultScreen(display);
+    Window root = RootWindow(display, screen);
+    XWindowAttributes attributes{};
+    if (XGetWindowAttributes(display, root, &attributes) == 0) {
+        XCloseDisplay(display);
+        return fail_capture(output_path, "XGetWindowAttributes failed");
+    }
+
+    last_x11_error_code = 0;
+    auto* old_handler = XSetErrorHandler(capture_x11_error);
+    XImage* image = XGetImage(
+        display,
+        root,
+        0,
+        0,
+        static_cast<unsigned int>(attributes.width),
+        static_cast<unsigned int>(attributes.height),
+        AllPlanes,
+        ZPixmap);
+    XSync(display, False);
+    XSetErrorHandler(old_handler);
+    if (last_x11_error_code != 0 || image == nullptr) {
+        XCloseDisplay(display);
+        return fail_capture(output_path, "XGetImage failed; this X11 session does not allow root screenshot capture");
+    }
+
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(attributes.width) * static_cast<std::size_t>(attributes.height) * 4U);
+    for (int y = 0; y < attributes.height; ++y) {
+        for (int x = 0; x < attributes.width; ++x) {
+            const unsigned long pixel = XGetPixel(image, x, y);
+            const auto offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(attributes.width) + static_cast<std::size_t>(x)) * 4U;
+            pixels[offset + 0] = component_from_mask(pixel, image->blue_mask);
+            pixels[offset + 1] = component_from_mask(pixel, image->green_mask);
+            pixels[offset + 2] = component_from_mask(pixel, image->red_mask);
+            pixels[offset + 3] = 0;
+        }
+    }
+
+    XDestroyImage(image);
+    XCloseDisplay(display);
+
+    return write_bgra_bmp(output_path, attributes.width, attributes.height, pixels);
+}
 #endif
 #endif
 
@@ -197,19 +250,23 @@ bool desktop_capture_available() {
 #elif defined(__APPLE__)
     return CGPreflightScreenCaptureAccess();
 #else
+    bool x11_supported = false;
 #ifdef KISEKI_HAS_X11
     const char* display = std::getenv("DISPLAY");
-    if (display == nullptr || display[0] == '\0') {
-        return false;
+    if (display != nullptr && display[0] != '\0') {
+        Display* xdisplay = XOpenDisplay(nullptr);
+        if (xdisplay != nullptr) {
+            const Window root = RootWindow(xdisplay, DefaultScreen(xdisplay));
+            x11_supported = x11_get_image_supported(xdisplay, root);
+            XCloseDisplay(xdisplay);
+        }
     }
-    Display* xdisplay = XOpenDisplay(nullptr);
-    if (xdisplay == nullptr) {
-        return false;
+#endif
+    if (x11_supported) {
+        return true;
     }
-    const Window root = RootWindow(xdisplay, DefaultScreen(xdisplay));
-    const bool supported = x11_get_image_supported(xdisplay, root);
-    XCloseDisplay(xdisplay);
-    return supported;
+#ifdef KISEKI_HAS_XDG_DESKTOP_PORTAL
+    return wayland_portal_capture_available();
 #else
     return false;
 #endif
@@ -239,56 +296,33 @@ CaptureResult capture_desktop_bmp(const std::filesystem::path& output_path) {
     }
     return capture_desktop_bmp_screencapturekit(output_path);
 #else
+    std::string x11_error;
 #ifdef KISEKI_HAS_X11
-    Display* display = XOpenDisplay(nullptr);
-    if (display == nullptr) {
-        return fail_capture(output_path, "XOpenDisplay failed; DISPLAY is not available");
-    }
-
-    const int screen = DefaultScreen(display);
-    Window root = RootWindow(display, screen);
-    XWindowAttributes attributes{};
-    if (XGetWindowAttributes(display, root, &attributes) == 0) {
-        XCloseDisplay(display);
-        return fail_capture(output_path, "XGetWindowAttributes failed");
-    }
-
-    last_x11_error_code = 0;
-    auto* old_handler = XSetErrorHandler(capture_x11_error);
-    XImage* image = XGetImage(
-        display,
-        root,
-        0,
-        0,
-        static_cast<unsigned int>(attributes.width),
-        static_cast<unsigned int>(attributes.height),
-        AllPlanes,
-        ZPixmap);
-    XSync(display, False);
-    XSetErrorHandler(old_handler);
-    if (last_x11_error_code != 0 || image == nullptr) {
-        XCloseDisplay(display);
-        return fail_capture(output_path, "XGetImage failed; this WSL/X11 session does not allow root screenshot capture");
-    }
-
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(attributes.width) * static_cast<std::size_t>(attributes.height) * 4U);
-    for (int y = 0; y < attributes.height; ++y) {
-        for (int x = 0; x < attributes.width; ++x) {
-            const unsigned long pixel = XGetPixel(image, x, y);
-            const auto offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(attributes.width) + static_cast<std::size_t>(x)) * 4U;
-            pixels[offset + 0] = component_from_mask(pixel, image->blue_mask);
-            pixels[offset + 1] = component_from_mask(pixel, image->green_mask);
-            pixels[offset + 2] = component_from_mask(pixel, image->red_mask);
-            pixels[offset + 3] = 0;
+    const char* display = std::getenv("DISPLAY");
+    if (display != nullptr && display[0] != '\0') {
+        const auto x11_capture = capture_desktop_bmp_x11(output_path);
+        if (x11_capture.ok) {
+            return x11_capture;
         }
+        x11_error = x11_capture.error;
     }
-
-    XDestroyImage(image);
-    XCloseDisplay(display);
-
-    return write_bgra_bmp(output_path, attributes.width, attributes.height, pixels);
+#endif
+#ifdef KISEKI_HAS_XDG_DESKTOP_PORTAL
+    if (wayland_portal_capture_available()) {
+        const auto portal_capture = capture_desktop_bmp_wayland_portal(output_path);
+        if (portal_capture.ok || x11_error.empty()) {
+            return portal_capture;
+        }
+        return fail_capture(output_path, x11_error + "; Wayland portal fallback failed: " + portal_capture.error);
+    }
+#endif
+    if (!x11_error.empty()) {
+        return fail_capture(output_path, x11_error);
+    }
+#if defined(KISEKI_HAS_X11) || defined(KISEKI_HAS_XDG_DESKTOP_PORTAL)
+    return fail_capture(output_path, "Linux desktop capture requires a usable X11 DISPLAY or Wayland XDG Desktop Portal session");
 #else
-    return fail_capture(output_path, "X11 desktop capture support was not compiled in");
+    return fail_capture(output_path, "Linux desktop capture support was not compiled in; build with X11 or XDG Desktop Portal support");
 #endif
 #endif
 }

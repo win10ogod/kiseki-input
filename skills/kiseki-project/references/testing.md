@@ -40,6 +40,9 @@ For weak-model handoff or ambiguous tasks, run:
 
 ```bash
 ./build/Debug/kiseki.exe modes --json
+./build/Debug/kiseki.exe teach record --output artifacts/live-test/teach-smoke --duration-ms 10000 --frame-interval-ms 500 --event-poll-ms 25 --title smoke --text "smoke teaching"
+sleep 2
+./build/Debug/kiseki.exe teach record --stop-timeout-ms 15000
 ```
 
 Do not verify a background action with `screenshot desktop`; it captures the current visible desktop and can hide whether the background target actually changed.
@@ -133,7 +136,14 @@ Use `observe ui` before screenshot-based verification when the task can be answe
 ./build/Debug/kiseki.exe observe ui --target-title "Chrome" --provider window-tree
 ```
 
-On macOS, verify AX observation against a real GUI target after granting Accessibility permission to the terminal/Codex host:
+On macOS, run permission helpers from the same GUI Terminal/app that will run Kiseki when prompts do not appear automatically:
+
+```bash
+./build/kiseki permissions macos screen-recording --prompt --open-settings
+./build/kiseki permissions macos accessibility --prompt --open-settings
+```
+
+Then verify AX observation against a real GUI target after Accessibility is granted:
 
 ```bash
 ./build/kiseki observe ui --target-title "Krita" --provider ax --max-depth 4 --max-elements 256
@@ -166,6 +176,20 @@ Then run:
 ```
 
 Visually inspect `artifacts/live-test/paint-macro.bmp` or a converted PNG before claiming live macro success.
+
+## Teaching Recording Smoke Test
+
+Use a short current-session toggle recording first:
+
+```powershell
+Remove-Item -Recurse -Force artifacts/live-test/teach-smoke -ErrorAction SilentlyContinue
+./build/Debug/kiseki.exe teach record --output artifacts/live-test/teach-smoke --state-file artifacts/live-test/teach-smoke-state.json --duration-ms 10000 --frame-interval-ms 500 --event-poll-ms 25 --title smoke --text "Record keyframes and native events"
+Start-Sleep -Seconds 2
+./build/Debug/kiseki.exe teach record --state-file artifacts/live-test/teach-smoke-state.json --stop-timeout-ms 15000
+./build/Debug/kiseki.exe teach annotate --session artifacts/live-test/teach-smoke --frame-index 0 --text "Initial keyframe"
+```
+
+Before claiming success, verify these files exist and parse: `manifest.json`, `frames.json`, `actions.json`, `timeline.json`, `events.jsonl`, `annotations.json`, `SKILL.md`, and at least one selected `keyframes/*.bmp`. If a real video was attached and extraction is enabled, also parse `video_keyframes/index.json` and verify referenced JPEGs exist. If testing WebUI, open `config-ui`, switch to Teaching, select the `teach-smoke` directory, and confirm selected keyframes, actions, instruction/transcript, and annotations render. WebUI validation is local-file viewing only; it must not trigger screenshots or input.
 
 ## WebUI Browser Recipe
 
@@ -221,7 +245,13 @@ If the test opens a dismissible Windows message box, close it before continuing.
 
 ## Linux Background Desktop Recipe
 
-Run only on a real Linux host with X11 libraries and `Xvfb` installed. WSL-only results are not Linux desktop proof.
+Run only on a real Linux host with X11 libraries and `Xvfb` installed. WSL-only results are not Linux desktop proof. Before choosing a Linux test path, record the session type:
+
+```bash
+loginctl show-session <session-id> -p Type -p Display -p State -p Active
+```
+
+Use the X11/Xvfb recipe below for `Type=x11`. For `Type=wayland`, test current-session screenshot with `kiseki screenshot desktop` and expect the XDG Desktop Portal path; do not claim Wayland global input from portal screenshot support.
 
 ```bash
 cmake -S . -B build -DKISEKI_BUILD_TESTING=ON

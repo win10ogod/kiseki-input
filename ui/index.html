@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Kiseki Input Configuration</title>
+    <title>Kiseki Input</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
@@ -11,65 +11,138 @@
       <header class="topbar">
         <div>
           <h1>Kiseki Input</h1>
-          <p>Configuration</p>
+          <p id="subtitle">Configuration</p>
         </div>
-        <button id="save" type="button" disabled>Save</button>
+        <div class="top-actions">
+          <nav class="tabs" aria-label="Main view">
+            <button class="tab active" data-view="config-view" type="button">Config</button>
+            <button class="tab" data-view="teach-view" type="button">Teaching</button>
+          </nav>
+          <button id="save" type="button" disabled>Save</button>
+        </div>
       </header>
 
-      <form id="config-form" class="grid">
-        <section>
-          <h2>WebUI</h2>
-          <label>Host <input name="webui.host" autocomplete="off"></label>
-          <label>Port <input name="webui.port" type="number" min="1" max="65535"></label>
-        </section>
+      <section id="config-view" class="view active">
+        <form id="config-form" class="grid">
+          <section>
+            <h2>WebUI</h2>
+            <label>Host <input name="webui.host" autocomplete="off"></label>
+            <label>Port <input name="webui.port" type="number" min="1" max="65535"></label>
+          </section>
 
-        <section>
-          <h2>Heartbeat</h2>
-          <label><input name="heartbeat.enabled" type="checkbox"> Enabled</label>
-          <label>Interval seconds <input name="heartbeat.intervalSeconds" type="number" min="1"></label>
-          <label><input name="heartbeat.notificationEnabled" type="checkbox"> Notifications</label>
-          <label>Message <input name="heartbeat.message" autocomplete="off"></label>
-        </section>
+          <section>
+            <h2>Heartbeat</h2>
+            <label><input name="heartbeat.enabled" type="checkbox"> Enabled</label>
+            <label>Interval seconds <input name="heartbeat.intervalSeconds" type="number" min="1"></label>
+            <label><input name="heartbeat.notificationEnabled" type="checkbox"> Notifications</label>
+            <label>Message <input name="heartbeat.message" autocomplete="off"></label>
+          </section>
 
-        <section>
-          <h2>Input Defaults</h2>
-          <label>Default backend
-            <select name="input.defaultBackend">
-              <option value="background-window">background-window</option>
-              <option value="driver">driver</option>
-            </select>
-          </label>
-          <label>Windows driver
-            <select name="input.windowsDriver">
-              <option>AnyDriver</option>
-              <option>SendInput</option>
-              <option>Logitech</option>
-              <option>LogitechGHubNew</option>
-              <option>Razer</option>
-              <option>DD</option>
-              <option>MouClassInputInjection</option>
-            </select>
-          </label>
-          <label>Linux driver
-            <select name="input.linuxDriver">
-              <option>uinput</option>
-            </select>
-          </label>
-          <label><input name="input.backgroundInputEnabled" type="checkbox"> Background input enabled</label>
-        </section>
+          <section>
+            <h2>Input Defaults</h2>
+            <label>Default backend
+              <select name="input.defaultBackend">
+                <option value="background-window">background-window</option>
+                <option value="driver">driver</option>
+              </select>
+            </label>
+            <label>Windows driver
+              <select name="input.windowsDriver">
+                <option>AnyDriver</option>
+                <option>SendInput</option>
+                <option>Logitech</option>
+                <option>LogitechGHubNew</option>
+                <option>Razer</option>
+                <option>DD</option>
+                <option>MouClassInputInjection</option>
+              </select>
+            </label>
+            <label>Linux driver
+              <select name="input.linuxDriver">
+                <option>uinput</option>
+              </select>
+            </label>
+            <label><input name="input.backgroundInputEnabled" type="checkbox"> Background input enabled</label>
+          </section>
 
-        <section>
-          <h2>Screenshot Defaults</h2>
-          <label>Output directory <input name="screenshot.defaultOutputDirectory" autocomplete="off"></label>
-          <label>Burst FPS <input name="screenshot.burstFps" type="number" min="1" max="240"></label>
-          <label>Burst frames <input name="screenshot.burstFrames" type="number" min="1" max="240"></label>
-          <label>Format
-            <select name="screenshot.format">
-              <option>bmp</option>
-            </select>
-          </label>
-        </section>
-      </form>
+          <section>
+            <h2>Screenshot Defaults</h2>
+            <label>Output directory <input name="screenshot.defaultOutputDirectory" autocomplete="off"></label>
+            <label>Burst FPS <input name="screenshot.burstFps" type="number" min="1" max="240"></label>
+            <label>Burst frames <input name="screenshot.burstFrames" type="number" min="1" max="240"></label>
+            <label>Format
+              <select name="screenshot.format">
+                <option>bmp</option>
+              </select>
+            </label>
+          </section>
+        </form>
+      </section>
+
+      <section id="teach-view" class="view">
+        <div class="teach-layout">
+          <section class="teach-sidebar">
+            <h2>Teaching Bundle</h2>
+            <label>Bundle files
+              <input id="teach-files" type="file" multiple webkitdirectory>
+            </label>
+            <label>Video
+              <input id="teach-video" type="file" accept="video/*">
+            </label>
+            <label>Audio
+              <input id="teach-audio" type="file" accept="audio/*">
+            </label>
+            <label>Transcript
+              <input id="teach-transcript" type="file" accept=".json,.txt,application/json,text/plain">
+            </label>
+
+            <div class="summary">
+              <strong id="teach-title">No bundle loaded</strong>
+              <span id="teach-counts">0 keyframes, 0 actions, 0 events</span>
+            </div>
+
+            <h2>Keyframes</h2>
+            <div id="frame-list" class="listbox"></div>
+
+            <h2>Actions</h2>
+            <div id="event-list" class="listbox event-list"></div>
+          </section>
+
+          <section class="teach-stage">
+            <div class="stage-toolbar">
+              <button id="play-frames" type="button" disabled>Play</button>
+              <button id="pause-frames" type="button" disabled>Pause</button>
+              <span id="selection-label">No selection</span>
+            </div>
+            <div class="frame-canvas">
+              <img id="frame-image" alt="">
+              <video id="video-player" controls></video>
+            </div>
+
+            <div class="media-grid">
+              <section>
+                <h2>Instruction</h2>
+                <pre id="instruction-text"></pre>
+              </section>
+              <section>
+                <h2>Transcript</h2>
+                <audio id="audio-player" controls></audio>
+                <pre id="transcript-text"></pre>
+              </section>
+            </div>
+
+            <section class="annotation-panel">
+              <h2>Guidance</h2>
+              <textarea id="annotation-text" rows="4"></textarea>
+              <div class="annotation-actions">
+                <button id="add-annotation" type="button" disabled>Add Note</button>
+                <button id="download-annotations" type="button" disabled>Export</button>
+              </div>
+              <div id="annotation-list" class="annotation-list"></div>
+            </section>
+          </section>
+        </div>
+      </section>
 
       <pre id="status" role="status"></pre>
     </main>

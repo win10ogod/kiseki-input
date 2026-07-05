@@ -11,22 +11,25 @@
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.
 - `src/platform/session/`: Linux Xvfb background desktop lifecycle and optional CUA Driver provider wrapper.
 - `src/platform/target/`: platform target-window listing and resolver for title, PID, and window id selectors.
+- `src/platform/teach/`: Agivar-style teaching recording, text annotations, optional transcription launcher, and bundle generation.
 - `src/webui/`: embedded static assets, config-only API, HTTP server.
 - `test/`: Catch2 unit tests.
 - `ui/`: source WebUI assets mirrored into embedded static assets.
 
 ## Design Boundaries
 
-CLI owns operation execution. WebUI owns configuration only.
+CLI owns operation execution. WebUI owns configuration and local teaching-bundle inspection only.
 
 Keep these boundaries intact:
 
 - WebUI can read/write config and show capabilities.
 - WebUI must not trigger input, screenshots, daemon operations, notifications, shell commands, or process launch.
+- WebUI teaching support must read user-selected local files only. It may inspect `manifest.json`, `frames.json`, `actions.json`, `timeline.json`, `events.jsonl`, `keyframes/`, `video_keyframes/`, media files, transcripts, and annotations through browser File APIs, but it must not gain operational server routes.
 - Observation commands such as `observe ui` are CLI-only. They should read structured system/app state and must not call screenshot/OCR/vision backends. Windows `uia` uses UI Automation; macOS `ax` uses Accessibility API data equivalent to the Accessibility Inspector element tree. Provider fallback must be explicit in the output; strict provider requests should fail instead of silently downgrading.
 - Platform code should expose small C++ functions returning `OperationResult` or `CaptureResult`.
 - CLI commands should be testable through injected dependencies in `kiseki::cli::Dependencies`.
 - Keep mode semantics visible at the CLI boundary: `input ...` and `screenshot ...` are current-session/non-background families, while `background ...` owns selected-window, isolated-display, and CUA target-routed background families. `kiseki modes --json` is the machine-readable contract for this split.
+- Keep teaching semantics separate from macro semantics: `macro ...` replays actions, while `teach ...` records and annotates human demonstrations for later analysis.
 - Background actions must be verified with the matching background screenshot family, not with `screenshot desktop`.
 
 ## Adding CLI Commands
@@ -65,10 +68,13 @@ Linux:
 - For WSL, report unsupported compositor/session behavior clearly.
 - True Linux behavior needs a real graphical Linux test environment.
 - Linux background desktop support is Xvfb-based and should stay separate from the current physical `DISPLAY`. Use scoped environment changes when routing screenshot or input commands to an isolated `DISPLAY`.
+- Keep Wayland support in the screenshot slice through XDG Desktop Portal. It is current-session capture and may require compositor permission; it must not be described as background input or global Wayland input.
+- Build the Wayland portal slice only when `gio-2.0` and `gdk-pixbuf-2.0` are detected. X11-only builds must continue to work.
 
 macOS:
 
 - Keep native ScreenCaptureKit/Quartz support separate from the optional CUA provider.
+- Keep macOS TCC permission helpers under `kiseki permissions macos ...`. When screenshot/input fails from SSH, retest from the same GUI Terminal/app that will run Kiseki before making capability claims.
 - `src/platform/session/macos_cua.*` shells out to `cua-driver`; despite the historical filename, the wrapper is the optional cross-platform CUA Driver bridge. Do not make CUA a hard build dependency.
 - `background cua` commands are CLI-only and must not add WebUI operation routes. Older direct CUA/background command families are removed from the public CLI.
 - Treat `kiseki input ...` on macOS as global/current-session input. Treat `kiseki background cua ...` as the target-routed CUA background path.

@@ -2,3 +2,6 @@
 build/
 build-wsl/
 artifacts/
+__pycache__/
+*.pyc
+NUL

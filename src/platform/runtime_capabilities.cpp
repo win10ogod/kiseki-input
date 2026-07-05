@@ -35,7 +35,7 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
     capabilities.observation.macos_ax = false;
 #endif
     capabilities.limitations = {
-        "WebUI is configuration-only; operational input, screenshot, notification, and daemon actions are CLI-only",
+        "WebUI API is configuration-only; teaching bundle viewing uses local files and operational input, screenshot, notification, and daemon actions are CLI-only",
 #if defined(__APPLE__)
         "macOS desktop and selected-window screenshots require Screen Recording permission in the active GUI session",
         "macOS global keyboard and mouse input uses Quartz CGEvent and requires Accessibility permission",
@@ -54,6 +54,8 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
         "Windows observe ui can use UI Automation for structured non-visual UI trees when the target exposes UIA data",
 #else
         "Linux true background desktop requires Xvfb and runs applications inside an isolated X11 DISPLAY",
+        "Linux current-session desktop screenshots use X11 when DISPLAY allows capture and can fall back to XDG Desktop Portal on Wayland sessions",
+        "Linux Wayland portal screenshots may require compositor permission and are current-session capture, not background input",
         "Linux CUA background operation uses optional cua-driver; upstream currently marks Linux as pre-release while platform testing continues",
 #endif
         "some Raw Input, DirectInput, protected fullscreen, and hardware-overlay targets may ignore background input or window capture",
@@ -65,7 +67,7 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
 #elif defined(__APPLE__)
         capabilities.limitations.push_back("macOS driver-level input backend is not enabled; Quartz CGEvent system input is used when available");
 #else
-        capabilities.limitations.push_back("Linux driver-level input is not enabled; X11/XTest system input is used when available");
+        capabilities.limitations.push_back("Linux driver-level input is not enabled; X11/XTest system input is used when available; Wayland global input is not exposed by this backend");
 #endif
     }
     if (!capabilities.input.system) {

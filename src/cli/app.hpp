@@ -304,12 +304,58 @@ struct MacBackgroundFeedbackPresetOptions {
     std::string name;
 };
 
+struct MacPermissionOptions {
+    bool prompt;
+    bool open_settings;
+};
+
 struct DaemonOptions {
     bool once;
 };
 
 struct MacroOptions {
     std::filesystem::path path;
+};
+
+struct TeachRecordOptions {
+    std::filesystem::path output_directory;
+    std::filesystem::path text_file;
+    std::filesystem::path video_file;
+    std::filesystem::path audio_file;
+    std::filesystem::path transcript_file;
+    std::filesystem::path state_file;
+    std::filesystem::path stop_file;
+    std::uint32_t duration_ms;
+    std::uint32_t frame_interval_ms;
+    std::uint32_t event_poll_ms;
+    std::uint32_t stop_timeout_ms;
+    std::uint32_t video_keyframe_interval_ms;
+    std::uint32_t video_keyframe_max;
+    bool worker;
+    bool no_video_keyframes;
+    std::string title;
+    std::string text;
+};
+
+struct TeachAnnotateOptions {
+    std::filesystem::path session_directory;
+    std::filesystem::path text_file;
+    int frame_index;
+    int event_index;
+    bool has_frame_index;
+    bool has_event_index;
+    std::string text;
+};
+
+struct TeachTranscribeOptions {
+    std::filesystem::path audio_file;
+    std::filesystem::path output_path;
+    std::filesystem::path model_path;
+    std::filesystem::path script_path;
+    std::string model_id;
+    std::string language;
+    std::string device;
+    std::string compute_type;
 };
 
 struct Dependencies {
@@ -354,7 +400,12 @@ struct Dependencies {
     std::function<int(const MacBackgroundFeedbackMotionOptions&, Io)> mac_background_feedback_motion;
     std::function<int(const MacBackgroundFeedbackStyleOptions&, Io)> mac_background_feedback_style;
     std::function<int(const MacBackgroundFeedbackPresetOptions&, Io)> mac_background_feedback_preset;
+    std::function<int(const MacPermissionOptions&, Io)> macos_screen_recording_permission;
+    std::function<int(const MacPermissionOptions&, Io)> macos_accessibility_permission;
     std::function<int(const DaemonOptions&, const std::filesystem::path&, Io)> run_daemon;
+    std::function<int(const TeachRecordOptions&, Io)> teach_record;
+    std::function<int(const TeachAnnotateOptions&, Io)> teach_annotate;
+    std::function<int(const TeachTranscribeOptions&, Io)> teach_transcribe;
 };
 
 std::filesystem::path resolve_config_path(std::filesystem::path override_path);

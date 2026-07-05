@@ -23,10 +23,12 @@
 #include "platform/input/input.hpp"
 #include "platform/notification/notification.hpp"
 #include "platform/observe/ui_observation.hpp"
+#include "platform/permissions/permissions.hpp"
 #include "platform/runtime_capabilities.hpp"
 #include "platform/session/background_desktop.hpp"
 #include "platform/session/macos_cua.hpp"
 #include "platform/target/target.hpp"
+#include "platform/teach/recording.hpp"
 #include "webui/web_server.hpp"
 
 namespace kiseki::cli {
@@ -1166,8 +1168,66 @@ Dependencies default_dependencies() {
                 }),
                 io);
         },
+        .macos_screen_recording_permission = [](const MacPermissionOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::permissions::request_macos_screen_recording(options.prompt, options.open_settings),
+                io);
+        },
+        .macos_accessibility_permission = [](const MacPermissionOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::permissions::request_macos_accessibility(options.prompt, options.open_settings),
+                io);
+        },
         .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
             return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
+        },
+        .teach_record = [](const TeachRecordOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::teach::record_teaching_session(kiseki::platform::teach::RecordOptions{
+                    .output_directory = options.output_directory,
+                    .video_file = options.video_file,
+                    .audio_file = options.audio_file,
+                    .transcript_file = options.transcript_file,
+                    .state_file = options.state_file,
+                    .stop_file = options.stop_file,
+                    .duration_ms = options.duration_ms,
+                    .frame_interval_ms = options.frame_interval_ms,
+                    .event_poll_ms = options.event_poll_ms,
+                    .stop_timeout_ms = options.stop_timeout_ms,
+                    .video_keyframe_interval_ms = options.video_keyframe_interval_ms,
+                    .video_keyframe_max = options.video_keyframe_max,
+                    .worker = options.worker,
+                    .no_video_keyframes = options.no_video_keyframes,
+                    .title = options.title,
+                    .instruction_text = options.text,
+                }),
+                io);
+        },
+        .teach_annotate = [](const TeachAnnotateOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::teach::add_text_annotation(kiseki::platform::teach::AnnotateOptions{
+                    .session_directory = options.session_directory,
+                    .frame_index = options.frame_index,
+                    .event_index = options.event_index,
+                    .has_frame_index = options.has_frame_index,
+                    .has_event_index = options.has_event_index,
+                    .text = options.text,
+                }),
+                io);
+        },
+        .teach_transcribe = [](const TeachTranscribeOptions& options, Io io) {
+            return print_operation_result(
+                kiseki::platform::teach::transcribe_audio(kiseki::platform::teach::TranscribeOptions{
+                    .audio_file = options.audio_file,
+                    .output_path = options.output_path,
+                    .model_path = options.model_path,
+                    .script_path = options.script_path,
+                    .model_id = options.model_id,
+                    .language = options.language,
+                    .device = options.device,
+                    .compute_type = options.compute_type,
+                }),
+                io);
         },
     };
 }
@@ -1436,6 +1496,14 @@ int run(
     MacBackgroundFeedbackPresetOptions mac_background_feedback_preset_options{
         .name = "natural",
     };
+    MacPermissionOptions mac_screen_recording_options{
+        .prompt = false,
+        .open_settings = false,
+    };
+    MacPermissionOptions mac_accessibility_options{
+        .prompt = false,
+        .open_settings = false,
+    };
     std::string mac_background_click_modifiers;
     std::string mac_background_key_modifiers;
     std::string mac_background_hotkey_keys;
@@ -1447,6 +1515,44 @@ int run(
     };
     MacroOptions macro_options{
         .path = {},
+    };
+    TeachRecordOptions teach_record_options{
+        .output_directory = {},
+        .text_file = {},
+        .video_file = {},
+        .audio_file = {},
+        .transcript_file = {},
+        .state_file = {},
+        .stop_file = {},
+        .duration_ms = 0,
+        .frame_interval_ms = 500,
+        .event_poll_ms = 25,
+        .stop_timeout_ms = 30000,
+        .video_keyframe_interval_ms = 2000,
+        .video_keyframe_max = 80,
+        .worker = false,
+        .no_video_keyframes = false,
+        .title = "",
+        .text = "",
+    };
+    TeachAnnotateOptions teach_annotate_options{
+        .session_directory = {},
+        .text_file = {},
+        .frame_index = 0,
+        .event_index = 0,
+        .has_frame_index = false,
+        .has_event_index = false,
+        .text = "",
+    };
+    TeachTranscribeOptions teach_transcribe_options{
+        .audio_file = {},
+        .output_path = {},
+        .model_path = "vendor/models/Systran/faster-whisper-large-v3",
+        .script_path = "tools/teach_transcribe.py",
+        .model_id = "Systran/faster-whisper-large-v3",
+        .language = "",
+        .device = "auto",
+        .compute_type = "auto",
     };
     bool modes_json = false;
 
@@ -2392,6 +2498,35 @@ int run(
         exit_code = dependencies.mac_background_feedback_preset(mac_background_feedback_preset_options, io);
     });
 
+    auto* permissions = app.add_subcommand("permissions", "Platform permission helper commands");
+    permissions->require_subcommand(1);
+    auto* mac_permissions = permissions->add_subcommand("macos", "macOS Screen Recording and Accessibility permission helpers");
+    mac_permissions->require_subcommand(1);
+
+    auto* mac_screen_recording = mac_permissions->add_subcommand("screen-recording", "Check or request macOS Screen Recording permission for the current CLI host");
+    mac_screen_recording->add_flag("--prompt", mac_screen_recording_options.prompt, "Ask macOS to show the Screen Recording permission prompt when possible");
+    mac_screen_recording->add_flag("--open-settings", mac_screen_recording_options.open_settings, "Open the Screen Recording settings pane if permission is missing");
+    mac_screen_recording->callback([&]() {
+        if (!dependencies.macos_screen_recording_permission) {
+            io.err << "macOS Screen Recording permission backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.macos_screen_recording_permission(mac_screen_recording_options, io);
+    });
+
+    auto* mac_accessibility = mac_permissions->add_subcommand("accessibility", "Check or request macOS Accessibility permission for the current CLI host");
+    mac_accessibility->add_flag("--prompt", mac_accessibility_options.prompt, "Ask macOS to show the Accessibility permission prompt when possible");
+    mac_accessibility->add_flag("--open-settings", mac_accessibility_options.open_settings, "Open the Accessibility settings pane if permission is missing");
+    mac_accessibility->callback([&]() {
+        if (!dependencies.macos_accessibility_permission) {
+            io.err << "macOS Accessibility permission backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.macos_accessibility_permission(mac_accessibility_options, io);
+    });
+
     auto* daemon = app.add_subcommand("daemon", "Background daemon commands");
     daemon->require_subcommand(1);
     auto* daemon_run = daemon->add_subcommand("run", "Run heartbeat notification daemon");
@@ -2418,6 +2553,89 @@ int run(
     macro_run->add_option("--file", macro_options.path, "Macro JSON file")->required();
     macro_run->callback([&]() {
         exit_code = run_macro_command(macro_options, dependencies, io);
+    });
+
+    auto* teach = app.add_subcommand("teach", "Teaching recording commands");
+    teach->require_subcommand(1);
+
+    auto* teach_record = teach->add_subcommand("record", "Toggle an Agivar-style teaching recording; run again to stop");
+    teach_record->add_option("-o,--output", teach_record_options.output_directory, "Output teaching bundle directory; defaults to artifacts/teach/<timestamp>");
+    teach_record->add_option("--duration-ms", teach_record_options.duration_ms, "Optional maximum recording duration in milliseconds; 0 records until stopped");
+    teach_record->add_option("--frame-interval-ms", teach_record_options.frame_interval_ms, "Keyframe interval in milliseconds");
+    teach_record->add_option("--event-poll-ms", teach_record_options.event_poll_ms, "Native input event polling interval in milliseconds");
+    teach_record->add_option("--stop-timeout-ms", teach_record_options.stop_timeout_ms, "Milliseconds to wait for a stopped background recording to finalize");
+    teach_record->add_option("--video-keyframe-interval-ms", teach_record_options.video_keyframe_interval_ms, "Minimum spacing for extracted video review keyframes");
+    teach_record->add_option("--video-keyframe-max", teach_record_options.video_keyframe_max, "Maximum extracted video review keyframes");
+    teach_record->add_flag("--no-video-keyframes", teach_record_options.no_video_keyframes, "Do not extract review keyframes from --video-file");
+    teach_record->add_option("--title", teach_record_options.title, "Teaching title");
+    teach_record->add_option("--text", teach_record_options.text, "Human teaching text");
+    teach_record->add_option("--text-file", teach_record_options.text_file, "UTF-8 human teaching text file");
+    teach_record->add_option("--video-file", teach_record_options.video_file, "Optional recorded video file for human review");
+    teach_record->add_option("--audio-file", teach_record_options.audio_file, "Optional real audio file for human review or transcription");
+    teach_record->add_option("--transcript-file", teach_record_options.transcript_file, "Optional existing transcript JSON/text file");
+    teach_record->add_flag("--worker", teach_record_options.worker, "Internal teach recording worker process")->group("");
+    teach_record->add_option("--state-file", teach_record_options.state_file, "Internal active recording state file")->group("");
+    teach_record->add_option("--stop-file", teach_record_options.stop_file, "Internal recording stop request file")->group("");
+    teach_record->callback([&]() {
+        if (!dependencies.teach_record) {
+            io.err << "teach record backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        if (!teach_record_options.text_file.empty()) {
+            try {
+                teach_record_options.text = read_text_file(teach_record_options.text_file);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                exit_code = 2;
+                return;
+            }
+        }
+        exit_code = dependencies.teach_record(teach_record_options, io);
+    });
+
+    auto* teach_annotate = teach->add_subcommand("annotate", "Attach human guidance to a recorded keyframe or action");
+    teach_annotate->add_option("--session", teach_annotate_options.session_directory, "Teaching bundle directory")->required();
+    auto* teach_annotate_frame = teach_annotate->add_option("--frame-index", teach_annotate_options.frame_index, "Keyframe index");
+    auto* teach_annotate_event = teach_annotate->add_option("--event-index", teach_annotate_options.event_index, "Event index");
+    teach_annotate->add_option("--text", teach_annotate_options.text, "Annotation text");
+    teach_annotate->add_option("--file", teach_annotate_options.text_file, "UTF-8 annotation text file");
+    teach_annotate->callback([&]() {
+        if (!dependencies.teach_annotate) {
+            io.err << "teach annotate backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        teach_annotate_options.has_frame_index = teach_annotate_frame->count() > 0;
+        teach_annotate_options.has_event_index = teach_annotate_event->count() > 0;
+        if (!teach_annotate_options.text_file.empty()) {
+            try {
+                teach_annotate_options.text = read_text_file(teach_annotate_options.text_file);
+            } catch (const std::exception& error) {
+                io.err << error.what() << '\n';
+                exit_code = 2;
+                return;
+            }
+        }
+        exit_code = dependencies.teach_annotate(teach_annotate_options, io);
+    });
+
+    auto* teach_transcribe = teach->add_subcommand("transcribe", "Transcribe a real audio file with a local faster-whisper model, downloading it if missing");
+    teach_transcribe->add_option("--audio-file", teach_transcribe_options.audio_file, "WAV or other faster-whisper-readable audio file")->required();
+    teach_transcribe->add_option("-o,--output", teach_transcribe_options.output_path, "Transcript JSON output path")->required();
+    teach_transcribe->add_option("--model", teach_transcribe_options.model_path, "Local faster-whisper model directory; downloaded here if missing");
+    teach_transcribe->add_option("--model-id", teach_transcribe_options.model_id, "Hugging Face model id used when the local model is missing");
+    teach_transcribe->add_option("--script", teach_transcribe_options.script_path, "Python helper script path");
+    teach_transcribe->add_option("--language", teach_transcribe_options.language, "Optional language code");
+    teach_transcribe->add_option("--device", teach_transcribe_options.device, "faster-whisper device, such as auto, cpu, or cuda");
+    teach_transcribe->add_option("--compute-type", teach_transcribe_options.compute_type, "faster-whisper compute type, such as auto, int8, or float16");
+    teach_transcribe->callback([&]() {
+        if (!dependencies.teach_transcribe) {
+            io.err << "teach transcribe backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.teach_transcribe(teach_transcribe_options, io);
     });
 
     auto* modes = app.add_subcommand("modes", "Print operation and screenshot mode selection guide");
