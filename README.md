@@ -27,7 +27,7 @@ These GIFs were recorded from live CLI runs. Windows demos use the visible deskt
 
 | Linux isolated DISPLAY | macOS CUA background |
 | --- | --- |
-| ![Kiseki Linux isolated Xvfb background desktop demo](docs/assets/demos/linux-isolated-display.gif) | ![Kiseki macOS CUA background TextEdit demo](docs/assets/demos/macos-background cua.gif) |
+| ![Kiseki Linux isolated Xvfb background desktop demo](docs/assets/demos/linux-isolated-display.gif) | ![Kiseki macOS CUA background TextEdit demo](docs/assets/demos/macos-cua-background.gif) |
 
 ## Try It In 60 Seconds
 
