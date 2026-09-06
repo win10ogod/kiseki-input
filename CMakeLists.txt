@@ -58,6 +58,7 @@ add_library(kiseki_platform STATIC
     src/platform/capture/bitmap_writer.cpp
     src/platform/capture/screenshot.cpp
     src/platform/input/input.cpp
+    src/platform/input/sequence_support.cpp
     src/platform/notification/notification.cpp
     src/platform/observe/ui_observation.cpp
     src/platform/permissions/permissions.cpp
@@ -66,6 +67,7 @@ add_library(kiseki_platform STATIC
     src/platform/session/macos_cua.cpp
     src/platform/target/target.cpp
     src/platform/teach/recording.cpp
+    src/platform/teach/event_stream.cpp
 )
 target_compile_features(kiseki_platform PUBLIC cxx_std_20)
 target_include_directories(kiseki_platform PUBLIC src)
@@ -75,7 +77,8 @@ if(WIN32)
     target_link_libraries(kiseki_platform PUBLIC user32 gdi32 d3d11.lib dxgi.lib uiautomationcore ole32 oleaut32)
 elseif(APPLE)
     enable_language(OBJCXX)
-    target_sources(kiseki_platform PRIVATE src/platform/capture/mac_capture.mm)
+    target_sources(kiseki_platform PRIVATE src/platform/capture/mac_capture.mm src/platform/input/mac_input.mm)
+    find_library(KISEKI_APPKIT_FRAMEWORK AppKit REQUIRED)
     find_library(KISEKI_APPLICATIONSERVICES_FRAMEWORK ApplicationServices REQUIRED)
     find_library(KISEKI_FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(KISEKI_SCREENCAPTUREKIT_FRAMEWORK ScreenCaptureKit REQUIRED)
@@ -83,6 +86,7 @@ elseif(APPLE)
     target_link_libraries(kiseki_platform PRIVATE
         ${KISEKI_APPLICATIONSERVICES_FRAMEWORK}
         ${KISEKI_FOUNDATION_FRAMEWORK}
+        ${KISEKI_APPKIT_FRAMEWORK}
         ${KISEKI_SCREENCAPTUREKIT_FRAMEWORK}
         ${KISEKI_COREVIDEO_FRAMEWORK}
     )
@@ -90,6 +94,10 @@ elseif(APPLE)
 elseif(X11_FOUND)
     target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_X11=1)
     target_link_libraries(kiseki_platform PRIVATE X11::X11 ${CMAKE_DL_LIBS})
+    if(X11_Xtst_FOUND AND EXISTS "${X11_Xtst_INCLUDE_PATH}/X11/extensions/record.h")
+        target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_XRECORD=1)
+        target_link_libraries(kiseki_platform PRIVATE X11::Xtst)
+    endif()
 endif()
 if(UNIX AND NOT APPLE AND NOT WIN32 AND KISEKI_GIO_FOUND AND KISEKI_GDK_PIXBUF_FOUND)
     target_sources(kiseki_platform PRIVATE src/platform/capture/wayland_portal_capture.cpp)
@@ -215,6 +223,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/webui/config_api_test.cpp
         test/webui/static_assets_test.cpp
         test/smoke_test.cpp
+        test/platform/input_sequence_test.cpp
     )
 
     add_executable(kiseki_tests ${KISEKI_TEST_SOURCES})
@@ -226,4 +235,33 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
     )
     set_target_properties(kiseki_tests PROPERTIES CXX_EXTENSIONS OFF)
     catch_discover_tests(kiseki_tests)
+endif()
+
+# Opt-in: this executable opens its own GUI window and exercises real input.
+# It is deliberately not registered with unattended CTest runs.
+option(KISEKI_BUILD_NATIVE_INPUT_PROBE "Build the interactive native input regression probe" OFF)
+if(KISEKI_BUILD_NATIVE_INPUT_PROBE)
+    if(APPLE)
+        add_executable(kiseki_native_input_probe test/native/input_probe.mm)
+        target_compile_options(kiseki_native_input_probe PRIVATE -fobjc-arc)
+        target_link_libraries(kiseki_native_input_probe PRIVATE ${KISEKI_APPKIT_FRAMEWORK})
+    else()
+        add_executable(kiseki_native_input_probe test/native/input_probe.cpp)
+        if(UNIX)
+            target_link_libraries(kiseki_native_input_probe PRIVATE X11::X11)
+        endif()
+    endif()
+    target_compile_features(kiseki_native_input_probe PRIVATE cxx_std_20)
+    target_link_libraries(kiseki_native_input_probe PRIVATE kiseki_cli kiseki_platform)
+endif()
+
+if(WIN32 AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
+    add_executable(kiseki_windows_input_fault_test
+        test/platform/windows_input_fault_test.cpp
+        src/platform/input/sequence_support.cpp
+        src/platform/target/target.cpp)
+    target_compile_features(kiseki_windows_input_fault_test PRIVATE cxx_std_20)
+    target_include_directories(kiseki_windows_input_fault_test PRIVATE src)
+    target_link_libraries(kiseki_windows_input_fault_test PRIVATE user32)
+    add_test(NAME windows_input_boundary_faults COMMAND kiseki_windows_input_fault_test)
 endif()

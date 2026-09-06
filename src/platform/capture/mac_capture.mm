@@ -68,8 +68,7 @@ CaptureResult write_cg_image_bmp(CGImageRef image, const std::filesystem::path& 
         return fail_capture(output_path, "CGBitmapContextCreate failed");
     }
 
-    CGContextTranslateCTM(context, 0.0, static_cast<CGFloat>(height));
-    CGContextScaleCTM(context, 1.0, -1.0);
+    // CGImage drawing already produces the row order consumed by the top-down BMP writer.
     CGContextDrawImage(context, CGRectMake(0.0, 0.0, static_cast<CGFloat>(width), static_cast<CGFloat>(height)), image);
     CGContextRelease(context);
 
@@ -219,7 +218,15 @@ CaptureResult capture_desktop_bmp_screencapturekit(const std::filesystem::path& 
         if (image.image == nullptr) {
             return fail_capture(output_path, image.error);
         }
-        const auto result = write_cg_image_bmp(image.image, output_path);
+        auto result = write_cg_image_bmp(image.image, output_path);
+        if (result.ok)
+            result.coordinates = CaptureCoordinates{.space = "macos-global-points",
+                                                    .origin_x = rect.origin.x,
+                                                    .origin_y = rect.origin.y,
+                                                    .width = rect.size.width,
+                                                    .height = rect.size.height,
+                                                    .pixels_per_unit_x = result.width / rect.size.width,
+                                                    .pixels_per_unit_y = result.height / rect.size.height};
         CGImageRelease(image.image);
         return result;
     }
@@ -244,7 +251,19 @@ CaptureResult capture_window_bmp_screencapturekit(std::uint32_t window_id, const
         if (image.image == nullptr) {
             return fail_capture(output_path, image.error);
         }
-        const auto result = write_cg_image_bmp(image.image, output_path);
+        auto result = write_cg_image_bmp(image.image, output_path);
+        // Shadows are excluded. The image covers the full window including its
+        // title bar; use this screen transform instead of assuming client origin.
+        const CGRect rect = window.frame;
+        if (result.ok)
+            result.coordinates = CaptureCoordinates{.space = "macos-global-points",
+                                                    .origin_x = rect.origin.x,
+                                                    .origin_y = rect.origin.y,
+                                                    .width = rect.size.width,
+                                                    .height = rect.size.height,
+                                                    .pixels_per_unit_x = result.width / rect.size.width,
+                                                    .pixels_per_unit_y = result.height / rect.size.height,
+                                                    .window_id = std::to_string(window_id)};
         CGImageRelease(image.image);
         return result;
     }

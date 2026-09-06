@@ -129,9 +129,9 @@ CUA background provider:
 
 Macros:
 
-- `kiseki macro validate --file <macro.json>` validates JSON macro structure.
+- `kiseki macro validate --file <macro.json>` validates JSON macro structure, action fields, and all referenced input files.
 - `kiseki macro run --file <macro.json>` executes a macro step sequence.
-- Macro execution stops at the first failing step and returns that step's nonzero code.
+- Macro execution stops at the first failing step, attempts reverse cleanup of acquired inputs, and returns that step's nonzero code. `input sequence --file` uses the same executor. See `docs/native-input.md` for timing, held state, wheel, and screenshot transforms.
 
 Teaching recordings:
 
@@ -147,12 +147,12 @@ Teaching recordings:
 
 Mouse click values:
 
-- `none`, `left`, `right`, `middle`
-- `left-down`, `left-up`, `right-down`, `right-up`, `middle-down`, `middle-up`
+- `none`, `left`, `right`, `middle`, `x1`, `x2`
+- `left-down`, `left-up`, `right-down`, `right-up`, `middle-down`, `middle-up`, `x1-down`, `x1-up`, `x2-down`, `x2-up`
 
 Drag path files:
 
-- Plain text, one absolute point per line: `x y`
+- Plain text, one absolute point per line: `x y` or `x y time_ms`; timed paths start at zero and use nondecreasing timestamps on every point.
 - Empty lines are ignored only if truly empty.
 - Lines beginning with `#` are comments.
 - At least two points are required.

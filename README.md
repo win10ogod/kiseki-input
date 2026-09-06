@@ -180,7 +180,9 @@ Macros are JSON files with a `steps` array. They are executed only by the CLI an
 }
 ```
 
-Supported macro step types: `key`, `combo`, `text`, `mouse`, `drag`, `background-drag`, `screenshot`, `background-screenshot`, and `sleep`.
+Supported macro step types: `key`, `combo`, `text`, `mouse`, `drag`, `background-mouse`, `background-drag`, `screenshot`, `background-screenshot`, and `sleep`. `input sequence --file` uses the same executor for mixed key down/up, mouse, wheel, and timed steps. Input files and action fields are validated before execution; completion, failure, and normal cancellation release inputs acquired by the sequence.
+
+See [native input sequences and recording](docs/native-input.md) for hold/click timing, drag buttons/modifiers, timestamped paths, screenshot coordinate metadata, event-source prerequisites, and native regression probes.
 
 Demo macro files live under `docs/assets/demos/`.
 
@@ -210,6 +212,8 @@ kiseki teach record
 ```
 
 Use `--duration-ms` only as an optional maximum duration. The default is `0`, which means record until the second `teach record` command stops it. If `--output` is omitted, the default bundle path is `artifacts/teach/teach-<UTC timestamp>`.
+
+Windows hooks, macOS event taps, and X11 RECORD receive events independently of screenshots. The manifest identifies the event source; unavailable native sources produce an explicitly marked, incomplete polling fallback. `--event-poll-ms` controls queue draining and fallback polling. See [native recording details](docs/native-input.md#teaching-events-and-verification).
 
 The bundle schema is optimized for agent teaching instead of raw video upload:
 
