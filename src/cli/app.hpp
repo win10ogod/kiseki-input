@@ -142,6 +142,7 @@ struct BackgroundMouseOptions {
     int click_interval_ms = 100;
     int hold_ms = 0;
     bool cleanup_only = false;
+    std::shared_ptr<kiseki::platform::input::BackgroundMouseBinding> binding;
 };
 
 struct BackgroundDragOptions {

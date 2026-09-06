@@ -516,7 +516,15 @@ LPARAM key_lparam(unsigned short vk, bool release, bool numpad_enter = false) {
     return lparam;
 }
 
-OperationResult with_resolved_hwnd(const kiseki::platform::target::TargetQuery& query, const auto& callback) {
+OperationResult with_resolved_hwnd(const kiseki::platform::target::TargetQuery& query, const auto& callback,
+                                   bool bound = false) {
+    if (bound) {
+        const auto hwnd = hwnd_from_id(query.window_id);
+        if (!hwnd || !IsWindow(*hwnd))
+            return fail("bound input window is no longer valid");
+        // A window can become hidden during a drag and still needs its up.
+        return callback(*hwnd);
+    }
     const auto resolved = kiseki::platform::target::resolve_window(query);
     if (!resolved.ok) {
         return fail(resolved.error);
@@ -552,6 +560,84 @@ POINT map_parent_point_to_receiver(HWND parent, HWND receiver, const MousePoint&
 }
 
 #elif defined(__APPLE__)
+
+CGPoint current_mouse_location();
+
+// Quartz updates its state asynchronously. Keep submitted state authoritative
+// until this source's own event counter confirms that WindowServer caught up.
+// A private counter avoids treating unrelated physical input as our receipt.
+class MacInputState {
+  public:
+    MacInputState() : source(CGEventSourceCreate(kCGEventSourceStatePrivate)) {
+        if (source) {
+            source_id = CGEventSourceGetSourceStateID(source);
+            submitted = CGEventSourceCounterForEventType(source_id, kCGAnyInputEventType);
+        }
+    }
+    ~MacInputState() {
+        synchronize();
+        if (source)
+            CFRelease(source);
+    }
+    bool ready() const { return source != nullptr; }
+    bool reconcile() {
+        if (!source || CGEventSourceCounterForEventType(source_id, kCGAnyInputEventType) != submitted)
+            return false;
+        keys.clear();
+        buttons.clear();
+        position.reset();
+        return true;
+    }
+    OperationResult synchronize() {
+        if (!source)
+            return ok("");
+        while (!reconcile()) {
+            if (!AXIsProcessTrusted())
+                return fail("macOS Accessibility permission was lost while input events were pending");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return ok("");
+    }
+    void post(CGEventRef event) {
+        CGEventSetSource(event, source);
+        CGEventPost(kCGHIDEventTap, event);
+        ++submitted;
+    }
+    std::optional<bool> key_state(CGKeyCode code) {
+        reconcile();
+        const auto found = keys.find(code);
+        return found == keys.end() ? std::nullopt : std::optional<bool>{found->second};
+    }
+    std::optional<bool> button_state(CGMouseButton button) {
+        reconcile();
+        const auto found = buttons.find(button);
+        return found == buttons.end() ? std::nullopt : std::optional<bool>{found->second};
+    }
+    CGPoint mouse_position() {
+        reconcile();
+        return position ? *position : current_mouse_location();
+    }
+    void key_posted(CGKeyCode code, bool down) { keys[code] = down; }
+    void button_posted(CGMouseButton button, bool down, CGPoint point) {
+        buttons[button] = down;
+        position = point;
+    }
+    void moved(CGPoint point) { position = point; }
+
+  private:
+    CGEventSourceRef source = nullptr;
+    CGEventSourceStateID source_id = kCGEventSourceStatePrivate;
+    std::uint32_t submitted = 0;
+    std::map<CGKeyCode, bool> keys;
+    std::map<CGMouseButton, bool> buttons;
+    std::optional<CGPoint> position;
+};
+thread_local std::unique_ptr<MacInputState> mac_input_state;
+MacInputState &mac_state() {
+    if (!mac_input_state)
+        mac_input_state = std::make_unique<MacInputState>();
+    return *mac_input_state;
+}
 
 struct MacKey {
     CGKeyCode code = 0;
@@ -684,7 +770,8 @@ bool post_mac_key_event(const MacKey& key, bool down, CGEventFlags flags) {
         return false;
     }
     CGEventSetFlags(event, flags);
-    CGEventPost(kCGHIDEventTap, event);
+    mac_state().post(event);
+    mac_state().key_posted(key.code, down);
     CFRelease(event);
     return true;
 }
@@ -716,6 +803,8 @@ OperationResult send_text_with_cgevent(const std::string& text) {
     if (!trust.ok) {
         return trust;
     }
+    if (!mac_state().ready())
+        return fail("CGEventSourceCreate failed");
 
     CFStringRef value = CFStringCreateWithCString(kCFAllocatorDefault, text.c_str(), kCFStringEncodingUTF8);
     if (value == nullptr) {
@@ -741,8 +830,10 @@ OperationResult send_text_with_cgevent(const std::string& text) {
         }
         CGEventKeyboardSetUnicodeString(down, chunk, characters.data() + offset);
         CGEventKeyboardSetUnicodeString(up, chunk, characters.data() + offset);
-        CGEventPost(kCGHIDEventTap, down);
-        CGEventPost(kCGHIDEventTap, up);
+        mac_state().post(down);
+        mac_state().key_posted(0, true);
+        mac_state().post(up);
+        mac_state().key_posted(0, false);
         CFRelease(down);
         CFRelease(up);
         if (!wait_input_ms(1)) return fail("input cancelled");
@@ -1135,7 +1226,10 @@ OperationResult check_backend(const std::string &backend) {
 #elif defined(__APPLE__)
     if (backend == "driver")
         return fail("macOS native input uses the system backend, not driver");
-    return require_mac_accessibility();
+    const auto trusted = require_mac_accessibility();
+    if (!trusted.ok)
+        return trusted;
+    return mac_state().ready() ? ok("") : fail("CGEventSourceCreate failed");
 #elif defined(KISEKI_HAS_X11)
     if (backend == "driver")
         return fail("Linux native input uses the system X11/XTest backend, not driver");
@@ -1168,9 +1262,16 @@ bool native_key_down(const std::string &key, const std::string &backend) {
     if (owned_keys.contains(key_token(key, backend)))
         return true;
 #ifdef _WIN32
-    return (GetAsyncKeyState(virtual_key_for_name(key)) & 0x8000) != 0;
+    const auto vk = virtual_key_for_name(key);
+    // VK_RETURN cannot identify which physical Enter is down. Only the exact
+    // acquired token above establishes ownership; the shared VK must not cause
+    // a requested event for the other Enter to be silently skipped.
+    return vk != VK_RETURN && (GetAsyncKeyState(vk) & 0x8000) != 0;
 #elif defined(__APPLE__)
     const auto mapped = mac_key_for_name(key);
+    if (mapped)
+        if (const auto pending = mac_state().key_state(mapped->code))
+            return *pending;
     return mapped && CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, mapped->code);
 #elif defined(KISEKI_HAS_X11)
     auto *display = native_x11().display;
@@ -1269,6 +1370,8 @@ bool native_button_down(const std::string &button, const std::string &backend) {
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 #elif defined(__APPLE__)
     const auto b = button == "left" ? 0 : button == "right" ? 1 : button == "middle" ? 2 : button == "x1" ? 3 : 4;
+    if (const auto pending = mac_state().button_state(static_cast<CGMouseButton>(b)))
+        return *pending;
     return CGEventSourceButtonState(kCGEventSourceStateHIDSystemState, static_cast<CGMouseButton>(b));
 #elif defined(KISEKI_HAS_X11)
     auto *d = native_x11().display;
@@ -1303,15 +1406,15 @@ OperationResult move_native_mouse(const MouseOptions &options, const std::string
         const auto [x, y] = normalized_absolute_position(options.x, options.y);
         input.mi.dx = x;
         input.mi.dy = y;
-        input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE_NOCOALESCE;
     } else {
         input.mi.dx = options.dx;
         input.mi.dy = options.dy;
-        input.mi.dwFlags = MOUSEEVENTF_MOVE;
+        input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE;
     }
     return SendInput(1, &input, sizeof(INPUT)) == 1 ? ok("") : fail("SendInput mouse move failed");
 #elif defined(__APPLE__)
-    CGPoint point = options.absolute ? CGPointMake(options.x, options.y) : current_mouse_location();
+    CGPoint point = options.absolute ? CGPointMake(options.x, options.y) : mac_state().mouse_position();
     if (!options.absolute) {
         point.x += options.dx;
         point.y += options.dy;
@@ -1336,7 +1439,8 @@ OperationResult move_native_mouse(const MouseOptions &options, const std::string
         return fail("CGEventCreateMouseEvent move failed");
     CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, button);
     CGEventSetFlags(event, mac_modifier_flags());
-    CGEventPost(kCGHIDEventTap, event);
+    mac_state().post(event);
+    mac_state().moved(point);
     CFRelease(event);
     return ok("");
 #elif defined(KISEKI_HAS_X11)
@@ -1373,14 +1477,15 @@ OperationResult send_native_button(const std::string &button, bool down, int cou
     const auto type = b == 0   ? (down ? kCGEventLeftMouseDown : kCGEventLeftMouseUp)
                       : b == 1 ? (down ? kCGEventRightMouseDown : kCGEventRightMouseUp)
                                : (down ? kCGEventOtherMouseDown : kCGEventOtherMouseUp);
-    const auto point = position ? CGPointMake(position->x, position->y) : current_mouse_location();
+    const auto point = position ? CGPointMake(position->x, position->y) : mac_state().mouse_position();
     CGEventRef event = CGEventCreateMouseEvent(nullptr, type, point, static_cast<CGMouseButton>(b));
     if (!event)
         return fail("CGEventCreateMouseEvent button failed");
     CGEventSetIntegerValueField(event, kCGMouseEventButtonNumber, b);
     CGEventSetIntegerValueField(event, kCGMouseEventClickState, count);
     CGEventSetFlags(event, mac_modifier_flags());
-    CGEventPost(kCGHIDEventTap, event);
+    mac_state().post(event);
+    mac_state().button_posted(static_cast<CGMouseButton>(b), down, point);
     CFRelease(event);
     return ok("");
 #elif defined(KISEKI_HAS_X11)
@@ -1417,7 +1522,7 @@ OperationResult send_native_wheel(int vertical, int horizontal, const std::strin
     if (!event)
         return fail("CGEventCreateScrollWheelEvent failed");
     CGEventSetFlags(event, mac_modifier_flags());
-    CGEventPost(kCGHIDEventTap, event);
+    mac_state().post(event);
     CFRelease(event);
     return ok("");
 #elif defined(KISEKI_HAS_X11)
@@ -1681,15 +1786,6 @@ OperationResult mouse_action(const MouseOptions& options) {
     }
     if (input_cancelled() && !click.ends_with("-up"))
         return fail("input cancelled");
-    std::optional<MousePoint> click_position;
-#ifdef __APPLE__
-    // CGEventPost is asynchronous: reading the cursor immediately after posting
-    // a move can return its old location. The button belongs at the requested point.
-    const auto before = current_mouse_location();
-    click_position = options.absolute
-                         ? MousePoint{options.x, options.y}
-                         : MousePoint{static_cast<int>(before.x) + options.dx, static_cast<int>(before.y) + options.dy};
-#endif
     if (options.absolute || options.dx || options.dy) {
         const auto result = move_native_mouse(options, backend);
         if (!result.ok)
@@ -1703,7 +1799,7 @@ OperationResult mouse_action(const MouseOptions& options) {
     if (click == "none")
         return ok("mouse input sent");
     if (click.ends_with("-down") || click.ends_with("-up"))
-        return button_action(button, click.ends_with("-down"), 1, backend, false, click_position);
+        return button_action(button, click.ends_with("-down"), 1, backend);
     if (native_button_down(button, backend))
         return fail("mouse button is already held; send its explicit up before clicking");
 #ifdef __APPLE__
@@ -1711,7 +1807,7 @@ OperationResult mouse_action(const MouseOptions& options) {
     // for a double/triple click; within a process also preserve rapid legacy clicks.
     static thread_local std::map<std::string, std::pair<CGPoint, std::chrono::steady_clock::time_point>> last_click;
     static thread_local std::map<std::string, int> last_count;
-    const CGPoint position = CGPointMake(click_position->x, click_position->y);
+    const CGPoint position = mac_state().mouse_position();
     auto found = last_click.find(button);
     int base = 0;
     if (options.click_count == 1 && found != last_click.end() &&
@@ -1724,11 +1820,11 @@ OperationResult mouse_action(const MouseOptions& options) {
 #endif
     for (int index = 1; index <= options.click_count; ++index) {
         ReleaseStack release;
-        auto result = button_action(button, true, base + index, backend, false, click_position);
+        auto result = button_action(button, true, base + index, backend);
         if (!result.ok)
             return result;
         release.add(button,
-                    [&, index] { return button_action(button, false, base + index, backend, true, click_position); });
+                    [&, index] { return button_action(button, false, base + index, backend, true); });
         result = release.finish(wait_input_ms(options.hold_ms) ? ok("") : fail("input cancelled"));
         if (!result.ok)
             return result;
@@ -1831,6 +1927,14 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
         return fail("input cancelled");
     const auto dash = click.rfind('-');
     const auto button = dash == std::string::npos ? click : click.substr(0, dash);
+    if (options.cleanup_only && options.binding && !options.binding->buttons.contains(button))
+        return ok("");
+    const auto bound = options.binding && !options.binding->window_id.empty();
+    const auto target = bound ? kiseki::platform::target::TargetQuery{.window_id = options.binding->window_id}
+                              : options.target;
+    const auto receiver_id = bound ? options.binding->receiver_window_id : options.receiver_window_id;
+    if (bound && !options.receiver_window_id.empty() && options.receiver_window_id != receiver_id)
+        return fail("cannot change receiver while a sequence button is held");
     std::string explicit_buttons = options.held_buttons;
     std::replace(explicit_buttons.begin(), explicit_buttons.end(), ',', '+');
     const auto explicit_list = split_keys(explicit_buttons);
@@ -1838,13 +1942,17 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
         if (b != "left" && b != "right" && b != "middle" && b != "x1" && b != "x2")
             return fail("unsupported held button: " + b);
 #ifdef _WIN32
-    return with_resolved_hwnd(options.target, [&](HWND hwnd) {
+    return with_resolved_hwnd(target, [&](HWND hwnd) {
+        DWORD process_id = 0;
+        GetWindowThreadProcessId(hwnd, &process_id);
+        if (bound && options.binding->process_id != process_id)
+            return fail("bound input window no longer belongs to the original process");
         auto &state = background_mouse_states[hwnd];
         if (state.receiver && !IsWindow(state.receiver))
             state = {};
         POINT point{options.x, options.y};
-        if (!options.receiver_window_id.empty()) {
-            const auto receiver = hwnd_from_id(options.receiver_window_id);
+        if (!receiver_id.empty()) {
+            const auto receiver = hwnd_from_id(receiver_id);
             if (!receiver || !IsWindow(*receiver) || (*receiver != hwnd && !IsChild(hwnd, *receiver)))
                 return fail("receiver must be the target window or its child");
             if (!state.buttons.empty() && state.receiver != *receiver)
@@ -1903,8 +2011,14 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
                              : button == "right"  ? WM_RBUTTONDBLCLK
                              : button == "middle" ? WM_MBUTTONDBLCLK
                                                   : WM_XBUTTONDBLCLK;
-            if (down && state.buttons.contains(button))
+            if (down && state.buttons.contains(button)) {
+                if (options.binding) {
+                    options.binding->window_id = std::to_string(reinterpret_cast<std::uintptr_t>(hwnd));
+                    options.binding->receiver_window_id = std::to_string(reinterpret_cast<std::uintptr_t>(state.receiver));
+                    options.binding->process_id = process_id;
+                }
                 return ok("");
+            }
             const auto previous = state.buttons;
             if (down)
                 state.buttons.insert(button);
@@ -1918,6 +2032,15 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
             }
             if (!down)
                 state.buttons.erase(button);
+            if (options.binding) {
+                if (down) {
+                    options.binding->window_id = std::to_string(reinterpret_cast<std::uintptr_t>(hwnd));
+                    options.binding->receiver_window_id = std::to_string(reinterpret_cast<std::uintptr_t>(state.receiver));
+                    options.binding->process_id = process_id;
+                    options.binding->buttons.insert(button);
+                } else
+                    options.binding->buttons.erase(button);
+            }
             return ok("");
         };
         if (!options.cleanup_only && !PostMessageW(state.receiver, WM_MOUSEMOVE, mask(), mouse_lparam(point)))
@@ -1941,16 +2064,16 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
                 return fail("input cancelled");
         }
         return ok("background mouse input sent");
-    });
+    }, bound);
 #elif defined(__APPLE__)
     return mac_background_input_unavailable();
 #elif defined(KISEKI_HAS_X11)
-    return with_target_window(options.target, [&](Display *display, Window window) {
-        if (!options.receiver_window_id.empty()) {
+    return with_target_window(target, [&](Display *display, Window window) {
+        if (!receiver_id.empty()) {
             try {
                 std::size_t consumed = 0;
-                const auto receiver = std::stoull(options.receiver_window_id, &consumed, 0);
-                if (consumed != options.receiver_window_id.size() || receiver != window)
+                const auto receiver = std::stoull(receiver_id, &consumed, 0);
+                if (consumed != receiver_id.size() || receiver != window)
                     return fail("X11 receiver must equal the target window; select the intended child with target-window-id");
             } catch (const std::exception&) {
                 return fail("invalid X11 receiver window id");
@@ -2001,8 +2124,13 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
                            : button == "x1"     ? 8
                                                 : 9;
         auto send_button = [&](bool down) {
-            if (down && buttons.contains(button))
+            if (down && buttons.contains(button)) {
+                if (options.binding) {
+                    options.binding->window_id = std::to_string(window);
+                    options.binding->receiver_window_id = std::to_string(window);
+                }
                 return ok("");
+            }
             XButtonEvent e{};
             e.type = down ? ButtonPress : ButtonRelease;
             e.display = display;
@@ -2022,6 +2150,14 @@ OperationResult background_mouse_action(const BackgroundMouseOptions& options) {
                 buttons.insert(button);
             else
                 buttons.erase(button);
+            if (options.binding) {
+                if (down) {
+                    options.binding->window_id = std::to_string(window);
+                    options.binding->receiver_window_id = std::to_string(window);
+                    options.binding->buttons.insert(button);
+                } else
+                    options.binding->buttons.erase(button);
+            }
             XFlush(display);
             return ok("");
         };
@@ -2070,6 +2206,7 @@ OperationResult background_mouse_drag(const BackgroundDragOptions& options) {
     borrowed = found != background_mouse_states.end() && found->second.buttons.contains(options.button);
 #endif
     BackgroundMouseOptions mouse{target, options.points.front().x, options.points.front().y, options.button + "-down"};
+    mouse.binding = std::make_shared<BackgroundMouseBinding>();
     auto result = background_mouse_action(mouse);
     if (!result.ok)
         return result;
@@ -2102,5 +2239,12 @@ OperationResult background_mouse_drag(const BackgroundDragOptions& options) {
     if (!wait_input_ms(options.end_hold_ms))
         return release.finish(fail("input cancelled"));
     return release.finish(ok("background mouse drag sent"));
+}
+OperationResult synchronize_input() {
+#ifdef __APPLE__
+    if (mac_input_state)
+        return mac_input_state->synchronize();
+#endif
+    return ok("");
 }
         }

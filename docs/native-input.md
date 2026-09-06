@@ -23,6 +23,8 @@ Wheel values preserve backend units. Windows uses 120 units per conventional det
 
 Physical key names include letters, digits, navigation/editing keys (`delete`, `home`, `end`, `pageup`, `pagedown`), punctuation names (`minus`, `equal`, `leftbracket`, `rightbracket`, `semicolon`, `quote`, `backslash`, `comma`, `period`, `slash`, `grave`), left/right modifiers (`lshift`, `rshift`, `lctrl`, `rctrl`, `lalt`, `ralt`, `rwin`), and `numpad0`–`numpad9`, `numpad-enter`, `numpad-add`, `numpad-subtract`, `numpad-multiply`, `numpad-divide`, `numpad-decimal`. Function keys follow the platform mapping (Windows/X11 F1–F24; macOS F1–F20). Unsupported platform keys fail explicitly. `input text` continues to use the platform's text path; key commands do not substitute Unicode text for physical events.
 
+On Windows, holding `enter` does not suppress a `numpad-enter` tap, or vice versa. The shared `VK_RETURN` state cannot establish which physical Enter is held; Kiseki uses its exact acquired key identity for this check. Modifier borrowing still uses the side-specific modifier state.
+
 ## Sequence format and cleanup
 
 `input sequence` and `macro run` use the same executor. A sequence executes in one process, preserving held state and backend connections:
@@ -58,11 +60,17 @@ Target selectors are `targetTitle`, `targetPid`, and `targetWindowId`. Every ste
 
 On completion, failure, or normal SIGINT/SIGTERM cancellation, the executor attempts to release inputs it acquired, in reverse order. Chords and drags have the same scoped cleanup. Already-held user modifiers are borrowed by chords/drags and are not released by their cleanup. Explicit raw up commands still request an up. Release failures remain visible and do not skip other releases. Forced process termination cannot execute in-process cleanup.
 
+macOS keeps submitted key, button, and pointer state until its private Quartz source counter catches up. Consecutive relative moves accumulate from the last submitted position, and a released modifier cannot leak into a following key through a stale state query. Once pending events are acknowledged, fresh system state incorporates external input again. The CLI drains its submitted native events before returning; C++ callers can use `synchronize_input()` on the sending thread. This confirms WindowServer processing of the source's events, not completion of the target application's response. Standalone raw down commands still leave the requested input held for a later up.
+
 ## Paths and selected-window drags
 
 Paths retain all supplied points and accept either `x y` lines or `x y time_ms` lines. Timed paths require a timestamp on every point, begin at zero, and never decrease. They are measured after `startHoldMs`; they override the uniform step interval. Existing untimed paths preserve their step/start/end timing. Linux flushes X11 requests at each scheduling boundary.
 
+Windows system mouse moves set `MOUSEEVENTF_MOVE_NOCOALESCE` to preserve explicit path points in the `WM_MOUSEMOVE` queue when a receiver is busy. Relative input still follows Windows pointer acceleration. This flag does not control an application's own sampling or drawing behavior. See [Microsoft's MOUSEINPUT reference](https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-mouseinput).
+
 Windows selected-window mouse sequences retain the down event's child receiver and attach the current `MK_*` button/modifier state to movement. Separate CLI invocations can supply `--held-buttons left` and `--receiver-window-id <child-hwnd>` with the original target, including on the final up. `background window drag` manages this state automatically. On X11, select the intended receiver directly with `--target-window-id`; its explicit receiver ID must match that target. macOS native selected-window message input remains separate from current-session CGEvent input and the CUA provider.
+
+Within a sequence, a selected-window down binds its resolved window and receiver for subsequent mouse steps using the same selector and for cleanup. Windows title changes, another matching title, or hiding the window do not redirect its up. A destroyed recipient or changed owning process produces a cleanup error. An explicit up releases the binding once its acquired buttons are all up; a later down resolves the selector again. C++ callers can share `BackgroundMouseOptions::binding` across split actions for the same behavior.
 
 ## macOS screenshot coordinates
 

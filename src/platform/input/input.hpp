@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <memory>
+#include <set>
 
 #include "platform/result.hpp"
 #include "platform/target/target.hpp"
@@ -31,6 +33,15 @@ struct MousePoint {
     std::int64_t time_ms = -1; // Optional monotonic offset from the first drag point.
 };
 
+// A sequence keeps the recipient acquired by a down even if its title changes.
+// Only buttons acquired through this binding belong to its cleanup.
+struct BackgroundMouseBinding {
+    std::string window_id;
+    std::string receiver_window_id;
+    std::uint32_t process_id = 0;
+    std::set<std::string> buttons;
+};
+
 struct BackgroundMouseOptions {
     kiseki::platform::target::TargetQuery target;
     int x;
@@ -42,6 +53,7 @@ struct BackgroundMouseOptions {
     int click_interval_ms = 100;
     int hold_ms = 0;
     bool cleanup_only = false;
+    std::shared_ptr<BackgroundMouseBinding> binding;
 };
 
 struct BackgroundDragOptions {
@@ -71,5 +83,7 @@ OperationResult background_type_text(const kiseki::platform::target::TargetQuery
 OperationResult background_tap_key(const kiseki::platform::target::TargetQuery& target, const std::string& key);
 OperationResult background_mouse_action(const BackgroundMouseOptions& options);
 OperationResult background_mouse_drag(const BackgroundDragOptions& options);
+// Wait for this thread's queued native events before ending an invocation.
+OperationResult synchronize_input();
 
 }

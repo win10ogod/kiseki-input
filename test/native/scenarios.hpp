@@ -15,6 +15,7 @@ namespace native_probe {
 inline std::atomic<int> phase{0};
 inline std::atomic<bool> finished{false};
 inline std::atomic<int> failures{0};
+inline std::atomic<bool> dense_drag_released{false};
 inline std::filesystem::path output;
 inline void wait(int ms) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -80,10 +81,10 @@ inline void run(int x, int y, const std::string &window_id, bool background) {
                         .hwheel = -120}));
     wait(120);
     phase = 8;
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 100; ++i) {
         check(tap_key("a", "system"));
-        if (i < 5) wait(60);
     }
+    check(synchronize_input());
     wait(120);
     phase = 9;
     check(tap_key("left", "system", 180));
@@ -127,6 +128,51 @@ inline void run(int x, int y, const std::string &window_id, bool background) {
             wait(120);
         }
     }
+    phase = 18;
+    mouse(x, y, "none");
+    for (int i = 0; i < 100; ++i)
+        check(mouse_action({1, 0, 0, 0, false, "system", "none"}));
+    check(synchronize_input());
+    check(mouse_action({0, 0, 0, 0, false, "system", "left"}));
+    wait(150);
+    phase = 19;
+    check(mouse_action({0, 0, x, y, true, "system", "left-down"}));
+    check(mouse_action({0, 0, x + 180, y, true, "system", "none"}));
+    check(mouse_action({0, 0, 0, 0, false, "system", "left-up"}));
+    check(synchronize_input());
+    wait(150);
+    phase = 20;
+    for (int i = 0; i < 20; ++i) {
+        check(key_action("shift", true, "system"));
+        check(tap_key("b", "system"));
+        check(key_action("shift", false, "system"));
+        check(tap_key("c", "system"));
+    }
+    check(synchronize_input());
+    wait(150);
+    phase = 21;
+    for (const auto &held : {"enter", "numpad-enter"}) {
+        check(key_action(held, true, "system"));
+        check(tap_key(std::string{held} == "enter" ? "numpad-enter" : "enter", "system"));
+        check(key_action(held, false, "system"));
+    }
+    check(synchronize_input());
+    wait(150);
+#ifdef _WIN32
+    phase = 22;
+    std::vector<MousePoint> dense;
+    for (int i = 0; i < 100; ++i)
+        dense.push_back({x + i, y});
+    check(mouse_drag_absolute(dense, "system", 2, 0, 0));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!dense_drag_released && std::chrono::steady_clock::now() < deadline)
+        wait(10);
+    if (!dense_drag_released) {
+        ++failures;
+        std::cerr << "dense drag release did not reach receiver\n";
+    }
+    wait(150);
+#endif
     phase = 15;
     stream.stop();
     std::ofstream file{output / "stream-events.jsonl"};

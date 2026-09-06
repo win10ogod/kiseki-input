@@ -67,7 +67,7 @@ else:
     require(any(e["horizontal"] and e["delta"] < 0 for e in wheel), "horizontal wheel event missing")
 
 keys = events(8, "key")
-require(sum(e["down"] for e in keys) == 10 and sum(not e["down"] for e in keys) == 10, "receiver lost fast taps")
+require(sum(e["down"] for e in keys) == 100 and sum(not e["down"] for e in keys) == 100, "receiver lost fast taps")
 summary["receiverFastKeyDowns"] = sum(e["down"] for e in keys)
 code = {"windows": 65, "macos": 0, "linux": 38}[args.platform]
 
@@ -75,7 +75,7 @@ def verify_stream(values, label):
     keys = [e for e in values if e.get("type") == "key" and e.get("keyCode") == code]
     downs = sum(e.get("state") == "down" for e in keys)
     ups = sum(e.get("state") == "up" for e in keys)
-    require(downs == 10 and ups == 10, f"{label}: expected ten complete fast taps, got {downs}/{ups}")
+    require(downs == 100 and ups == 100, f"{label}: expected 100 complete fast taps, got {downs}/{ups}")
     require(any(e["type"] == "mouse_wheel" for e in values), f"{label}: wheel events missing")
     require(all(a["timestampMs"] <= b["timestampMs"] for a, b in zip(values, values[1:])), f"{label}: timestamps not monotonic")
     summary[label] = {"keyDowns": downs, "keyUps": ups, "events": len(values)}
@@ -84,7 +84,8 @@ verify_stream(stream, "nativeStream")
 if args.platform == "macos":
     for modifier_code in (56, 59, 62):
         states = [e["state"] for e in stream if e.get("type") == "key" and e.get("keyCode") == modifier_code]
-        require(states == ["down", "up"], f"macOS modifier {modifier_code} state mismatch: {states}")
+        expected_pairs = 21 if modifier_code == 56 else 1
+        require(states == ["down", "up"] * expected_pairs, f"macOS modifier {modifier_code} state mismatch: {states}")
 if args.teaching:
     manifest = json.loads((args.teaching / "manifest.json").read_text(encoding="utf-8"))
     require(manifest.get("eventCaptureMode") == "native-event-stream", "teaching fell back to polling")
@@ -97,7 +98,42 @@ sequence = events(11)
 require(sum(e["kind"] == "key" and e["down"] for e in sequence) == 1, "sequence Space-down missing")
 require(sum(e["kind"] == "key" and not e["down"] for e in sequence) == 1, "sequence Space-up missing")
 require(sum(dragging(e, 0) for e in sequence) >= 2, "CLI mixed sequence did not drag")
+relative = events(18, "button")
+split = events(19, "button")
+require(len(relative) == 2 and len(split) == 2, "rapid pointer scenarios lost a button pair")
+if len(relative) == 2 and len(split) == 2:
+    # Windows relative SendInput follows pointer acceleration; macOS uses points.
+    if args.platform == "macos":
+        distance = relative[0]["x"] - split[0]["x"]
+        summary["relative100PointDistance"] = distance
+        require(abs(distance - 100) <= 1, f"relative moves did not accumulate: {distance}")
+    distance = split[1]["x"] - split[0]["x"]
+    summary["splitReleaseDistance"] = distance
+    require(abs(distance - 180) <= 1, f"split up used a stale cursor position: {distance}")
+plain_code = {"windows": 67, "macos": 8, "linux": 54}[args.platform]
+# A Windows IME may translate key-down VKs to VK_PROCESSKEY; the scan still
+# identifies the requested physical C independently of text composition.
+plain = [e for e in events(20, "key") if (e["scan"] == 46 if args.platform == "windows" else e["code"] == plain_code)]
+require(len(plain) == 40 and all(not e["shift"] for e in plain), "released Shift leaked into following key or suppressed taps")
+summary["unmodifiedFollowingKeyEvents"] = len(plain)
+enters = events(21, "key")
+require(len(enters) == 8, "held main/numpad Enter suppressed the other physical key")
+summary["overlappingEnterEvents"] = len(enters)
 if args.platform == "windows":
+    dense = [e for e in events(22) if dragging(e, 0)]
+    require(len(dense) >= 99, f"busy receiver lost dense path points: {len(dense)}")
+    require([e["extended"] for e in enters] == [0, 1, 1, 0, 1, 0, 0, 1], "overlapping Enter physical identities were lost")
+    summary["busyReceiverPathPoints"] = len(dense)
+    for scenario in (23, 24, 25):
+        target = events(scenario)
+        buttons = events(scenario, "button")
+        require([e["down"] for e in buttons] == [True, False], f"phase {scenario}: changed target lost cleanup")
+        require(len({e["receiver"] for e in target}) == 1, f"phase {scenario}: sequence changed recipient")
+    summary["boundRecipientCases"] = ["renamed", "ambiguous title", "hidden"]
+    destroyed = json.loads((args.directory / "destroyed-recipient.json").read_text())
+    require(destroyed["destroyed"] and destroyed["exitCode"] != 0 and "cleanup" in destroyed["error"],
+            "destroyed recipient falsely reported successful cleanup")
+    summary["destroyedRecipientCleanupExit"] = destroyed["exitCode"]
     arrows = events(9, "key")[:2]
     require(len(arrows) == 2 and all(e["scan"] == 75 and e["extended"] == 1 for e in arrows), "Windows arrow scan/extended identity incorrect")
     summary["arrowScanExtended"] = [[e["scan"], e["extended"]] for e in arrows]

@@ -88,6 +88,26 @@ int main() {
         for (const auto &event : sent)
             require(!(event.ki.dwFlags & KEYEVENTF_EXTENDEDKEY), "ordinary key must not gain an extended flag");
     }
+    for (const bool numpad_first : {false, true}) {
+        const std::string first = numpad_first ? "numpad-enter" : "enter";
+        const std::string second = numpad_first ? "enter" : "numpad-enter";
+        require(key_action(first, true, "system").ok, "first Enter must go down");
+        sent.clear();
+        require(tap_key(second, "system").ok, "second physical Enter must remain usable");
+        require(sent.size() == 2, "a shared VK must not suppress the other physical Enter");
+        for (const auto &event : sent)
+            require(bool(event.ki.dwFlags & KEYEVENTF_EXTENDEDKEY) == !numpad_first,
+                    "second Enter must preserve its own physical identity");
+        require(native_key_down(first, "system"), "first Enter acquisition must survive the second tap");
+        require(key_action(first, false, "system", true).ok, "first Enter must retain its own cleanup");
+    }
+    for (const bool absolute : {false, true}) {
+        sent.clear();
+        require(mouse_action({1, 1, 200, 200, absolute, "system", "none"}).ok, "mouse move must be accepted");
+        require(sent.size() == 1, "mouse move must reach SendInput");
+        require(sent.size() == 1 && (sent.front().mi.dwFlags & MOUSEEVENTF_MOVE_NOCOALESCE),
+                "explicit path points must not use default WM_MOUSEMOVE coalescing");
+    }
     std::cout << "Win32 boundary failures=" << failures << '\n';
     return failures ? 2 : 0;
 }
