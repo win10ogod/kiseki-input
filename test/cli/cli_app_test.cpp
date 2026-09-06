@@ -1943,6 +1943,76 @@ TEST_CASE("sequence cancellation unwinds held inputs") {
     REQUIRE(err.str().find("cancelled") != std::string::npos);
 }
 
+TEST_CASE("background sequence retains the acquired binding across movement and cleanup") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json");
+    write_text(path, R"({"steps":[
+        {"type":"background-mouse","targetTitle":"original title","x":10,"y":20,"click":"left-down"},
+        {"type":"background-mouse","targetTitle":"original title","x":30,"y":40},
+        {"type":"text","text":"failure after title changed"}]})");
+    kiseki::cli::Dependencies dependencies;
+    std::shared_ptr<kiseki::platform::input::BackgroundMouseBinding> acquired;
+    std::vector<std::string> calls;
+    dependencies.input_background_mouse = [&](const kiseki::cli::BackgroundMouseOptions &o, kiseki::cli::Io) {
+        REQUIRE(o.binding);
+        calls.push_back(o.click);
+        if (o.click == "left-down") {
+            acquired = o.binding;
+            acquired->window_id = "101";
+            acquired->receiver_window_id = "102";
+            acquired->buttons.insert("left");
+        } else {
+            REQUIRE(o.binding == acquired);
+            REQUIRE(o.binding->window_id == "101");
+            REQUIRE(o.binding->receiver_window_id == "102");
+            if (o.click == "left-up") {
+                REQUIRE(o.cleanup_only);
+                acquired->buttons.erase("left");
+            }
+        }
+        return 0;
+    };
+    dependencies.input_text = [](const auto &, auto) { return 9; };
+    std::ostringstream out, err;
+    REQUIRE(kiseki::cli::run({"input", "sequence", "--file", path.string()}, temp.file("config.json"), {out, err},
+                             dependencies) == 9);
+    REQUIRE(calls == std::vector<std::string>{"left-down", "none", "left-up"});
+    REQUIRE(acquired->buttons.empty());
+}
+
+TEST_CASE("background sequence rebinds after explicit up and preserves cleanup failures") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json");
+    write_text(path, R"({"steps":[
+        {"type":"background-mouse","targetTitle":"document","x":10,"y":20,"click":"left-down"},
+        {"type":"background-mouse","targetTitle":"document","x":20,"y":30,"click":"left-up"},
+        {"type":"background-mouse","targetTitle":"document","x":10,"y":20,"click":"left-down"}]})");
+    kiseki::cli::Dependencies dependencies;
+    std::vector<std::shared_ptr<kiseki::platform::input::BackgroundMouseBinding>> bindings;
+    int attempted_releases = 0;
+    dependencies.input_background_mouse = [&](const kiseki::cli::BackgroundMouseOptions &o, kiseki::cli::Io) {
+        REQUIRE(o.binding);
+        if (o.click == "left-down") {
+            bindings.push_back(o.binding);
+            o.binding->buttons.insert("left");
+        } else if (!o.cleanup_only) {
+            REQUIRE(o.binding == bindings.front());
+            o.binding->buttons.erase("left");
+        } else if (!o.binding->buttons.empty()) {
+            ++attempted_releases;
+            return 7;
+        }
+        return 0;
+    };
+    std::ostringstream out, err;
+    REQUIRE(kiseki::cli::run({"input", "sequence", "--file", path.string()}, temp.file("config.json"), {out, err},
+                             dependencies) == 7);
+    REQUIRE(bindings.size() == 2);
+    REQUIRE(bindings[0] != bindings[1]);
+    REQUIRE(attempted_releases == 1);
+    REQUIRE(err.str().find("cleanup left-down failed") != std::string::npos);
+}
+
 TEST_CASE("macro passes drag timing points modifiers and mouse precision options") {
     const TempConfigDirectory temp;
     const auto path = temp.file("sequence.json"), points = temp.file("points.txt");

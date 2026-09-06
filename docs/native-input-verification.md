@@ -1,5 +1,25 @@
 # Native input repair verification
 
+## Follow-up: pending input state and stable recipients
+
+The five issues reviewed against `e431c0c` were repaired and checked on 2026-09-06, after that change was merged. The Windows, macOS, and native Linux builds passed 97, 97, and 96 CTest cases respectively. The new macOS boundary executable compiles the actual input implementation against delayed system-state reads without posting desktop events; it covers stale key/button state, accumulated movement, external pointer reconciliation, borrowed Ctrl, and partial chord failure. Windows boundary checks now include both overlapping Enter directions and noncoalesced moves. CLI tests cover bound recipients through movement, failure cleanup, explicit up, and later reacquisition.
+
+| Reported defect | Native regression result |
+| --- | --- |
+| macOS rapid taps disappear; released Shift affects the following key | AppKit and the passive event stream each received all 100 consecutive A down/up pairs. Twenty Shift+B / unmodified C cycles produced all 40 C events with Shift clear. A separate invocation of the built CLI also delivered 100/100 taps, compared with 11/100 in the review reproduction. |
+| macOS relative moves read stale positions; split up returns to the old point | 100 consecutive `dx=1` actions moved 100 points, including through the actual CLI sequence (the review CLI moved 1 point). A raw split down/move/up released 180 points from the down, at the last requested position. Standalone CLI Shift-down and button-down remained held after process exit, and subsequent CLI up commands released them. |
+| Windows dense mouse paths collapse in a busy receiver | A 100-point drag at 2 ms intervals reached a receiver sleeping 20 ms per motion with all 99 drag movements. The review reproduction received only 8 movements with default coalescing. |
+| Windows main Enter prevents a numpad Enter tap | Both orderings delivered all eight down/up events with extended identities `0,1,1,0,1,0,0,1`. The boundary check also verifies the first Enter remains acquired until its own up. |
+| Sequence cleanup resolves a changed title again | Native CLI sequences retained the same child receiver when the original title moved to another window, became ambiguous, or the original window became hidden. Each received its matching up. Destroying the recipient produced a nonzero cleanup error. |
+
+The expanded opt-in probe and `test/native/verify_events.py` passed on all three native hosts. Existing split-button drags, timed paths, wheel/side buttons, mixed CLI input, and Windows scan flags still passed. macOS again produced an upright 2× screenshot with all four derived corner clicks received. This run checked 100-key capture in the in-process native event streams; the completed teaching-bundle checks below belong to the preceding repair run.
+
+Full local logs and receiver JSONL are in ignored `artifacts/input-fixes-20260906` and `artifacts/live-test/input-state-{windows,mac,linux}`. The opt-in probe uses owned Win32/AppKit/X11 windows and restores the previous cursor/focus. The live results cover these native system backends and receivers; driver-device and CUA paths were not exercised in this follow-up.
+
+The Quartz implementation uses an independent [private source state table](https://developer.apple.com/documentation/coregraphics/cgeventsourcestateid) and its [event counter](https://developer.apple.com/documentation/coregraphics/cgeventsource/counterforeventtype(_:eventtype:)) to retire pending state. Completion means the source's events have been processed by WindowServer; application behavior is verified separately by the receiver logs.
+
+## Preceding repair verification
+
 The eight issues reviewed against `520fc1d` were checked on native Windows, macOS, and X11 hosts on 2026-09-05/06. WSL was used to run Windows executables and orchestrate SSH; it was not used as a substitute for the native hosts.
 
 | Host | Environment | CTest |

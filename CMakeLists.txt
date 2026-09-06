@@ -265,3 +265,16 @@ if(WIN32 AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
     target_link_libraries(kiseki_windows_input_fault_test PRIVATE user32)
     add_test(NAME windows_input_boundary_faults COMMAND kiseki_windows_input_fault_test)
 endif()
+
+if(APPLE AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
+    add_executable(kiseki_macos_input_fault_test
+        test/platform/macos_input_fault_test.cpp
+        src/platform/input/sequence_support.cpp
+        src/platform/input/mac_input.mm
+        src/platform/target/target.cpp)
+    target_compile_features(kiseki_macos_input_fault_test PRIVATE cxx_std_20)
+    target_include_directories(kiseki_macos_input_fault_test PRIVATE src)
+    target_link_libraries(kiseki_macos_input_fault_test PRIVATE
+        ${KISEKI_APPLICATIONSERVICES_FRAMEWORK} ${KISEKI_APPKIT_FRAMEWORK} ${KISEKI_FOUNDATION_FRAMEWORK})
+    add_test(NAME macos_input_delayed_boundary COMMAND kiseki_macos_input_fault_test)
+endif()

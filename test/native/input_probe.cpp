@@ -10,6 +10,74 @@
 using namespace native_probe;
 std::ofstream received;
 #ifdef _WIN32
+void binding_cases(HWND window, HWND spare) {
+    using namespace kiseki::platform::input;
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        phase = 23 + scenario;
+        SetWindowTextW(window, L"Kiseki binding target");
+        SetWindowTextW(spare, L"Kiseki spare target");
+        auto dependencies = kiseki::cli::default_dependencies();
+        const auto original = dependencies.input_background_mouse;
+        dependencies.input_background_mouse = [=](const kiseki::cli::BackgroundMouseOptions &options,
+                                                  kiseki::cli::Io io) {
+            const int code = original(options, io);
+            if (code == 0 && options.click == "left-down") {
+                if (scenario == 0)
+                    SetWindowTextW(window, L"Kiseki renamed target");
+                if (scenario < 2)
+                    SetWindowTextW(spare, L"Kiseki binding target");
+                else
+                    ShowWindow(window, SW_HIDE);
+            }
+            return code;
+        };
+        nlohmann::json sequence{{"steps", nlohmann::json::array({
+            {{"type", "background-mouse"}, {"targetTitle", "Kiseki binding target"},
+             {"x", 40}, {"y", 210}, {"click", "left-down"}},
+            {{"type", "background-mouse"}, {"targetTitle", "Kiseki binding target"},
+             {"x", 240}, {"y", 210}}
+        })}};
+        const auto path = output / ("binding-" + std::to_string(scenario) + ".json");
+        { std::ofstream file{path}; file << sequence.dump(2); }
+        const int code = kiseki::cli::run({"input", "sequence", "--file", path.string()},
+                                          output / "config.json", {std::cout, std::cerr}, dependencies);
+        if (code) ++failures;
+        wait(150);
+        ShowWindow(window, SW_SHOW);
+        SetWindowTextW(window, L"Kiseki native input regression");
+        SetWindowTextW(spare, L"Kiseki spare target");
+    }
+    phase = 26;
+    auto dependencies = kiseki::cli::default_dependencies();
+    const auto original = dependencies.input_background_mouse;
+    dependencies.input_background_mouse = [=](const kiseki::cli::BackgroundMouseOptions &options,
+                                              kiseki::cli::Io io) {
+        const int code = original(options, io);
+        if (code == 0 && options.click == "left-down") {
+            wait(100);
+            SendMessageW(spare, WM_CLOSE, 0, 0);
+        }
+        return code;
+    };
+    nlohmann::json sequence{{"steps", nlohmann::json::array({
+        {{"type", "background-mouse"}, {"targetWindowId", std::to_string(reinterpret_cast<std::uintptr_t>(spare))},
+         {"x", 40}, {"y", 100}, {"click", "left-down"}}
+    })}};
+    const auto path = output / "binding-destroyed.json";
+    { std::ofstream file{path}; file << sequence.dump(2); }
+    std::ostringstream out, err;
+    const int code = kiseki::cli::run({"input", "sequence", "--file", path.string()},
+                                      output / "config.json", {out, err}, dependencies);
+    if (code == 0 || err.str().find("cleanup") == std::string::npos) {
+        ++failures;
+        std::cerr << "destroyed recipient cleanup failure was not reported\n";
+    }
+    std::ofstream{output / "destroyed-recipient.json"} << nlohmann::json{
+        {"exitCode", code}, {"error", err.str()}, {"destroyed", !IsWindow(spare)}}.dump(2);
+    SetForegroundWindow(window);
+    SetFocus(window);
+    wait(150);
+}
 LRESULT CALLBACK receiver(HWND window, UINT message, WPARAM wp, LPARAM lp) {
     std::string kind;
     int button = -1;
@@ -85,6 +153,12 @@ LRESULT CALLBACK receiver(HWND window, UINT message, WPARAM wp, LPARAM lp) {
             event["horizontal"] = message == WM_MOUSEHWHEEL;
         }
         received << event.dump() << std::endl;
+        if (phase == 22) {
+            if (message == WM_LBUTTONUP)
+                dense_drag_released = true;
+            if (message == WM_MOUSEMOVE)
+                Sleep(20); // A busy application must still receive the requested path.
+        }
         // Keep the owned test window stable when exercising side buttons/keys.
         return 0;
     }
@@ -128,6 +202,9 @@ int main(int argc, char **argv) {
     RegisterClassW(&type);
     HWND window = CreateWindowW(type.lpszClassName, L"Kiseki native input regression", WS_OVERLAPPEDWINDOW, 120, 100,
                                 740, 460, nullptr, nullptr, type.hInstance, nullptr);
+    HWND spare = CreateWindowW(type.lpszClassName, L"Kiseki spare target", WS_OVERLAPPEDWINDOW,
+                                900, 100, 240, 200, nullptr, nullptr, type.hInstance, nullptr);
+    ShowWindow(spare, SW_SHOWNOACTIVATE);
     // Adjacent child receivers expose accidental re-targeting during a split drag.
     CreateWindowW(type.lpszClassName, L"left receiver", WS_CHILD | WS_VISIBLE, 0, 180, 200, 100, window, nullptr,
                   type.hInstance, nullptr);
@@ -148,7 +225,10 @@ int main(int argc, char **argv) {
     }
     POINT point{100, 100};
     ClientToScreen(window, &point);
-    std::thread sender([&] { run(point.x, point.y, std::to_string(reinterpret_cast<std::uintptr_t>(window)), true); });
+    std::thread sender([&] {
+        binding_cases(window, spare);
+        run(point.x, point.y, std::to_string(reinterpret_cast<std::uintptr_t>(window)), true);
+    });
     while (!finished) {
         pump();
         Sleep(1);
@@ -159,6 +239,7 @@ int main(int argc, char **argv) {
     if (previous && IsWindow(previous))
         SetForegroundWindow(previous);
     ActivateKeyboardLayout(old_layout, 0);
+    DestroyWindow(spare);
     DestroyWindow(window);
     return failures ? 2 : 0;
 }

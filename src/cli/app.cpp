@@ -9,10 +9,12 @@
 #include <fstream>
 #include <initializer_list>
 #include <limits>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -593,6 +595,7 @@ struct MacroStep {
     int end_hold_ms = 0;
     int at_ms = -1;
     std::vector<kiseki::platform::input::MousePoint> points;
+    std::shared_ptr<kiseki::platform::input::BackgroundMouseBinding> background_binding;
 };
 
 std::string required_string(const nlohmann::json& object, const char* key, std::string_view context) {
@@ -935,7 +938,8 @@ int run_macro_step(
                                                                           .receiver_window_id = step.receiver_window_id,
                                                                           .click_count = step.click_count,
                                                                           .click_interval_ms = step.click_interval_ms,
-                                                                          .hold_ms = step.hold_ms},
+                                                                          .hold_ms = step.hold_ms,
+                                                                          .binding = step.background_binding},
                                                    io);
     } else if (step.type == "background-drag") {
         if (!dependencies.input_background_drag) return missing_backend("background drag");
@@ -975,6 +979,8 @@ int run_macro_command(const MacroOptions& options, Dependencies& dependencies, I
 
     using namespace kiseki::platform::input;
     ReleaseStack releases;
+    using Selector = std::tuple<std::string, std::uint32_t, std::string>;
+    std::map<Selector, std::shared_ptr<BackgroundMouseBinding>> background_bindings;
     const auto cleanup_result = [&](int code) {
         const auto result = releases.finish({code == 0, code, "", ""});
         if (!result.error.empty())
@@ -983,13 +989,23 @@ int run_macro_command(const MacroOptions& options, Dependencies& dependencies, I
     };
     const auto start = std::chrono::steady_clock::now();
     for (std::size_t index = 0; index < steps.size(); ++index) {
-        const auto &step = steps[index];
+        auto &step = steps[index];
         if (input_cancelled() ||
             (step.at_ms >= 0 && !wait_until_input(start + std::chrono::milliseconds(step.at_ms)))) {
             io.err << "input cancelled\n";
             return cleanup_result(2);
         }
         int code;
+        const Selector selector{step.target.title, step.target.pid, step.target.window_id};
+        if (step.type == "background-mouse") {
+            const auto found = background_bindings.find(selector);
+            if (found != background_bindings.end())
+                step.background_binding = found->second;
+            else if (step.click.ends_with("-down")) {
+                step.background_binding = std::make_shared<BackgroundMouseBinding>();
+                background_bindings.emplace(selector, step.background_binding);
+            }
+        }
         try {
             code = run_macro_step(step, index, dependencies, io);
         } catch (const std::exception &error) {
@@ -998,6 +1014,9 @@ int run_macro_command(const MacroOptions& options, Dependencies& dependencies, I
         }
         if (code != 0)
             return cleanup_result(code);
+        if (step.type == "background-mouse" && step.click.ends_with("-up") && step.background_binding &&
+            step.background_binding->buttons.empty())
+            background_bindings.erase(selector);
         if (step.type == "key" && step.action == "down") {
             releases.add(step.key, [&, step] {
                 const int result = dependencies.input_key(
@@ -1024,7 +1043,8 @@ int run_macro_command(const MacroOptions& options, Dependencies& dependencies, I
                                                                     .y = step.y,
                                                                     .click = up,
                                                                     .receiver_window_id = step.receiver_window_id,
-                                                                    .cleanup_only = true},
+                                                                    .cleanup_only = true,
+                                                                    .binding = step.background_binding},
                                              io);
                 return kiseki::platform::OperationResult{result == 0, result, "",
                                                          result ? "button release failed" : ""};
@@ -1196,6 +1216,7 @@ Dependencies default_dependencies() {
                         .click_interval_ms = options.click_interval_ms,
                         .hold_ms = options.hold_ms,
                         .cleanup_only = options.cleanup_only,
+                        .binding = options.binding,
                     }),
                     io);
             },
@@ -3131,6 +3152,12 @@ int run(
         return 2;
     }
 
+    const auto synchronized = kiseki::platform::input::synchronize_input();
+    if (!synchronized.ok) {
+        io.err << synchronized.error << '\n';
+        if (exit_code == 0)
+            exit_code = synchronized.code;
+    }
     return exit_code;
 }
 
