@@ -46,8 +46,11 @@ A valid bundle directory must contain:
 
 - `mouse_move`
 - `mouse_button`
+- `mouse_wheel`
 - `key`
 - `recorder_status`
+
+Native recordings identify `eventSource`, `eventCaptureMode`, and `eventReceptionThread` in the manifest. Check for `incomplete-polling-fallback` and recorder gap warnings before treating short-tap, repeat, or wheel counts as complete. Native events can also carry `timestampUs`, source timestamps, scan codes, repeat, and wheel delta units.
 
 `annotations.json` must include `schemaVersion: 1` and `annotations[]`. Each annotation should target `frameIndex`, `eventIndex`, or both.
 

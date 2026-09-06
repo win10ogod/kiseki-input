@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "platform/input/input.hpp"
+
 namespace kiseki::cli {
 
 struct Io {
@@ -21,6 +23,7 @@ struct WebUiLaunchOptions {
 
 struct ScreenshotDesktopOptions {
     std::filesystem::path output_path;
+    bool json = false;
 };
 
 struct ScreenshotBurstOptions {
@@ -54,11 +57,13 @@ struct ObserveUiOptions {
 struct ScreenshotWindowOptions {
     TargetOptions target;
     std::filesystem::path output_path;
+    bool json = false;
 };
 
 struct ScreenshotBackgroundWindowOptions {
     TargetOptions target;
     std::filesystem::path output_path;
+    bool json = false;
 };
 
 struct ScreenshotWindowBurstOptions {
@@ -72,11 +77,15 @@ struct ScreenshotWindowBurstOptions {
 struct InputKeyOptions {
     std::string key;
     std::string backend;
+    std::string action = "tap";
+    int hold_ms = 0;
+    bool cleanup_only = false;
 };
 
 struct InputComboOptions {
     std::string keys;
     std::string backend;
+    int hold_ms = 0;
 };
 
 struct InputTextOptions {
@@ -92,6 +101,12 @@ struct InputMouseOptions {
     bool absolute;
     std::string backend;
     std::string click;
+    int click_count = 1;
+    int click_interval_ms = 100;
+    int hold_ms = 0;
+    int wheel = 0;
+    int hwheel = 0;
+    bool cleanup_only = false;
 };
 
 struct InputDragOptions {
@@ -100,6 +115,9 @@ struct InputDragOptions {
     int step_delay_ms;
     int start_hold_ms;
     int end_hold_ms;
+    std::string button = "left";
+    std::string modifiers;
+    std::vector<kiseki::platform::input::MousePoint> points;
 };
 
 struct BackgroundTextOptions {
@@ -118,11 +136,22 @@ struct BackgroundMouseOptions {
     int x;
     int y;
     std::string click;
+    std::string held_buttons;
+    std::string receiver_window_id;
+    int click_count = 1;
+    int click_interval_ms = 100;
+    int hold_ms = 0;
+    bool cleanup_only = false;
 };
 
 struct BackgroundDragOptions {
     TargetOptions target;
     std::filesystem::path path;
+    std::string button = "left";
+    int step_delay_ms = 2;
+    int start_hold_ms = 0;
+    int end_hold_ms = 0;
+    std::vector<kiseki::platform::input::MousePoint> points;
 };
 
 struct BackgroundDesktopStartOptions {

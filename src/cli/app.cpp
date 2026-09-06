@@ -8,6 +8,8 @@
 #include <exception>
 #include <fstream>
 #include <initializer_list>
+#include <limits>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -21,6 +23,7 @@
 #include "core/version.hpp"
 #include "platform/capture/screenshot.hpp"
 #include "platform/input/input.hpp"
+#include "platform/input/sequence_support.hpp"
 #include "platform/notification/notification.hpp"
 #include "platform/observe/ui_observation.hpp"
 #include "platform/permissions/permissions.hpp"
@@ -81,7 +84,31 @@ int print_operation_result(const kiseki::platform::OperationResult& result, Io i
     return result.code;
 }
 
-int print_capture_result(const kiseki::platform::CaptureResult& result, Io io) {
+int print_capture_result(const kiseki::platform::CaptureResult &result, Io io, bool json_output = false) {
+    if (json_output) {
+        nlohmann::json value{{"ok", result.ok},       {"output", result.output_path.string()},
+                             {"width", result.width}, {"height", result.height},
+                             {"error", result.error}, {"coordinates", nullptr}};
+        if (result.coordinates) {
+            const auto &c = *result.coordinates;
+            value["coordinates"] = {
+                {"space", c.space},
+                {"originX", c.origin_x},
+                {"originY", c.origin_y},
+                {"width", c.width},
+                {"height", c.height},
+                {"pixelsPerUnitX", c.pixels_per_unit_x},
+                {"pixelsPerUnitY", c.pixels_per_unit_y},
+                {"pixelToScreen",
+                 "screenX = originX + pixelX / pixelsPerUnitX; screenY = originY + pixelY / pixelsPerUnitY"},
+                {"imageOrigin", "top-left"},
+                {"bounds", c.window_id ? "full-window" : "desktop"}};
+            if (c.window_id)
+                value["coordinates"]["windowId"] = *c.window_id;
+        }
+        io.out << value.dump(2) << '\n';
+        return result.code;
+    }
     if (result.ok) {
         io.out << "captured " << result.output_path.string() << " " << result.width << "x" << result.height << '\n';
     } else {
@@ -505,12 +532,30 @@ std::vector<kiseki::platform::input::MousePoint> read_mouse_points_file(const st
         if (!(stream >> x >> y)) {
             throw std::runtime_error{"invalid mouse path line " + std::to_string(line_number) + ": " + line};
         }
-        points.push_back(kiseki::platform::input::MousePoint{.x = x, .y = y});
+        std::int64_t time_ms = -1;
+        stream >> std::ws;
+        if (!stream.eof() && (!(stream >> time_ms) || time_ms < 0)) {
+            throw std::runtime_error{"invalid mouse path timestamp at line " + std::to_string(line_number)};
+        }
+        stream >> std::ws;
+        if (!stream.eof())
+            throw std::runtime_error{"extra mouse path fields at line " + std::to_string(line_number)};
+        if (!points.empty() && ((points.front().time_ms < 0) != (time_ms < 0) || time_ms < points.back().time_ms)) {
+            throw std::runtime_error{"mouse path timestamps must be present on every point and non-decreasing"};
+        }
+        if (time_ms >
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::duration::max()).count() /
+                2) {
+            throw std::runtime_error{"mouse path timestamp exceeds the monotonic clock range"};
+        }
+        points.push_back(kiseki::platform::input::MousePoint{.x = x, .y = y, .time_ms = time_ms});
     }
 
     if (points.size() < 2) {
         throw std::runtime_error{"mouse path file requires at least two points"};
     }
+    if (points.front().time_ms > 0)
+        throw std::runtime_error{"first drag timestamp must be 0"};
     return points;
 }
 
@@ -533,6 +578,21 @@ struct MacroStep {
     bool has_x = false;
     bool has_y = false;
     std::uint32_t ms = 0;
+    std::string action = "tap";
+    std::string button = "left";
+    std::string modifiers;
+    std::string held_buttons;
+    std::string receiver_window_id;
+    int hold_ms = 0;
+    int click_count = 1;
+    int click_interval_ms = 100;
+    int wheel = 0;
+    int hwheel = 0;
+    int step_delay_ms = 2;
+    int start_hold_ms = 0;
+    int end_hold_ms = 0;
+    int at_ms = -1;
+    std::vector<kiseki::platform::input::MousePoint> points;
 };
 
 std::string required_string(const nlohmann::json& object, const char* key, std::string_view context) {
@@ -559,7 +619,14 @@ int optional_int(const nlohmann::json& object, const char* key, int fallback) {
     if (!object.at(key).is_number_integer()) {
         throw std::runtime_error{"macro field '" + std::string{key} + "' must be an integer"};
     }
-    return object.at(key).get<int>();
+    const auto &value = object.at(key);
+    if ((value.is_number_unsigned() &&
+         value.get<std::uint64_t>() > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) ||
+        (!value.is_number_unsigned() && (value.get<std::int64_t>() < std::numeric_limits<int>::min() ||
+                                         value.get<std::int64_t>() > std::numeric_limits<int>::max()))) {
+        throw std::runtime_error{"macro integer out of range: " + std::string{key}};
+    }
+    return value.get<int>();
 }
 
 std::uint32_t required_non_negative_ms(const nlohmann::json& object) {
@@ -581,9 +648,12 @@ bool optional_bool(const nlohmann::json& object, const char* key, bool fallback)
 }
 
 TargetOptions optional_target_options(const nlohmann::json& object) {
+    const int pid = optional_int(object, "targetPid", 0);
+    if (pid < 0)
+        throw std::runtime_error{"targetPid must be non-negative"};
     return TargetOptions{
         .title = optional_string(object, "targetTitle", ""),
-        .pid = static_cast<std::uint32_t>(optional_int(object, "targetPid", 0)),
+        .pid = static_cast<std::uint32_t>(pid),
         .window_id = optional_string(object, "targetWindowId", ""),
     };
 }
@@ -607,11 +677,53 @@ MacroStep parse_macro_step(const nlohmann::json& step_json, std::size_t index) {
     step.type = required_string(step_json, "type", context);
     step.backend = optional_string(step_json, "backend", "auto");
 
+    if (step.backend != "auto" && step.backend != "driver" && step.backend != "system")
+        throw std::runtime_error{"invalid input backend"};
+    step.at_ms = optional_int(step_json, "atMs", -1);
+    if (step_json.contains("atMs") && step.at_ms < 0)
+        throw std::runtime_error{"atMs must be non-negative"};
+    std::set<std::string> allowed{"type", "atMs", "description"};
+    if (step.type == "key" || step.type == "combo" || step.type == "mouse" || step.type == "drag")
+        allowed.insert("backend");
+    const auto fields = [&](std::initializer_list<const char *> names) {
+        for (const auto *name : names)
+            allowed.insert(name);
+    };
+    const auto duration = [&](const char *name, int fallback = 0) {
+        const int value = optional_int(step_json, name, fallback);
+        if (value < 0)
+            throw std::runtime_error{std::string{name} + " must be non-negative"};
+        return value;
+    };
+    const auto validate_keys = [&](const std::string &keys) {
+        std::istringstream stream{keys};
+        std::string key;
+        if (keys.empty() || keys.back() == '+')
+            throw std::runtime_error{"empty key name"};
+        while (std::getline(stream, key, '+'))
+            if (!kiseki::platform::input::key_supported(key))
+                throw std::runtime_error{"unsupported key: " + key};
+    };
+
     if (step.type == "key") {
+        fields({"key", "action", "holdMs"});
         step.key = required_string(step_json, "key", "key step");
+        validate_keys(step.key);
+        if (step.key.find('+') != std::string::npos)
+            throw std::runtime_error{"key step accepts one key; use combo"};
+        step.action = optional_string(step_json, "action", "tap");
+        if (step.action != "tap" && step.action != "down" && step.action != "up")
+            throw std::runtime_error{"key action must be tap, down, or up"};
+        step.hold_ms = duration("holdMs");
+        if (step.action != "tap" && step.hold_ms)
+            throw std::runtime_error{"holdMs requires tap; use sleep between down and up"};
     } else if (step.type == "combo") {
+        fields({"keys", "holdMs"});
         step.keys = required_string(step_json, "keys", "combo step");
+        validate_keys(step.keys);
+        step.hold_ms = duration("holdMs");
     } else if (step.type == "text") {
+        fields({"text", "file"});
         const bool has_text = step_json.contains("text");
         const bool has_file = step_json.contains("file");
         if (has_text == has_file) {
@@ -622,7 +734,27 @@ MacroStep parse_macro_step(const nlohmann::json& step_json, std::size_t index) {
         } else {
             step.text_file = required_string(step_json, "file", "text step");
         }
-    } else if (step.type == "mouse") {
+    } else if (step.type == "mouse" || step.type == "background-mouse") {
+        fields(
+            {"dx", "dy", "x", "y", "absolute", "click", "clickCount", "clickIntervalMs", "holdMs", "wheel", "hwheel"});
+        if (step.type == "background-mouse") {
+            fields({"targetTitle", "targetPid", "targetWindowId", "heldButtons", "receiverWindowId"});
+            step.target = optional_target_options(step_json);
+            step.held_buttons = optional_string(step_json, "heldButtons", "");
+            step.receiver_window_id = optional_string(step_json, "receiverWindowId", "");
+            if (!step_json.contains("x") || !step_json.contains("y"))
+                throw std::runtime_error{"background-mouse requires x and y"};
+            for (const auto *field : {"dx", "dy", "absolute", "wheel", "hwheel", "backend"})
+                if (step_json.contains(field))
+                    throw std::runtime_error{"unsupported background-mouse field: " + std::string{field}};
+        }
+        step.click_count = optional_int(step_json, "clickCount", 1);
+        if (step.click_count < 1)
+            throw std::runtime_error{"clickCount must be positive"};
+        step.click_interval_ms = duration("clickIntervalMs", 100);
+        step.hold_ms = duration("holdMs");
+        step.wheel = optional_int(step_json, "wheel", 0);
+        step.hwheel = optional_int(step_json, "hwheel", 0);
         step.dx = optional_int(step_json, "dx", 0);
         step.dy = optional_int(step_json, "dy", 0);
         step.has_x = step_json.contains("x");
@@ -632,20 +764,50 @@ MacroStep parse_macro_step(const nlohmann::json& step_json, std::size_t index) {
         step.absolute = optional_bool(step_json, "absolute", step.has_x && step.has_y);
         step.click = optional_string(step_json, "click", "none");
         require_no_partial_mouse_position(step);
-    } else if (step.type == "drag") {
+        const std::set<std::string> clicks{"none",      "left",    "right",      "middle",   "x1",          "x2",
+                                           "left-down", "left-up", "right-down", "right-up", "middle-down", "middle-up",
+                                           "x1-down",   "x1-up",   "x2-down",    "x2-up"};
+        if (!clicks.contains(step.click))
+            throw std::runtime_error{"unsupported click: " + step.click};
+        if ((step.click == "none" || step.click.find('-') != std::string::npos) &&
+            (step.click_count != 1 || step.hold_ms))
+            throw std::runtime_error{"clickCount and holdMs require a complete click"};
+    } else if (step.type == "drag" || step.type == "background-drag") {
+        fields({"file", "button", "stepDelayMs", "startHoldMs", "endHoldMs"});
         step.path = required_string(step_json, "file", "drag step");
-    } else if (step.type == "background-drag") {
-        step.path = required_string(step_json, "file", "background-drag step");
-        step.target = optional_target_options(step_json);
+        step.button = optional_string(step_json, "button", "left");
+        if (step.button != "left" && step.button != "right" && step.button != "middle" && step.button != "x1" &&
+            step.button != "x2")
+            throw std::runtime_error{"unsupported drag button"};
+        step.step_delay_ms = duration("stepDelayMs", 2);
+        step.start_hold_ms = duration("startHoldMs");
+        step.end_hold_ms = duration("endHoldMs");
+        if (step.type == "background-drag") {
+            fields({"targetTitle", "targetPid", "targetWindowId"});
+            step.target = optional_target_options(step_json);
+        } else {
+            fields({"modifiers"});
+            step.modifiers = optional_string(step_json, "modifiers", "");
+            if (!step.modifiers.empty())
+                validate_keys(step.modifiers);
+        }
     } else if (step.type == "background-screenshot") {
+        fields({"output", "targetTitle", "targetPid", "targetWindowId"});
         step.output_path = required_string(step_json, "output", "background-screenshot step");
         step.target = optional_target_options(step_json);
     } else if (step.type == "screenshot") {
+        fields({"output"});
         step.output_path = required_string(step_json, "output", "screenshot step");
     } else if (step.type == "sleep") {
+        fields({"ms"});
         step.ms = required_non_negative_ms(step_json);
     } else {
         throw std::runtime_error{"unsupported macro step type: " + step.type};
+    }
+
+    for (const auto &[name, value] : step_json.items()) {
+        if (!allowed.contains(name))
+            throw std::runtime_error{context + " has unknown field '" + name + "'"};
     }
 
     return step;
@@ -675,6 +837,19 @@ std::vector<MacroStep> read_macro_file(const std::filesystem::path& path) {
     for (std::size_t index = 0; index < steps_json.size(); ++index) {
         steps.push_back(parse_macro_step(steps_json.at(index), index));
     }
+    int previous_at_ms = -1;
+    for (auto &step : steps) {
+        if (step.at_ms >= 0) {
+            if (step.at_ms < previous_at_ms)
+                throw std::runtime_error{"atMs must be non-decreasing"};
+            previous_at_ms = step.at_ms;
+        }
+        // Resolve every input before any side effects, retaining the exact data used.
+        if (!step.text_file.empty())
+            step.text = read_text_file(step.text_file);
+        if (!step.path.empty())
+            step.points = read_mouse_points_file(step.path);
+    }
     return steps;
 }
 
@@ -703,24 +878,19 @@ int run_macro_step(
     int code = 0;
     if (step.type == "key") {
         if (!dependencies.input_key) return missing_backend("input key");
-        code = dependencies.input_key(InputKeyOptions{.key = step.key, .backend = step.backend}, io);
+        code = dependencies.input_key(
+            InputKeyOptions{.key = step.key, .backend = step.backend, .action = step.action, .hold_ms = step.hold_ms},
+            io);
     } else if (step.type == "combo") {
         if (!dependencies.input_combo) return missing_backend("input combo");
-        code = dependencies.input_combo(InputComboOptions{.keys = step.keys, .backend = step.backend}, io);
+        code = dependencies.input_combo(
+            InputComboOptions{.keys = step.keys, .backend = step.backend, .hold_ms = step.hold_ms}, io);
     } else if (step.type == "text") {
         if (!dependencies.input_text) return missing_backend("input text");
         InputTextOptions options{
             .text = step.text,
             .text_file = step.text_file,
         };
-        if (!options.text_file.empty()) {
-            try {
-                options.text = read_text_file(options.text_file);
-            } catch (const std::exception& error) {
-                io.err << "macro step " << (index + 1) << " failed: " << error.what() << '\n';
-                return 2;
-            }
-        }
         code = dependencies.input_text(options, io);
     } else if (step.type == "mouse") {
         if (!dependencies.input_mouse) return missing_backend("input mouse");
@@ -733,6 +903,11 @@ int run_macro_step(
                 .absolute = step.absolute,
                 .backend = step.backend,
                 .click = step.click,
+                .click_count = step.click_count,
+                .click_interval_ms = step.click_interval_ms,
+                .hold_ms = step.hold_ms,
+                .wheel = step.wheel,
+                .hwheel = step.hwheel,
             },
             io);
     } else if (step.type == "drag") {
@@ -741,14 +916,37 @@ int run_macro_step(
             InputDragOptions{
                 .path = step.path,
                 .backend = step.backend,
-                .step_delay_ms = 2,
-                .start_hold_ms = 0,
-                .end_hold_ms = 0,
+                .step_delay_ms = step.step_delay_ms,
+                .start_hold_ms = step.start_hold_ms,
+                .end_hold_ms = step.end_hold_ms,
+                .button = step.button,
+                .modifiers = step.modifiers,
+                .points = step.points,
             },
             io);
+    } else if (step.type == "background-mouse") {
+        if (!dependencies.input_background_mouse)
+            return missing_backend("background mouse");
+        code = dependencies.input_background_mouse(BackgroundMouseOptions{.target = step.target,
+                                                                          .x = step.x,
+                                                                          .y = step.y,
+                                                                          .click = step.click,
+                                                                          .held_buttons = step.held_buttons,
+                                                                          .receiver_window_id = step.receiver_window_id,
+                                                                          .click_count = step.click_count,
+                                                                          .click_interval_ms = step.click_interval_ms,
+                                                                          .hold_ms = step.hold_ms},
+                                                   io);
     } else if (step.type == "background-drag") {
         if (!dependencies.input_background_drag) return missing_backend("background drag");
-        code = dependencies.input_background_drag(BackgroundDragOptions{.target = step.target, .path = step.path}, io);
+        code = dependencies.input_background_drag(BackgroundDragOptions{.target = step.target,
+                                                                        .path = step.path,
+                                                                        .button = step.button,
+                                                                        .step_delay_ms = step.step_delay_ms,
+                                                                        .start_hold_ms = step.start_hold_ms,
+                                                                        .end_hold_ms = step.end_hold_ms,
+                                                                        .points = step.points},
+                                                  io);
     } else if (step.type == "background-screenshot") {
         if (!dependencies.capture_background_window) return missing_backend("background screenshot");
         code = dependencies.capture_background_window(ScreenshotBackgroundWindowOptions{.target = step.target, .output_path = step.output_path}, io);
@@ -756,8 +954,7 @@ int run_macro_step(
         if (!dependencies.capture_desktop) return missing_backend("screenshot");
         code = dependencies.capture_desktop(ScreenshotDesktopOptions{.output_path = step.output_path}, io);
     } else if (step.type == "sleep") {
-        std::this_thread::sleep_for(std::chrono::milliseconds{step.ms});
-        code = 0;
+        code = kiseki::platform::input::wait_input_ms(static_cast<int>(step.ms)) ? 0 : 2;
     }
 
     if (code != 0) {
@@ -767,6 +964,7 @@ int run_macro_step(
 }
 
 int run_macro_command(const MacroOptions& options, Dependencies& dependencies, Io io) {
+    kiseki::platform::input::InputCancellationScope cancellation;
     std::vector<MacroStep> steps;
     try {
         steps = read_macro_file(options.path);
@@ -775,12 +973,67 @@ int run_macro_command(const MacroOptions& options, Dependencies& dependencies, I
         return 2;
     }
 
+    using namespace kiseki::platform::input;
+    ReleaseStack releases;
+    const auto cleanup_result = [&](int code) {
+        const auto result = releases.finish({code == 0, code, "", ""});
+        if (!result.error.empty())
+            io.err << result.error << '\n';
+        return result.code;
+    };
+    const auto start = std::chrono::steady_clock::now();
     for (std::size_t index = 0; index < steps.size(); ++index) {
-        const int code = run_macro_step(steps[index], index, dependencies, io);
-        if (code != 0) {
-            return code;
+        const auto &step = steps[index];
+        if (input_cancelled() ||
+            (step.at_ms >= 0 && !wait_until_input(start + std::chrono::milliseconds(step.at_ms)))) {
+            io.err << "input cancelled\n";
+            return cleanup_result(2);
+        }
+        int code;
+        try {
+            code = run_macro_step(step, index, dependencies, io);
+        } catch (const std::exception &error) {
+            io.err << error.what() << '\n';
+            return cleanup_result(2);
+        }
+        if (code != 0)
+            return cleanup_result(code);
+        if (step.type == "key" && step.action == "down") {
+            releases.add(step.key, [&, step] {
+                const int result = dependencies.input_key(
+                    InputKeyOptions{.key = step.key, .backend = step.backend, .action = "up", .cleanup_only = true},
+                    io);
+                return kiseki::platform::OperationResult{result == 0, result, "", result ? "key release failed" : ""};
+            });
+        } else if ((step.type == "mouse" || step.type == "background-mouse") && step.click.ends_with("-down")) {
+            releases.add(step.click, [&, step] {
+                const auto up = step.click.substr(0, step.click.size() - 5) + "-up";
+                const int result = step.type == "mouse"
+                                       ? dependencies.input_mouse(InputMouseOptions{.dx = 0,
+                                                                                    .dy = 0,
+                                                                                    .x = 0,
+                                                                                    .y = 0,
+                                                                                    .absolute = false,
+                                                                                    .backend = step.backend,
+                                                                                    .click = up,
+                                                                                    .cleanup_only = true},
+                                                                  io)
+                                       : dependencies.input_background_mouse(
+                                             BackgroundMouseOptions{.target = step.target,
+                                                                    .x = step.x,
+                                                                    .y = step.y,
+                                                                    .click = up,
+                                                                    .receiver_window_id = step.receiver_window_id,
+                                                                    .cleanup_only = true},
+                                             io);
+                return kiseki::platform::OperationResult{result == 0, result, "",
+                                                         result ? "button release failed" : ""};
+            });
         }
     }
+    const int cleaned = cleanup_result(0);
+    if (cleaned != 0)
+        return cleaned;
 
     io.out << "macro completed " << steps.size() << " steps\n";
     return 0;
@@ -790,445 +1043,522 @@ int run_macro_command(const MacroOptions& options, Dependencies& dependencies, I
 
 Dependencies default_dependencies() {
     return Dependencies{
-        .launch_config_ui = [](const WebUiLaunchOptions& options, const std::filesystem::path& config_path, Io io) {
-            io.out << "Serving configuration UI at "
-                   << kiseki::webui::build_listen_url(options.host, options.port) << '\n';
-            kiseki::webui::WebServer server{config_path};
-            return server.listen(options.host, options.port);
-        },
-        .list_targets = [](const TargetListOptions& options, Io io) {
-            return print_target_list_result(kiseki::platform::target::list_windows(to_target_query(options.filter)), io);
-        },
-        .inspect_target = [](const TargetInspectOptions& options, Io io) {
-            return print_target_inspect_result(kiseki::platform::target::inspect_window(to_target_query(options.target)), io);
-        },
-        .observe_ui = [](const ObserveUiOptions& options, Io io) {
-            return print_observe_ui_result(
-                kiseki::platform::observe::observe_ui(kiseki::platform::observe::UiObservationOptions{
-                    .target = to_target_query(options.target),
-                    .provider = options.provider,
-                    .max_depth = options.max_depth,
-                    .max_elements = options.max_elements,
-                }),
-                io);
-        },
-        .capture_desktop = [](const ScreenshotDesktopOptions& options, Io io) {
-            return print_capture_result(kiseki::platform::capture::capture_desktop_bmp(options.output_path), io);
-        },
-        .capture_burst = [](const ScreenshotBurstOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::capture::capture_burst_bmp(kiseki::platform::capture::BurstOptions{
-                    .output_directory = options.output_directory,
-                    .prefix = options.prefix,
-                    .frames = options.frames,
-                    .fps = options.fps,
-                }),
-                io);
-        },
-        .capture_window = [](const ScreenshotWindowOptions& options, Io io) {
-            return print_capture_result(
-                kiseki::platform::capture::capture_window_bmp(to_target_query(options.target), options.output_path),
-                io);
-        },
-        .capture_background_window = [](const ScreenshotBackgroundWindowOptions& options, Io io) {
-            return print_capture_result(
-                kiseki::platform::capture::capture_background_window_bmp(to_target_query(options.target), options.output_path),
-                io);
-        },
-        .capture_window_burst = [](const ScreenshotWindowBurstOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::capture::capture_window_burst_bmp(kiseki::platform::capture::WindowBurstOptions{
-                    .target = to_target_query(options.target),
-                    .output_directory = options.output_directory,
-                    .prefix = options.prefix,
-                    .frames = options.frames,
-                    .fps = options.fps,
-                }),
-                io);
-        },
-        .input_key = [](const InputKeyOptions& options, Io io) {
-            return print_operation_result(kiseki::platform::input::tap_key(options.key, options.backend), io);
-        },
-        .input_combo = [](const InputComboOptions& options, Io io) {
-            return print_operation_result(kiseki::platform::input::key_combo(options.keys, options.backend), io);
-        },
-        .input_text = [](const InputTextOptions& options, Io io) {
-            return print_operation_result(kiseki::platform::input::type_text(options.text), io);
-        },
-        .input_mouse = [](const InputMouseOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::input::mouse_action(kiseki::platform::input::MouseOptions{
-                    .dx = options.dx,
-                    .dy = options.dy,
-                    .x = options.x,
-                    .y = options.y,
-                    .absolute = options.absolute,
-                    .backend = options.backend,
-                    .click = options.click,
-                }),
-                io);
-        },
-        .input_drag = [](const InputDragOptions& options, Io io) {
-            try {
-                return print_operation_result(
-                    kiseki::platform::input::mouse_drag_absolute(
-                        read_mouse_points_file(options.path),
-                        options.backend,
-                        options.step_delay_ms,
-                        options.start_hold_ms,
-                        options.end_hold_ms),
-                    io);
-            } catch (const std::exception& error) {
-                io.err << error.what() << '\n';
-                return 2;
-            }
-        },
-        .input_background_text = [](const BackgroundTextOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::input::background_type_text(to_target_query(options.target), options.text),
-                io);
-        },
-        .input_background_key = [](const BackgroundKeyOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::input::background_tap_key(to_target_query(options.target), options.key),
-                io);
-        },
-        .input_background_mouse = [](const BackgroundMouseOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::input::background_mouse_action(kiseki::platform::input::BackgroundMouseOptions{
-                    .target = to_target_query(options.target),
-                    .x = options.x,
-                    .y = options.y,
-                    .click = options.click,
-                }),
-                io);
-        },
-        .input_background_drag = [](const BackgroundDragOptions& options, Io io) {
-            try {
-                return print_operation_result(
-                    kiseki::platform::input::background_mouse_drag(kiseki::platform::input::BackgroundDragOptions{
+        .launch_config_ui =
+            [](const WebUiLaunchOptions &options, const std::filesystem::path &config_path, Io io) {
+                io.out << "Serving configuration UI at " << kiseki::webui::build_listen_url(options.host, options.port)
+                       << '\n';
+                kiseki::webui::WebServer server{config_path};
+                return server.listen(options.host, options.port);
+            },
+        .list_targets =
+            [](const TargetListOptions &options, Io io) {
+                return print_target_list_result(kiseki::platform::target::list_windows(to_target_query(options.filter)),
+                                                io);
+            },
+        .inspect_target =
+            [](const TargetInspectOptions &options, Io io) {
+                return print_target_inspect_result(
+                    kiseki::platform::target::inspect_window(to_target_query(options.target)), io);
+            },
+        .observe_ui =
+            [](const ObserveUiOptions &options, Io io) {
+                return print_observe_ui_result(
+                    kiseki::platform::observe::observe_ui(kiseki::platform::observe::UiObservationOptions{
                         .target = to_target_query(options.target),
-                        .points = read_mouse_points_file(options.path),
+                        .provider = options.provider,
+                        .max_depth = options.max_depth,
+                        .max_elements = options.max_elements,
                     }),
                     io);
-            } catch (const std::exception& error) {
-                io.err << error.what() << '\n';
-                return 2;
-            }
-        },
-        .background_desktop_start = [](const BackgroundDesktopStartOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::start_background_desktop(kiseki::platform::session::BackgroundDesktopStartOptions{
-                    .display = options.display,
-                    .state_directory = options.state_directory,
-                    .width = options.width,
-                    .height = options.height,
-                    .depth = options.depth,
-                }),
-                io);
-        },
-        .background_desktop_stop = [](const BackgroundDesktopStopOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::stop_background_desktop(kiseki::platform::session::BackgroundDesktopStopOptions{
-                    .display = options.display,
-                    .state_directory = options.state_directory,
-                }),
-                io);
-        },
-        .background_desktop_launch = [](const BackgroundDesktopLaunchOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::launch_in_background_desktop(kiseki::platform::session::BackgroundDesktopLaunchOptions{
-                    .display = options.display,
-                    .command = options.command,
-                }),
-                io);
-        },
-        .background_desktop_screenshot = [](const BackgroundDesktopScreenshotOptions& options, Io io) {
-            return print_capture_result(
-                kiseki::platform::session::screenshot_background_desktop(kiseki::platform::session::BackgroundDesktopScreenshotOptions{
-                    .display = options.display,
-                    .output_path = options.output_path,
-                }),
-                io);
-        },
-        .background_desktop_text = [](const BackgroundDesktopTextOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::text_background_desktop(kiseki::platform::session::BackgroundDesktopTextOptions{
-                    .display = options.display,
-                    .text = options.text,
-                }),
-                io);
-        },
-        .background_desktop_key = [](const BackgroundDesktopKeyOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::key_background_desktop(kiseki::platform::session::BackgroundDesktopKeyOptions{
-                    .display = options.display,
-                    .key = options.key,
-                }),
-                io);
-        },
-        .background_desktop_mouse = [](const BackgroundDesktopMouseOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::mouse_background_desktop(kiseki::platform::session::BackgroundDesktopMouseOptions{
-                    .display = options.display,
-                    .x = options.x,
-                    .y = options.y,
-                    .click = options.click,
-                }),
-                io);
-        },
-        .mac_background_status = [](const MacBackgroundStatusOptions& options, Io io) {
-            return print_operation_result(kiseki::platform::session::macos_cua_status(options.prompt), io);
-        },
-        .mac_background_launch = [](const MacBackgroundLaunchOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_launch(kiseki::platform::session::MacCuaLaunchOptions{
-                    .bundle_id = options.bundle_id,
-                    .name = options.name,
-                    .urls = options.urls,
-                    .creates_new_instance = options.new_instance,
-                    .additional_arguments = options.arguments,
-                }),
-                io);
-        },
-        .mac_background_windows = [](const MacBackgroundWindowsOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_list_windows(kiseki::platform::session::MacCuaWindowListOptions{
-                    .pid = options.pid,
-                    .has_pid = options.has_pid,
-                    .on_screen_only = options.on_screen_only,
-                }),
-                io);
-        },
-        .mac_background_state = [](const MacBackgroundStateOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_window_state(kiseki::platform::session::MacCuaWindowStateOptions{
-                    .pid = options.pid,
-                    .window_id = options.window_id,
-                    .output_path = options.output_path,
-                    .query = options.query,
-                }),
-                io);
-        },
-        .mac_background_screenshot = [](const MacBackgroundScreenshotOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_screenshot(kiseki::platform::session::MacCuaScreenshotOptions{
-                    .window_id = options.window_id,
-                    .output_path = options.output_path,
-                    .format = options.format,
-                    .quality = options.quality,
-                }),
-                io);
-        },
-        .mac_background_click = [](const MacBackgroundClickOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_click(kiseki::platform::session::MacCuaClickOptions{
-                    .pid = options.pid,
-                    .window_id = options.window_id,
-                    .has_window_id = options.has_window_id,
-                    .element_index = options.element_index,
-                    .has_element_index = options.has_element_index,
-                    .x = options.x,
-                    .y = options.y,
-                    .has_xy = options.has_xy,
-                    .button = options.button,
-                    .modifiers = options.modifiers,
-                }),
-                io);
-        },
-        .mac_background_text = [](const MacBackgroundTextOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_type_text(kiseki::platform::session::MacCuaTextOptions{
-                    .pid = options.pid,
-                    .text = options.text,
-                    .window_id = options.window_id,
-                    .has_window_id = options.has_window_id,
-                    .element_index = options.element_index,
-                    .has_element_index = options.has_element_index,
-                    .delay_ms = options.delay_ms,
-                }),
-                io);
-        },
-        .mac_background_key = [](const MacBackgroundKeyOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_press_key(kiseki::platform::session::MacCuaKeyOptions{
-                    .pid = options.pid,
-                    .key = options.key,
-                    .window_id = options.window_id,
-                    .has_window_id = options.has_window_id,
-                    .element_index = options.element_index,
-                    .has_element_index = options.has_element_index,
-                    .modifiers = options.modifiers,
-                }),
-                io);
-        },
-        .mac_background_hotkey = [](const MacBackgroundHotkeyOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_hotkey(kiseki::platform::session::MacCuaHotkeyOptions{
-                    .pid = options.pid,
-                    .keys = options.keys,
-                    .window_id = options.window_id,
-                    .has_window_id = options.has_window_id,
-                }),
-                io);
-        },
-        .mac_background_drag = [](const MacBackgroundDragOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_drag(kiseki::platform::session::MacCuaDragOptions{
-                    .pid = options.pid,
-                    .window_id = options.window_id,
-                    .has_window_id = options.has_window_id,
-                    .from_x = options.from_x,
-                    .from_y = options.from_y,
-                    .to_x = options.to_x,
-                    .to_y = options.to_y,
-                    .duration_ms = options.duration_ms,
-                    .steps = options.steps,
-                    .button = options.button,
-                    .modifiers = options.modifiers,
-                }),
-                io);
-        },
-        .mac_background_draw = [](const MacBackgroundDrawOptions& options, Io io) {
-            try {
-                std::vector<kiseki::platform::session::MacCuaPoint> points;
-                for (const auto& point : read_mouse_points_file(options.path)) {
-                    points.push_back(kiseki::platform::session::MacCuaPoint{
-                        .x = static_cast<double>(point.x),
-                        .y = static_cast<double>(point.y),
-                    });
-                }
+            },
+        .capture_desktop =
+            [](const ScreenshotDesktopOptions &options, Io io) {
+                return print_capture_result(kiseki::platform::capture::capture_desktop_bmp(options.output_path), io,
+                                            options.json);
+            },
+        .capture_burst =
+            [](const ScreenshotBurstOptions &options, Io io) {
                 return print_operation_result(
-                    kiseki::platform::session::macos_cua_draw(kiseki::platform::session::MacCuaDrawOptions{
+                    kiseki::platform::capture::capture_burst_bmp(kiseki::platform::capture::BurstOptions{
+                        .output_directory = options.output_directory,
+                        .prefix = options.prefix,
+                        .frames = options.frames,
+                        .fps = options.fps,
+                    }),
+                    io);
+            },
+        .capture_window =
+            [](const ScreenshotWindowOptions &options, Io io) {
+                return print_capture_result(
+                    kiseki::platform::capture::capture_window_bmp(to_target_query(options.target), options.output_path),
+                    io, options.json);
+            },
+        .capture_background_window =
+            [](const ScreenshotBackgroundWindowOptions &options, Io io) {
+                return print_capture_result(kiseki::platform::capture::capture_background_window_bmp(
+                                                to_target_query(options.target), options.output_path),
+                                            io, options.json);
+            },
+        .capture_window_burst =
+            [](const ScreenshotWindowBurstOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::capture::capture_window_burst_bmp(kiseki::platform::capture::WindowBurstOptions{
+                        .target = to_target_query(options.target),
+                        .output_directory = options.output_directory,
+                        .prefix = options.prefix,
+                        .frames = options.frames,
+                        .fps = options.fps,
+                    }),
+                    io);
+            },
+        .input_key =
+            [](const InputKeyOptions &options, Io io) {
+                if (options.action == "tap")
+                    return print_operation_result(
+                        kiseki::platform::input::tap_key(options.key, options.backend, options.hold_ms), io);
+                if (options.hold_ms != 0) {
+                    io.err << "hold-ms requires tap; use a sequence to wait between down and up\n";
+                    return 2;
+                }
+                if (options.action != "down" && options.action != "up") {
+                    io.err << "key action must be tap, down, or up\n";
+                    return 2;
+                }
+                return print_operation_result(kiseki::platform::input::key_action(options.key, options.action == "down",
+                                                                                  options.backend,
+                                                                                  options.cleanup_only),
+                                              io);
+            },
+        .input_combo =
+            [](const InputComboOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::input::key_combo(options.keys, options.backend, options.hold_ms), io);
+            },
+        .input_text =
+            [](const InputTextOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::input::type_text(options.text), io);
+            },
+        .input_mouse =
+            [](const InputMouseOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::input::mouse_action(kiseki::platform::input::MouseOptions{
+                        .dx = options.dx,
+                        .dy = options.dy,
+                        .x = options.x,
+                        .y = options.y,
+                        .absolute = options.absolute,
+                        .backend = options.backend,
+                        .click = options.click,
+                        .click_count = options.click_count,
+                        .click_interval_ms = options.click_interval_ms,
+                        .hold_ms = options.hold_ms,
+                        .wheel = options.wheel,
+                        .hwheel = options.hwheel,
+                        .cleanup_only = options.cleanup_only,
+                    }),
+                    io);
+            },
+        .input_drag =
+            [](const InputDragOptions &options, Io io) {
+                try {
+                    return print_operation_result(
+                        kiseki::platform::input::mouse_drag_absolute(
+                            options.points.empty() ? read_mouse_points_file(options.path) : options.points,
+                            options.backend, options.step_delay_ms, options.start_hold_ms, options.end_hold_ms,
+                            options.button, options.modifiers),
+                        io);
+                } catch (const std::exception &error) {
+                    io.err << error.what() << '\n';
+                    return 2;
+                }
+            },
+        .input_background_text =
+            [](const BackgroundTextOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::input::background_type_text(to_target_query(options.target), options.text), io);
+            },
+        .input_background_key =
+            [](const BackgroundKeyOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::input::background_tap_key(to_target_query(options.target), options.key), io);
+            },
+        .input_background_mouse =
+            [](const BackgroundMouseOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::input::background_mouse_action(kiseki::platform::input::BackgroundMouseOptions{
+                        .target = to_target_query(options.target),
+                        .x = options.x,
+                        .y = options.y,
+                        .click = options.click,
+                        .held_buttons = options.held_buttons,
+                        .receiver_window_id = options.receiver_window_id,
+                        .click_count = options.click_count,
+                        .click_interval_ms = options.click_interval_ms,
+                        .hold_ms = options.hold_ms,
+                        .cleanup_only = options.cleanup_only,
+                    }),
+                    io);
+            },
+        .input_background_drag =
+            [](const BackgroundDragOptions &options, Io io) {
+                try {
+                    return print_operation_result(
+                        kiseki::platform::input::background_mouse_drag(kiseki::platform::input::BackgroundDragOptions{
+                            .target = to_target_query(options.target),
+                            .points = options.points.empty() ? read_mouse_points_file(options.path) : options.points,
+                            .button = options.button,
+                            .step_delay_ms = options.step_delay_ms,
+                            .start_hold_ms = options.start_hold_ms,
+                            .end_hold_ms = options.end_hold_ms,
+                        }),
+                        io);
+                } catch (const std::exception &error) {
+                    io.err << error.what() << '\n';
+                    return 2;
+                }
+            },
+        .background_desktop_start =
+            [](const BackgroundDesktopStartOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::start_background_desktop(
+                                                  kiseki::platform::session::BackgroundDesktopStartOptions{
+                                                      .display = options.display,
+                                                      .state_directory = options.state_directory,
+                                                      .width = options.width,
+                                                      .height = options.height,
+                                                      .depth = options.depth,
+                                                  }),
+                                              io);
+            },
+        .background_desktop_stop =
+            [](const BackgroundDesktopStopOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::stop_background_desktop(
+                                                  kiseki::platform::session::BackgroundDesktopStopOptions{
+                                                      .display = options.display,
+                                                      .state_directory = options.state_directory,
+                                                  }),
+                                              io);
+            },
+        .background_desktop_launch =
+            [](const BackgroundDesktopLaunchOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::launch_in_background_desktop(
+                                                  kiseki::platform::session::BackgroundDesktopLaunchOptions{
+                                                      .display = options.display,
+                                                      .command = options.command,
+                                                  }),
+                                              io);
+            },
+        .background_desktop_screenshot =
+            [](const BackgroundDesktopScreenshotOptions &options, Io io) {
+                return print_capture_result(kiseki::platform::session::screenshot_background_desktop(
+                                                kiseki::platform::session::BackgroundDesktopScreenshotOptions{
+                                                    .display = options.display,
+                                                    .output_path = options.output_path,
+                                                }),
+                                            io);
+            },
+        .background_desktop_text =
+            [](const BackgroundDesktopTextOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::text_background_desktop(
+                                                  kiseki::platform::session::BackgroundDesktopTextOptions{
+                                                      .display = options.display,
+                                                      .text = options.text,
+                                                  }),
+                                              io);
+            },
+        .background_desktop_key =
+            [](const BackgroundDesktopKeyOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::key_background_desktop(
+                                                  kiseki::platform::session::BackgroundDesktopKeyOptions{
+                                                      .display = options.display,
+                                                      .key = options.key,
+                                                  }),
+                                              io);
+            },
+        .background_desktop_mouse =
+            [](const BackgroundDesktopMouseOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::mouse_background_desktop(
+                                                  kiseki::platform::session::BackgroundDesktopMouseOptions{
+                                                      .display = options.display,
+                                                      .x = options.x,
+                                                      .y = options.y,
+                                                      .click = options.click,
+                                                  }),
+                                              io);
+            },
+        .mac_background_status =
+            [](const MacBackgroundStatusOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_status(options.prompt), io);
+            },
+        .mac_background_launch =
+            [](const MacBackgroundLaunchOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_launch(kiseki::platform::session::MacCuaLaunchOptions{
+                        .bundle_id = options.bundle_id,
+                        .name = options.name,
+                        .urls = options.urls,
+                        .creates_new_instance = options.new_instance,
+                        .additional_arguments = options.arguments,
+                    }),
+                    io);
+            },
+        .mac_background_windows =
+            [](const MacBackgroundWindowsOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_list_windows(
+                                                  kiseki::platform::session::MacCuaWindowListOptions{
+                                                      .pid = options.pid,
+                                                      .has_pid = options.has_pid,
+                                                      .on_screen_only = options.on_screen_only,
+                                                  }),
+                                              io);
+            },
+        .mac_background_state =
+            [](const MacBackgroundStateOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_window_state(
+                                                  kiseki::platform::session::MacCuaWindowStateOptions{
+                                                      .pid = options.pid,
+                                                      .window_id = options.window_id,
+                                                      .output_path = options.output_path,
+                                                      .query = options.query,
+                                                  }),
+                                              io);
+            },
+        .mac_background_screenshot =
+            [](const MacBackgroundScreenshotOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_screenshot(kiseki::platform::session::MacCuaScreenshotOptions{
+                        .window_id = options.window_id,
+                        .output_path = options.output_path,
+                        .format = options.format,
+                        .quality = options.quality,
+                    }),
+                    io);
+            },
+        .mac_background_click =
+            [](const MacBackgroundClickOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_click(kiseki::platform::session::MacCuaClickOptions{
                         .pid = options.pid,
                         .window_id = options.window_id,
-                        .points = std::move(points),
-                        .duration_ms = options.duration_ms,
-                        .steps = options.steps,
-                        .stroke_gap_ms = options.stroke_gap_ms,
-                        .max_segments = options.max_segments,
+                        .has_window_id = options.has_window_id,
+                        .element_index = options.element_index,
+                        .has_element_index = options.has_element_index,
+                        .x = options.x,
+                        .y = options.y,
+                        .has_xy = options.has_xy,
                         .button = options.button,
                         .modifiers = options.modifiers,
                     }),
                     io);
-            } catch (const std::exception& error) {
-                io.err << error.what() << '\n';
-                return 2;
-            }
-        },
-        .mac_background_feedback_status = [](const MacBackgroundFeedbackStatusOptions&, Io io) {
-            return print_operation_result(kiseki::platform::session::macos_cua_feedback_state(), io);
-        },
-        .mac_background_feedback_enable = [](const MacBackgroundFeedbackEnableOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_feedback_enable(kiseki::platform::session::MacCuaFeedbackEnableOptions{
-                    .enabled = options.enabled,
-                }),
-                io);
-        },
-        .mac_background_feedback_motion = [](const MacBackgroundFeedbackMotionOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_feedback_motion(kiseki::platform::session::MacCuaFeedbackMotionOptions{
-                    .has_start_handle = options.has_start_handle,
-                    .start_handle = options.start_handle,
-                    .has_end_handle = options.has_end_handle,
-                    .end_handle = options.end_handle,
-                    .has_arc_size = options.has_arc_size,
-                    .arc_size = options.arc_size,
-                    .has_arc_flow = options.has_arc_flow,
-                    .arc_flow = options.arc_flow,
-                    .has_spring = options.has_spring,
-                    .spring = options.spring,
-                    .has_glide_duration_ms = options.has_glide_duration_ms,
-                    .glide_duration_ms = options.glide_duration_ms,
-                    .has_dwell_after_click_ms = options.has_dwell_after_click_ms,
-                    .dwell_after_click_ms = options.dwell_after_click_ms,
-                    .has_idle_hide_ms = options.has_idle_hide_ms,
-                    .idle_hide_ms = options.idle_hide_ms,
-                }),
-                io);
-        },
-        .mac_background_feedback_style = [](const MacBackgroundFeedbackStyleOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_feedback_style(kiseki::platform::session::MacCuaFeedbackStyleOptions{
-                    .has_gradient_colors = options.has_gradient_colors,
-                    .gradient_colors = options.gradient_colors,
-                    .has_bloom_color = options.has_bloom_color,
-                    .bloom_color = options.bloom_color,
-                    .has_image_path = options.has_image_path,
-                    .image_path = options.image_path,
-                    .reset = options.reset,
-                }),
-                io);
-        },
-        .mac_background_feedback_preset = [](const MacBackgroundFeedbackPresetOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::session::macos_cua_feedback_preset(kiseki::platform::session::MacCuaFeedbackPresetOptions{
-                    .name = options.name,
-                }),
-                io);
-        },
-        .macos_screen_recording_permission = [](const MacPermissionOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::permissions::request_macos_screen_recording(options.prompt, options.open_settings),
-                io);
-        },
-        .macos_accessibility_permission = [](const MacPermissionOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::permissions::request_macos_accessibility(options.prompt, options.open_settings),
-                io);
-        },
-        .run_daemon = [](const DaemonOptions& options, const std::filesystem::path& config_path, Io io) {
-            return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
-        },
-        .teach_record = [](const TeachRecordOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::teach::record_teaching_session(kiseki::platform::teach::RecordOptions{
-                    .output_directory = options.output_directory,
-                    .video_file = options.video_file,
-                    .audio_file = options.audio_file,
-                    .transcript_file = options.transcript_file,
-                    .state_file = options.state_file,
-                    .stop_file = options.stop_file,
-                    .duration_ms = options.duration_ms,
-                    .frame_interval_ms = options.frame_interval_ms,
-                    .event_poll_ms = options.event_poll_ms,
-                    .stop_timeout_ms = options.stop_timeout_ms,
-                    .video_keyframe_interval_ms = options.video_keyframe_interval_ms,
-                    .video_keyframe_max = options.video_keyframe_max,
-                    .worker = options.worker,
-                    .no_video_keyframes = options.no_video_keyframes,
-                    .title = options.title,
-                    .instruction_text = options.text,
-                }),
-                io);
-        },
-        .teach_annotate = [](const TeachAnnotateOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::teach::add_text_annotation(kiseki::platform::teach::AnnotateOptions{
-                    .session_directory = options.session_directory,
-                    .frame_index = options.frame_index,
-                    .event_index = options.event_index,
-                    .has_frame_index = options.has_frame_index,
-                    .has_event_index = options.has_event_index,
-                    .text = options.text,
-                }),
-                io);
-        },
-        .teach_transcribe = [](const TeachTranscribeOptions& options, Io io) {
-            return print_operation_result(
-                kiseki::platform::teach::transcribe_audio(kiseki::platform::teach::TranscribeOptions{
-                    .audio_file = options.audio_file,
-                    .output_path = options.output_path,
-                    .model_path = options.model_path,
-                    .script_path = options.script_path,
-                    .model_id = options.model_id,
-                    .language = options.language,
-                    .device = options.device,
-                    .compute_type = options.compute_type,
-                }),
-                io);
-        },
+            },
+        .mac_background_text =
+            [](const MacBackgroundTextOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_type_text(kiseki::platform::session::MacCuaTextOptions{
+                        .pid = options.pid,
+                        .text = options.text,
+                        .window_id = options.window_id,
+                        .has_window_id = options.has_window_id,
+                        .element_index = options.element_index,
+                        .has_element_index = options.has_element_index,
+                        .delay_ms = options.delay_ms,
+                    }),
+                    io);
+            },
+        .mac_background_key =
+            [](const MacBackgroundKeyOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_press_key(kiseki::platform::session::MacCuaKeyOptions{
+                        .pid = options.pid,
+                        .key = options.key,
+                        .window_id = options.window_id,
+                        .has_window_id = options.has_window_id,
+                        .element_index = options.element_index,
+                        .has_element_index = options.has_element_index,
+                        .modifiers = options.modifiers,
+                    }),
+                    io);
+            },
+        .mac_background_hotkey =
+            [](const MacBackgroundHotkeyOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_hotkey(kiseki::platform::session::MacCuaHotkeyOptions{
+                        .pid = options.pid,
+                        .keys = options.keys,
+                        .window_id = options.window_id,
+                        .has_window_id = options.has_window_id,
+                    }),
+                    io);
+            },
+        .mac_background_drag =
+            [](const MacBackgroundDragOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::session::macos_cua_drag(kiseki::platform::session::MacCuaDragOptions{
+                        .pid = options.pid,
+                        .window_id = options.window_id,
+                        .has_window_id = options.has_window_id,
+                        .from_x = options.from_x,
+                        .from_y = options.from_y,
+                        .to_x = options.to_x,
+                        .to_y = options.to_y,
+                        .duration_ms = options.duration_ms,
+                        .steps = options.steps,
+                        .button = options.button,
+                        .modifiers = options.modifiers,
+                    }),
+                    io);
+            },
+        .mac_background_draw =
+            [](const MacBackgroundDrawOptions &options, Io io) {
+                try {
+                    std::vector<kiseki::platform::session::MacCuaPoint> points;
+                    for (const auto &point : read_mouse_points_file(options.path)) {
+                        points.push_back(kiseki::platform::session::MacCuaPoint{
+                            .x = static_cast<double>(point.x),
+                            .y = static_cast<double>(point.y),
+                        });
+                    }
+                    return print_operation_result(
+                        kiseki::platform::session::macos_cua_draw(kiseki::platform::session::MacCuaDrawOptions{
+                            .pid = options.pid,
+                            .window_id = options.window_id,
+                            .points = std::move(points),
+                            .duration_ms = options.duration_ms,
+                            .steps = options.steps,
+                            .stroke_gap_ms = options.stroke_gap_ms,
+                            .max_segments = options.max_segments,
+                            .button = options.button,
+                            .modifiers = options.modifiers,
+                        }),
+                        io);
+                } catch (const std::exception &error) {
+                    io.err << error.what() << '\n';
+                    return 2;
+                }
+            },
+        .mac_background_feedback_status =
+            [](const MacBackgroundFeedbackStatusOptions &, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_feedback_state(), io);
+            },
+        .mac_background_feedback_enable =
+            [](const MacBackgroundFeedbackEnableOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_feedback_enable(
+                                                  kiseki::platform::session::MacCuaFeedbackEnableOptions{
+                                                      .enabled = options.enabled,
+                                                  }),
+                                              io);
+            },
+        .mac_background_feedback_motion =
+            [](const MacBackgroundFeedbackMotionOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_feedback_motion(
+                                                  kiseki::platform::session::MacCuaFeedbackMotionOptions{
+                                                      .has_start_handle = options.has_start_handle,
+                                                      .start_handle = options.start_handle,
+                                                      .has_end_handle = options.has_end_handle,
+                                                      .end_handle = options.end_handle,
+                                                      .has_arc_size = options.has_arc_size,
+                                                      .arc_size = options.arc_size,
+                                                      .has_arc_flow = options.has_arc_flow,
+                                                      .arc_flow = options.arc_flow,
+                                                      .has_spring = options.has_spring,
+                                                      .spring = options.spring,
+                                                      .has_glide_duration_ms = options.has_glide_duration_ms,
+                                                      .glide_duration_ms = options.glide_duration_ms,
+                                                      .has_dwell_after_click_ms = options.has_dwell_after_click_ms,
+                                                      .dwell_after_click_ms = options.dwell_after_click_ms,
+                                                      .has_idle_hide_ms = options.has_idle_hide_ms,
+                                                      .idle_hide_ms = options.idle_hide_ms,
+                                                  }),
+                                              io);
+            },
+        .mac_background_feedback_style =
+            [](const MacBackgroundFeedbackStyleOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_feedback_style(
+                                                  kiseki::platform::session::MacCuaFeedbackStyleOptions{
+                                                      .has_gradient_colors = options.has_gradient_colors,
+                                                      .gradient_colors = options.gradient_colors,
+                                                      .has_bloom_color = options.has_bloom_color,
+                                                      .bloom_color = options.bloom_color,
+                                                      .has_image_path = options.has_image_path,
+                                                      .image_path = options.image_path,
+                                                      .reset = options.reset,
+                                                  }),
+                                              io);
+            },
+        .mac_background_feedback_preset =
+            [](const MacBackgroundFeedbackPresetOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::session::macos_cua_feedback_preset(
+                                                  kiseki::platform::session::MacCuaFeedbackPresetOptions{
+                                                      .name = options.name,
+                                                  }),
+                                              io);
+            },
+        .macos_screen_recording_permission =
+            [](const MacPermissionOptions &options, Io io) {
+                return print_operation_result(kiseki::platform::permissions::request_macos_screen_recording(
+                                                  options.prompt, options.open_settings),
+                                              io);
+            },
+        .macos_accessibility_permission =
+            [](const MacPermissionOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::permissions::request_macos_accessibility(options.prompt, options.open_settings),
+                    io);
+            },
+        .run_daemon =
+            [](const DaemonOptions &options, const std::filesystem::path &config_path, Io io) {
+                return kiseki::platform::notification::run_heartbeat_daemon(config_path, options.once, io.out, io.err);
+            },
+        .teach_record =
+            [](const TeachRecordOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::teach::record_teaching_session(kiseki::platform::teach::RecordOptions{
+                        .output_directory = options.output_directory,
+                        .video_file = options.video_file,
+                        .audio_file = options.audio_file,
+                        .transcript_file = options.transcript_file,
+                        .state_file = options.state_file,
+                        .stop_file = options.stop_file,
+                        .duration_ms = options.duration_ms,
+                        .frame_interval_ms = options.frame_interval_ms,
+                        .event_poll_ms = options.event_poll_ms,
+                        .stop_timeout_ms = options.stop_timeout_ms,
+                        .video_keyframe_interval_ms = options.video_keyframe_interval_ms,
+                        .video_keyframe_max = options.video_keyframe_max,
+                        .worker = options.worker,
+                        .no_video_keyframes = options.no_video_keyframes,
+                        .title = options.title,
+                        .instruction_text = options.text,
+                    }),
+                    io);
+            },
+        .teach_annotate =
+            [](const TeachAnnotateOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::teach::add_text_annotation(kiseki::platform::teach::AnnotateOptions{
+                        .session_directory = options.session_directory,
+                        .frame_index = options.frame_index,
+                        .event_index = options.event_index,
+                        .has_frame_index = options.has_frame_index,
+                        .has_event_index = options.has_event_index,
+                        .text = options.text,
+                    }),
+                    io);
+            },
+        .teach_transcribe =
+            [](const TeachTranscribeOptions &options, Io io) {
+                return print_operation_result(
+                    kiseki::platform::teach::transcribe_audio(kiseki::platform::teach::TranscribeOptions{
+                        .audio_file = options.audio_file,
+                        .output_path = options.output_path,
+                        .model_path = options.model_path,
+                        .script_path = options.script_path,
+                        .model_id = options.model_id,
+                        .language = options.language,
+                        .device = options.device,
+                        .compute_type = options.compute_type,
+                    }),
+                    io);
+            },
     };
 }
 
@@ -1644,6 +1974,8 @@ int run(
     screenshot->require_subcommand(1);
     auto* screenshot_desktop = screenshot->add_subcommand("desktop", "Capture the current visible desktop to a BMP file");
     screenshot_desktop->add_option("-o,--output", desktop_options.output_path, "Output BMP path")->required();
+    screenshot_desktop->add_flag("--json", desktop_options.json,
+                                 "Return capture metadata and pixel-to-screen coordinates when available");
     screenshot_desktop->callback([&]() {
         if (!dependencies.capture_desktop) {
             io.err << "screenshot backend is not configured\n";
@@ -1687,6 +2019,8 @@ int run(
     auto* screenshot_window = screenshot->add_subcommand("window", "Capture a target window through the current-session screenshot path");
     add_target_options(screenshot_window, window_options.target);
     screenshot_window->add_option("-o,--output", window_options.output_path, "Output BMP path")->required();
+    screenshot_window->add_flag("--json", window_options.json,
+                                "Return capture metadata and pixel-to-screen coordinates when available");
     screenshot_window->callback([&]() {
         if (!dependencies.capture_window) {
             io.err << "window screenshot backend is not configured\n";
@@ -1700,6 +2034,8 @@ int run(
     screenshot_background_window->group("");
     add_target_options(screenshot_background_window, background_window_options.target);
     screenshot_background_window->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
+    screenshot_background_window->add_flag("--json", background_window_options.json,
+                                           "Return capture metadata and pixel-to-screen coordinates when available");
     screenshot_background_window->callback([&]() {
         if (!dependencies.capture_background_window) {
             io.err << "background window screenshot backend is not configured\n";
@@ -1746,7 +2082,11 @@ int run(
     auto* input_key = input->add_subcommand("key", "Tap a key");
     input_key->add_option("--key", key_options.key, "Key name")->required();
     input_key->add_option("--backend", key_options.backend, "auto, driver, or system");
+    input_key->add_option("--action", key_options.action, "tap, down, or up")
+        ->check(CLI::IsMember({"tap", "down", "up"}));
+    input_key->add_option("--hold-ms", key_options.hold_ms, "Key tap hold duration")->check(CLI::NonNegativeNumber);
     input_key->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_key) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -1758,7 +2098,9 @@ int run(
     auto* input_combo = input->add_subcommand("combo", "Press a key combo such as win+r");
     input_combo->add_option("--keys", combo_options.keys, "Key combo joined by +")->required();
     input_combo->add_option("--backend", combo_options.backend, "auto, driver, or system");
+    input_combo->add_option("--hold-ms", combo_options.hold_ms, "Chord hold duration")->check(CLI::NonNegativeNumber);
     input_combo->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_combo) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -1771,6 +2113,7 @@ int run(
     input_text->add_option("--text", text_options.text, "Text to type");
     input_text->add_option("--file", text_options.text_file, "UTF-8 text file to type");
     input_text->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_text) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -1801,7 +2144,14 @@ int run(
     input_mouse->add_flag("--absolute", mouse_options.absolute, "Use --x/--y as absolute virtual-screen coordinates");
     input_mouse->add_option("--backend", mouse_options.backend, "auto, driver, or system");
     input_mouse->add_option("--click", mouse_options.click, "none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    input_mouse->add_option("--click-count", mouse_options.click_count, "Number of clicks")->check(CLI::PositiveNumber);
+    input_mouse->add_option("--click-interval-ms", mouse_options.click_interval_ms, "Delay between clicks")
+        ->check(CLI::NonNegativeNumber);
+    input_mouse->add_option("--hold-ms", mouse_options.hold_ms, "Hold each click")->check(CLI::NonNegativeNumber);
+    input_mouse->add_option("--wheel", mouse_options.wheel, "Vertical wheel delta (positive up)");
+    input_mouse->add_option("--hwheel", mouse_options.hwheel, "Horizontal wheel delta (positive right)");
     input_mouse->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_mouse) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -1825,13 +2175,17 @@ int run(
         exit_code = dependencies.input_mouse(mouse_options, io);
     });
 
-    auto* input_drag = input->add_subcommand("drag", "Drag the left mouse button through absolute points from a text file");
-    input_drag->add_option("--file", drag_options.path, "Mouse path file: one 'x y' point per line")->required();
+    auto *input_drag = input->add_subcommand("drag", "Drag a mouse button through absolute points from a text file");
+    input_drag->add_option("--file", drag_options.path, "Mouse path file: one 'x y [time_ms]' point per line")
+        ->required();
     input_drag->add_option("--backend", drag_options.backend, "auto, driver, or system");
     input_drag->add_option("--step-delay-ms", drag_options.step_delay_ms, "Delay after each drag point in milliseconds");
     input_drag->add_option("--start-hold-ms", drag_options.start_hold_ms, "Delay after mouse down before movement starts");
     input_drag->add_option("--end-hold-ms", drag_options.end_hold_ms, "Delay before mouse up after the last point");
+    input_drag->add_option("--button", drag_options.button, "left, right, middle, x1, or x2");
+    input_drag->add_option("--modifiers", drag_options.modifiers, "Keys held during the drag, joined by +");
     input_drag->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_drag) {
             io.err << "input drag backend is not configured\n";
             exit_code = 2;
@@ -1846,6 +2200,7 @@ int run(
     input_background_text->add_option("--text", background_text_options.text, "Text to send");
     input_background_text->add_option("--file", background_text_options.text_file, "UTF-8 text file to send");
     input_background_text->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_background_text) {
             io.err << "background text backend is not configured\n";
             exit_code = 2;
@@ -1873,6 +2228,7 @@ int run(
     add_target_options(input_background_key, background_key_options.target);
     input_background_key->add_option("--key", background_key_options.key, "Key name")->required();
     input_background_key->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_background_key) {
             io.err << "background key backend is not configured\n";
             exit_code = 2;
@@ -1887,7 +2243,19 @@ int run(
     input_background_mouse->add_option("--x", background_mouse_options.x, "Target client-area X coordinate")->required();
     input_background_mouse->add_option("--y", background_mouse_options.y, "Target client-area Y coordinate")->required();
     input_background_mouse->add_option("--click", background_mouse_options.click, "none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    input_background_mouse->add_option("--held-buttons", background_mouse_options.held_buttons,
+                                       "Explicit held buttons joined by + for separate invocations");
+    input_background_mouse->add_option("--receiver-window-id", background_mouse_options.receiver_window_id,
+                                       "Fixed recipient child window for a split drag");
+    input_background_mouse->add_option("--click-count", background_mouse_options.click_count, "Number of clicks")
+        ->check(CLI::PositiveNumber);
+    input_background_mouse
+        ->add_option("--click-interval-ms", background_mouse_options.click_interval_ms, "Delay between clicks")
+        ->check(CLI::NonNegativeNumber);
+    input_background_mouse->add_option("--hold-ms", background_mouse_options.hold_ms, "Hold each click")
+        ->check(CLI::NonNegativeNumber);
     input_background_mouse->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_background_mouse) {
             io.err << "background mouse backend is not configured\n";
             exit_code = 2;
@@ -1899,8 +2267,20 @@ int run(
     auto* input_background_drag = input->add_subcommand("background-drag", "Drag the left mouse button through target client points without switching foreground");
     input_background_drag->group("");
     add_target_options(input_background_drag, background_drag_options.target);
-    input_background_drag->add_option("--file", background_drag_options.path, "Target client path file: one 'x y' point per line")->required();
+    input_background_drag
+        ->add_option("--file", background_drag_options.path,
+                     "Target client path file: one 'x y [time_ms]' point per line")
+        ->required();
+    input_background_drag->add_option("--button", background_drag_options.button, "left, right, middle, x1, or x2");
+    input_background_drag
+        ->add_option("--step-delay-ms", background_drag_options.step_delay_ms, "Time between drag points")
+        ->check(CLI::NonNegativeNumber);
+    input_background_drag->add_option("--start-hold-ms", background_drag_options.start_hold_ms, "Hold before movement")
+        ->check(CLI::NonNegativeNumber);
+    input_background_drag->add_option("--end-hold-ms", background_drag_options.end_hold_ms, "Hold after movement")
+        ->check(CLI::NonNegativeNumber);
     input_background_drag->callback([&]() {
+        kiseki::platform::input::InputCancellationScope cancellation;
         if (!dependencies.input_background_drag) {
             io.err << "background drag backend is not configured\n";
             exit_code = 2;
@@ -2023,6 +2403,7 @@ int run(
     auto* background_window_screenshot_help = background_window->add_subcommand("screenshot", "Capture a target window without activating it");
     add_target_options(background_window_screenshot_help, background_window_options.target);
     background_window_screenshot_help->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
+    background_window_screenshot_help->add_flag("--json", background_window_options.json, "Return capture metadata");
     auto* background_window_capture_help = background_window->add_subcommand("capture", "Capture a target window without activating it");
     add_target_options(background_window_capture_help, background_window_options.target);
     background_window_capture_help->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
@@ -2038,9 +2419,33 @@ int run(
     background_window_mouse_help->add_option("--x", background_mouse_options.x, "Target client-area X coordinate")->required();
     background_window_mouse_help->add_option("--y", background_mouse_options.y, "Target client-area Y coordinate")->required();
     background_window_mouse_help->add_option("--click", background_mouse_options.click, "none, left, right, middle, left-down, left-up, right-down, right-up, middle-down, or middle-up");
+    background_window_mouse_help->add_option("--held-buttons", background_mouse_options.held_buttons,
+                                             "Explicit held buttons joined by + for separate invocations");
+    background_window_mouse_help->add_option("--receiver-window-id", background_mouse_options.receiver_window_id,
+                                             "Fixed recipient child window for a split drag");
+    background_window_mouse_help->add_option("--click-count", background_mouse_options.click_count, "Number of clicks")
+        ->check(CLI::PositiveNumber);
+    background_window_mouse_help
+        ->add_option("--click-interval-ms", background_mouse_options.click_interval_ms, "Delay between clicks")
+        ->check(CLI::NonNegativeNumber);
+    background_window_mouse_help->add_option("--hold-ms", background_mouse_options.hold_ms, "Hold each click")
+        ->check(CLI::NonNegativeNumber);
     auto* background_window_drag_help = background_window->add_subcommand("drag", "Drag through target client points without switching foreground");
     add_target_options(background_window_drag_help, background_drag_options.target);
-    background_window_drag_help->add_option("--file", background_drag_options.path, "Target client path file: one 'x y' point per line")->required();
+    background_window_drag_help
+        ->add_option("--file", background_drag_options.path,
+                     "Target client path file: one 'x y [time_ms]' point per line")
+        ->required();
+    background_window_drag_help->add_option("--button", background_drag_options.button,
+                                            "left, right, middle, x1, or x2");
+    background_window_drag_help
+        ->add_option("--step-delay-ms", background_drag_options.step_delay_ms, "Time between drag points")
+        ->check(CLI::NonNegativeNumber);
+    background_window_drag_help
+        ->add_option("--start-hold-ms", background_drag_options.start_hold_ms, "Hold before movement")
+        ->check(CLI::NonNegativeNumber);
+    background_window_drag_help->add_option("--end-hold-ms", background_drag_options.end_hold_ms, "Hold after movement")
+        ->check(CLI::NonNegativeNumber);
 
     auto* background_desktop_alias = background->add_subcommand("desktop", "Isolated Linux X11 background desktop operations");
     background_desktop_alias->require_subcommand(1);
@@ -2134,7 +2539,10 @@ int run(
     auto* background_cua_draw_help = background_cua_alias->add_subcommand("draw", "Draw a point path inside a Cua Driver target window");
     background_cua_draw_help->add_option("--pid", mac_background_draw_options.pid, "Target process id")->required();
     background_cua_draw_help->add_option("--window-id", mac_background_draw_options.window_id, "Target Cua Driver window id")->required();
-    background_cua_draw_help->add_option("--file", mac_background_draw_options.path, "Plain text point path file: one 'x y' point per line")->required();
+    background_cua_draw_help
+        ->add_option("--file", mac_background_draw_options.path,
+                     "Plain text point path file: one 'x y [time_ms]' point per line")
+        ->required();
     background_cua_draw_help->add_option("--duration-ms", mac_background_draw_options.duration_ms, "Duration for each drag segment in milliseconds");
     background_cua_draw_help->add_option("--steps", mac_background_draw_options.steps, "Interpolation steps for each drag segment");
     background_cua_draw_help->add_option("--stroke-gap-ms", mac_background_draw_options.stroke_gap_ms, "Delay between drag segments in milliseconds");
@@ -2382,7 +2790,10 @@ int run(
     auto* mac_background_draw = mac_background->add_subcommand("draw", "Draw a point path inside a Cua Driver target window");
     mac_background_draw->add_option("--pid", mac_background_draw_options.pid, "Target process id")->required();
     mac_background_draw->add_option("--window-id", mac_background_draw_options.window_id, "Target Cua Driver window id")->required();
-    mac_background_draw->add_option("--file", mac_background_draw_options.path, "Plain text point path file: one 'x y' point per line")->required();
+    mac_background_draw
+        ->add_option("--file", mac_background_draw_options.path,
+                     "Plain text point path file: one 'x y [time_ms]' point per line")
+        ->required();
     mac_background_draw->add_option("--duration-ms", mac_background_draw_options.duration_ms, "Duration for each drag segment in milliseconds");
     mac_background_draw->add_option("--steps", mac_background_draw_options.steps, "Interpolation steps for each drag segment");
     mac_background_draw->add_option("--stroke-gap-ms", mac_background_draw_options.stroke_gap_ms, "Delay between drag segments in milliseconds");
@@ -2541,6 +2952,11 @@ int run(
         exit_code = dependencies.run_daemon(daemon_options, store.path(), io);
     });
 
+    auto *input_sequence =
+        input->add_subcommand("sequence", "Run a JSON sequence of keyboard, mouse, and timed steps in one process");
+    input_sequence->add_option("--file", macro_options.path, "Sequence JSON file")->required();
+    input_sequence->callback([&]() { exit_code = run_macro_command(macro_options, dependencies, io); });
+
     auto* macro = app.add_subcommand("macro", "Macro commands");
     macro->require_subcommand(1);
     auto* macro_validate = macro->add_subcommand("validate", "Validate a JSON macro file");
@@ -2562,7 +2978,9 @@ int run(
     teach_record->add_option("-o,--output", teach_record_options.output_directory, "Output teaching bundle directory; defaults to artifacts/teach/<timestamp>");
     teach_record->add_option("--duration-ms", teach_record_options.duration_ms, "Optional maximum recording duration in milliseconds; 0 records until stopped");
     teach_record->add_option("--frame-interval-ms", teach_record_options.frame_interval_ms, "Keyframe interval in milliseconds");
-    teach_record->add_option("--event-poll-ms", teach_record_options.event_poll_ms, "Native input event polling interval in milliseconds");
+    teach_record->add_option(
+        "--event-poll-ms", teach_record_options.event_poll_ms,
+        "Event queue drain interval; also the interval for the explicitly marked polling fallback");
     teach_record->add_option("--stop-timeout-ms", teach_record_options.stop_timeout_ms, "Milliseconds to wait for a stopped background recording to finalize");
     teach_record->add_option("--video-keyframe-interval-ms", teach_record_options.video_keyframe_interval_ms, "Minimum spacing for extracted video review keyframes");
     teach_record->add_option("--video-keyframe-max", teach_record_options.video_keyframe_max, "Maximum extracted video review keyframes");

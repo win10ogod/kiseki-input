@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <future>
+#include <mutex>
 #include <cerrno>
 #include <chrono>
 #include <cctype>
@@ -25,6 +28,7 @@
 #include <nlohmann/json.hpp>
 
 #include "platform/capture/screenshot.hpp"
+#include "platform/teach/event_stream.hpp"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -923,6 +927,69 @@ private:
 #endif
 };
 
+// Explicitly incomplete fallback, still received independently of screenshots.
+class PollingEventStream {
+  public:
+    PollingEventStream(Clock::time_point start, std::uint32_t interval) {
+        std::promise<void> ready;
+        auto started = ready.get_future();
+        worker_ = std::thread([this, start, interval, &ready] {
+            NativeEventSampler sampler;
+            const auto warning = sampler.initialize();
+            {
+                std::lock_guard lock{mutex_};
+                if (warning)
+                    queue_.push_back({{"timestampMs", elapsed_ms(start)},
+                                      {"type", "recorder_status"},
+                                      {"level", "warning"},
+                                      {"message", *warning}});
+            }
+            ready.set_value();
+            auto next = Clock::now();
+            while (!stop_) {
+                auto events = sampler.poll(elapsed_ms(start));
+                {
+                    std::lock_guard lock{mutex_};
+                    for (auto &event : events) {
+                        event["source"] = "state-polling";
+                        queue_.push_back(std::move(event));
+                    }
+                    mouse_ = sampler.last_mouse_position();
+                }
+                next += std::chrono::milliseconds(interval);
+                while (!stop_ && Clock::now() < next)
+                    std::this_thread::sleep_until(std::min(next, Clock::now() + std::chrono::milliseconds(25)));
+            }
+        });
+        started.get();
+    }
+    ~PollingEventStream() {
+        stop();
+    }
+    void stop() {
+        stop_ = true;
+        if (worker_.joinable())
+            worker_.join();
+    }
+    std::vector<nlohmann::json> drain() {
+        std::lock_guard lock{mutex_};
+        std::vector<nlohmann::json> result;
+        result.swap(queue_);
+        return result;
+    }
+    std::optional<std::pair<int, int>> last_mouse_position() {
+        std::lock_guard lock{mutex_};
+        return mouse_;
+    }
+
+  private:
+    std::atomic<bool> stop_{false};
+    std::thread worker_;
+    std::mutex mutex_;
+    std::vector<nlohmann::json> queue_;
+    std::optional<std::pair<int, int>> mouse_;
+};
+
 void write_skill_file(
     const std::filesystem::path& path,
     const std::string& title,
@@ -966,11 +1033,12 @@ struct FrameRecord {
     int width = 0;
     int height = 0;
     std::optional<std::pair<int, int>> mouse;
+    std::optional<CaptureCoordinates> coordinates;
 };
 
 bool is_anchor_event(const nlohmann::json& event) {
     const auto type = event.value("type", std::string{});
-    if (type == "mouse_button") {
+    if (type == "mouse_button" || type == "mouse_wheel") {
         return true;
     }
     if (type == "key") {
@@ -1053,13 +1121,29 @@ nlohmann::json frame_to_json(const FrameRecord& frame, const std::filesystem::pa
         {"width", frame.width},
         {"height", frame.height},
     };
+    if (frame.coordinates) {
+        const auto &c = *frame.coordinates;
+        json["coordinates"] = {{"space", c.space},
+                               {"originX", c.origin_x},
+                               {"originY", c.origin_y},
+                               {"width", c.width},
+                               {"height", c.height},
+                               {"pixelsPerUnitX", c.pixels_per_unit_x},
+                               {"pixelsPerUnitY", c.pixels_per_unit_y},
+                               {"imageOrigin", "top-left"}};
+    }
     if (frame.mouse) {
         json["mouse"] = {frame.mouse->first, frame.mouse->second};
         if (frame.width > 0 && frame.height > 0) {
-            json["mouseNorm"] = {
-                std::round((static_cast<double>(frame.mouse->first) / static_cast<double>(frame.width)) * 10000.0) / 10000.0,
-                std::round((static_cast<double>(frame.mouse->second) / static_cast<double>(frame.height)) * 10000.0) / 10000.0,
-            };
+            const double x = frame.coordinates ? (frame.mouse->first - frame.coordinates->origin_x) *
+                                                     frame.coordinates->pixels_per_unit_x
+                                               : frame.mouse->first;
+            const double y = frame.coordinates ? (frame.mouse->second - frame.coordinates->origin_y) *
+                                                     frame.coordinates->pixels_per_unit_y
+                                               : frame.mouse->second;
+            json["mousePixels"] = {x, y};
+            json["mouseNorm"] = {std::round(x / frame.width * 10000.0) / 10000.0,
+                                 std::round(y / frame.height * 10000.0) / 10000.0};
         }
     }
     return json;
@@ -1195,6 +1279,12 @@ std::filesystem::path default_python() {
 }
 
 OperationResult run_recording_worker_session(const RecordOptions& options) {
+#if !defined(_WIN32) && !defined(__APPLE__) && defined(KISEKI_HAS_X11)
+    // This detached CLI worker has not opened a Display yet. Event reception and
+    // screenshots use Xlib concurrently, so initialize its locks before either.
+    static const bool xlib_threads_ready = XInitThreads() != 0;
+    if (!xlib_threads_ready) return fail("XInitThreads failed; threaded recording cannot start");
+#endif
     const auto output_directory = options.output_directory.empty() ? default_output_directory() : options.output_directory;
     const auto state_file = options.state_file.empty() ? default_state_file() : options.state_file;
     const auto stop_file = options.stop_file.empty() ? default_stop_file(output_directory) : options.stop_file;
@@ -1261,24 +1351,30 @@ OperationResult run_recording_worker_session(const RecordOptions& options) {
         std::vector<FrameRecord> frames;
         std::size_t event_count = 0;
 
-        NativeEventSampler sampler;
-        if (const auto warning = sampler.initialize(); warning) {
-            append_event(
-                {
-                    {"timestampMs", 0},
-                    {"type", "recorder_status"},
-                    {"level", "warning"},
-                    {"message", *warning},
-                },
-                events_file,
-                event_index,
-                raw_event_timeline,
-                event_count);
+        const auto start = Clock::now();
+        NativeEventStream stream{start};
+        std::unique_ptr<PollingEventStream> fallback;
+        if (const auto warning = stream.initialize(); warning) {
+            stream.stop();
+            const auto message =
+                *warning + "; using incomplete state-polling fallback: short taps, wheel and repeat may be missing";
+            manifest["warnings"].push_back(message);
+            append_event({{"timestampMs", elapsed_ms(start)},
+                          {"type", "recorder_status"},
+                          {"level", "warning"},
+                          {"message", message}},
+                         events_file, event_index, raw_event_timeline, event_count);
+            fallback = std::make_unique<PollingEventStream>(start, options.event_poll_ms);
         }
-
+        manifest["eventSource"] = fallback ? "state-polling" : stream.source();
+        manifest["eventCaptureMode"] = fallback ? "incomplete-polling-fallback" : "native-event-stream";
+        manifest["eventReceptionThread"] = "independent-of-screenshots";
+        const auto drain_events = [&] { return fallback ? fallback->drain() : stream.drain(); };
+        const auto mouse_position = [&] {
+            return fallback ? fallback->last_mouse_position() : stream.last_mouse_position();
+        };
         auto next_frame = Clock::now();
         auto next_event = Clock::now();
-        const auto start = Clock::now();
         const auto stop_at = options.duration_ms > 0
             ? std::optional<Clock::time_point>{start + std::chrono::milliseconds{options.duration_ms}}
             : std::nullopt;
@@ -1294,7 +1390,7 @@ OperationResult run_recording_worker_session(const RecordOptions& options) {
 
             const auto timestamp = elapsed_ms(start);
             if (now >= next_event) {
-                for (auto& event : sampler.poll(timestamp)) {
+                for (auto &event : drain_events()) {
                     append_event(std::move(event), events_file, event_index, raw_event_timeline, event_count);
                 }
                 next_event += std::chrono::milliseconds{options.event_poll_ms};
@@ -1303,6 +1399,7 @@ OperationResult run_recording_worker_session(const RecordOptions& options) {
             if (now >= next_frame) {
                 const auto frame_index = frames.size();
                 const auto frame_path = output_directory / "keyframes" / frame_filename(frame_index);
+                const auto frame_mouse = mouse_position();
                 const auto capture = kiseki::platform::capture::capture_desktop_bmp(frame_path);
                 if (!capture.ok) {
                     return fail(capture.error);
@@ -1313,7 +1410,8 @@ OperationResult run_recording_worker_session(const RecordOptions& options) {
                     .path = frame_path,
                     .width = capture.width,
                     .height = capture.height,
-                    .mouse = sampler.last_mouse_position(),
+                    .mouse = frame_mouse,
+                    .coordinates = capture.coordinates,
                 });
                 next_frame += std::chrono::milliseconds{options.frame_interval_ms};
             }
@@ -1329,8 +1427,11 @@ OperationResult run_recording_worker_session(const RecordOptions& options) {
             }
         }
 
+        if (fallback)
+            fallback->stop();
+        stream.stop();
         const auto actual_duration_ms = elapsed_ms(start);
-        for (auto& event : sampler.poll(actual_duration_ms)) {
+        for (auto &event : drain_events()) {
             append_event(std::move(event), events_file, event_index, raw_event_timeline, event_count);
         }
         append_event(

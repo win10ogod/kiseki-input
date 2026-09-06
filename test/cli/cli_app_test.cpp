@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #include "cli/app.hpp"
+#include "platform/input/sequence_support.hpp"
 
 namespace {
 
@@ -1413,9 +1414,10 @@ TEST_CASE("macro validate accepts supported step sequence") {
     const TempConfigDirectory temp;
     const auto config_path = temp.file("config.json");
     const auto macro_path = temp.file("macro.json");
-    write_text(
-        macro_path,
-        R"({
+    const auto points_path = temp.file("points.txt");
+    write_text(points_path, "10 20\n30 40\n");
+    write_text(macro_path,
+               R"({
   "name": "paint-demo",
   "steps": [
     {"type": "combo", "keys": "win+r", "backend": "system"},
@@ -1423,7 +1425,8 @@ TEST_CASE("macro validate accepts supported step sequence") {
     {"type": "key", "key": "enter", "backend": "system"},
     {"type": "sleep", "ms": 10},
     {"type": "mouse", "x": 640, "y": 360, "click": "left", "backend": "system"},
-    {"type": "drag", "file": "heart-points.txt", "backend": "system"},
+    {"type": "drag", "file": ")" +
+                   points_path.generic_string() + R"(", "backend": "system"},
     {"type": "screenshot", "output": "paint.bmp"}
   ]
 })");
@@ -1479,7 +1482,13 @@ TEST_CASE("macro run executes steps through injected dependencies") {
         calls.push_back("key");
         return 0;
     };
-    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions& options, kiseki::cli::Io) {
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions &options, kiseki::cli::Io) {
+        if (options.cleanup_only) {
+            REQUIRE(options.click == "left-up");
+            REQUIRE_FALSE(options.absolute);
+            calls.push_back("cleanup");
+            return 0;
+        }
         REQUIRE(options.x == 640);
         REQUIRE(options.y == 360);
         REQUIRE(options.absolute);
@@ -1516,7 +1525,7 @@ TEST_CASE("macro run executes steps through injected dependencies") {
         dependencies);
 
     REQUIRE(code == 0);
-    REQUIRE(calls == std::vector<std::string>{"combo", "text", "key", "mouse", "drag", "screenshot"});
+    REQUIRE(calls == std::vector<std::string>{"combo", "text", "key", "mouse", "drag", "screenshot", "cleanup"});
     REQUIRE(out.str() == "macro completed 6 steps\n");
     REQUIRE(err.str().empty());
 }
@@ -1865,4 +1874,130 @@ TEST_CASE("daemon once sends configured heartbeat notification") {
     REQUIRE(code == 0);
     REQUIRE(out.str() == "daemon once\n");
     REQUIRE(err.str().empty());
+}
+
+TEST_CASE("sequence preflights all input files before any input") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json");
+    write_text(path, R"({"steps":[{"type":"mouse","click":"left-down"},{"type":"text","file":")" +
+                         temp.file("missing.txt").generic_string() + R"("}]})");
+    int calls = 0;
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions &, kiseki::cli::Io) {
+        ++calls;
+        return 0;
+    };
+    std::ostringstream out, err;
+    REQUIRE(kiseki::cli::run({"input", "sequence", "--file", path.string()}, temp.file("config.json"), {out, err},
+                             dependencies) == 2);
+    REQUIRE(calls == 0);
+    REQUIRE(err.str().find("failed to open") != std::string::npos);
+}
+
+TEST_CASE("sequence releases acquired inputs in reverse order after backend failure") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json");
+    write_text(
+        path,
+        R"({"steps":[{"type":"key","key":"shift","action":"down"},{"type":"mouse","click":"left-down"},{"type":"text","text":"fail"}]})");
+    std::vector<std::string> calls;
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_key = [&](const kiseki::cli::InputKeyOptions &o, kiseki::cli::Io) {
+        calls.push_back("key-" + o.action);
+        if (o.action == "up")
+            REQUIRE(o.cleanup_only);
+        return 0;
+    };
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions &o, kiseki::cli::Io) {
+        calls.push_back(o.click);
+        if (o.click == "left-up") {
+            REQUIRE(o.cleanup_only);
+            return 7;
+        }
+        return 0;
+    };
+    dependencies.input_text = [&](const kiseki::cli::InputTextOptions &, kiseki::cli::Io) { return 9; };
+    std::ostringstream out, err;
+    REQUIRE(kiseki::cli::run({"input", "sequence", "--file", path.string()}, temp.file("config.json"), {out, err},
+                             dependencies) == 9);
+    REQUIRE(calls == std::vector<std::string>{"key-down", "left-down", "left-up", "key-up"});
+    REQUIRE(err.str().find("cleanup left-down failed") != std::string::npos);
+}
+
+TEST_CASE("sequence cancellation unwinds held inputs") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json");
+    write_text(path, R"({"steps":[{"type":"key","key":"space","action":"down"},{"type":"sleep","ms":100000}]})");
+    std::vector<std::string> calls;
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_key = [&](const kiseki::cli::InputKeyOptions &o, kiseki::cli::Io) {
+        calls.push_back(o.action);
+        if (o.action == "down")
+            kiseki::platform::input::request_input_cancel();
+        return 0;
+    };
+    std::ostringstream out, err;
+    REQUIRE(kiseki::cli::run({"input", "sequence", "--file", path.string()}, temp.file("config.json"), {out, err},
+                             dependencies) == 2);
+    REQUIRE(calls == std::vector<std::string>{"down", "up"});
+    REQUIRE(err.str().find("cancelled") != std::string::npos);
+}
+
+TEST_CASE("macro passes drag timing points modifiers and mouse precision options") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json"), points = temp.file("points.txt");
+    write_text(points, "10 20 0\n30 40 125\n50 60 300\n");
+    write_text(
+        path,
+        R"({"steps":[{"type":"drag","file":")" + points.generic_string() +
+            R"(","button":"right","modifiers":"ctrl+shift","stepDelayMs":30,"startHoldMs":200,"endHoldMs":400},{"type":"mouse","click":"x1","clickCount":3,"clickIntervalMs":80,"holdMs":45,"wheel":30,"hwheel":-15},{"type":"key","key":"left","holdMs":90}]})");
+    int calls = 0;
+    kiseki::cli::Dependencies dependencies;
+    dependencies.input_drag = [&](const kiseki::cli::InputDragOptions &o, kiseki::cli::Io) {
+        REQUIRE(o.step_delay_ms == 30);
+        REQUIRE(o.start_hold_ms == 200);
+        REQUIRE(o.end_hold_ms == 400);
+        REQUIRE(o.button == "right");
+        REQUIRE(o.modifiers == "ctrl+shift");
+        REQUIRE(o.points.size() == 3);
+        REQUIRE(o.points[2].time_ms == 300);
+        ++calls;
+        return 0;
+    };
+    dependencies.input_mouse = [&](const kiseki::cli::InputMouseOptions &o, kiseki::cli::Io) {
+        REQUIRE(o.click == "x1");
+        REQUIRE(o.click_count == 3);
+        REQUIRE(o.click_interval_ms == 80);
+        REQUIRE(o.hold_ms == 45);
+        REQUIRE(o.wheel == 30);
+        REQUIRE(o.hwheel == -15);
+        ++calls;
+        return 0;
+    };
+    dependencies.input_key = [&](const kiseki::cli::InputKeyOptions &o, kiseki::cli::Io) {
+        REQUIRE(o.hold_ms == 90);
+        ++calls;
+        return 0;
+    };
+    std::ostringstream out, err;
+    REQUIRE(kiseki::cli::run({"input", "sequence", "--file", path.string()}, temp.file("config.json"), {out, err},
+                             dependencies) == 0);
+    REQUIRE(calls == 3);
+}
+
+TEST_CASE("macro rejects unknown fields invalid values and malformed path timing") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("sequence.json"), points = temp.file("points.txt");
+    for (const auto *step : {R"({"type":"key","key":"a","holdMS":100})", R"({"type":"key","key":"not-a-key"})",
+                             R"({"type":"mouse","click":"oops"})", R"({"type":"mouse","wheel":4294967297})",
+                             R"({"type":"mouse","clickCount":0})", R"({"type":"key","key":"a","atMs":-2})"}) {
+        write_text(path, std::string{"{\"steps\":["} + step + "]}");
+        REQUIRE(run_cli({"macro", "validate", "--file", path.string()}, temp.file("config.json")).code == 2);
+    }
+    for (const auto *content :
+         {"10 20 0\n30 40 -1\n", "10 20 0\n30 40\n", "10 20 100\n30 40 50\n", "10 20 0 extra\n30 40 200\n"}) {
+        write_text(points, content);
+        write_text(path, R"({"steps":[{"type":"drag","file":")" + points.generic_string() + R"("}]})");
+        REQUIRE(run_cli({"macro", "validate", "--file", path.string()}, temp.file("config.json")).code == 2);
+    }
 }
