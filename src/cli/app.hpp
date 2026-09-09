@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <cstdint>
 #include <functional>
 #include <iosfwd>
 #include <string>
@@ -196,6 +197,18 @@ struct BackgroundDesktopMouseOptions {
     std::string click;
 };
 
+struct CuaControlOptions {
+    std::string operation;
+    std::string tool;
+    std::string json_arguments = "{}";
+    std::filesystem::path arguments_file;
+    std::filesystem::path output_path;
+    std::vector<std::string> driver_arguments;
+    bool apply = false;
+    bool no_update = false;
+    int startup_wait_ms = 30000;
+};
+
 struct MacBackgroundStatusOptions {
     bool prompt;
 };
@@ -206,6 +219,7 @@ struct MacBackgroundLaunchOptions {
     std::vector<std::string> urls;
     bool new_instance;
     std::vector<std::string> arguments;
+    std::string launch_path;
 };
 
 struct MacBackgroundWindowsOptions {
@@ -216,13 +230,13 @@ struct MacBackgroundWindowsOptions {
 
 struct MacBackgroundStateOptions {
     int pid;
-    unsigned int window_id;
+    std::uint64_t window_id;
     std::filesystem::path output_path;
     std::string query;
 };
 
 struct MacBackgroundScreenshotOptions {
-    unsigned int window_id;
+    std::uint64_t window_id;
     std::filesystem::path output_path;
     std::string format;
     int quality;
@@ -230,10 +244,12 @@ struct MacBackgroundScreenshotOptions {
 
 struct MacBackgroundClickOptions {
     int pid;
-    unsigned int window_id;
+    std::uint64_t window_id;
     bool has_window_id;
     int element_index;
     bool has_element_index;
+    std::string snapshot_id;
+    std::string element_token;
     double x;
     double y;
     bool has_xy;
@@ -245,33 +261,37 @@ struct MacBackgroundTextOptions {
     int pid;
     std::string text;
     std::filesystem::path text_file;
-    unsigned int window_id;
+    std::uint64_t window_id;
     bool has_window_id;
     int element_index;
     bool has_element_index;
+    std::string snapshot_id;
+    std::string element_token;
     int delay_ms;
 };
 
 struct MacBackgroundKeyOptions {
     int pid;
     std::string key;
-    unsigned int window_id;
+    std::uint64_t window_id;
     bool has_window_id;
     int element_index;
     bool has_element_index;
+    std::string snapshot_id;
+    std::string element_token;
     std::vector<std::string> modifiers;
 };
 
 struct MacBackgroundHotkeyOptions {
     int pid;
     std::vector<std::string> keys;
-    unsigned int window_id;
+    std::uint64_t window_id;
     bool has_window_id;
 };
 
 struct MacBackgroundDragOptions {
     int pid;
-    unsigned int window_id;
+    std::uint64_t window_id;
     bool has_window_id;
     double from_x;
     double from_y;
@@ -285,7 +305,7 @@ struct MacBackgroundDragOptions {
 
 struct MacBackgroundDrawOptions {
     int pid;
-    unsigned int window_id;
+    std::uint64_t window_id;
     std::filesystem::path path;
     int duration_ms;
     int steps;
@@ -414,6 +434,7 @@ struct Dependencies {
     std::function<int(const BackgroundDesktopTextOptions&, Io)> background_desktop_text;
     std::function<int(const BackgroundDesktopKeyOptions&, Io)> background_desktop_key;
     std::function<int(const BackgroundDesktopMouseOptions&, Io)> background_desktop_mouse;
+    std::function<int(const CuaControlOptions&, Io)> cua_control;
     std::function<int(const MacBackgroundStatusOptions&, Io)> mac_background_status;
     std::function<int(const MacBackgroundLaunchOptions&, Io)> mac_background_launch;
     std::function<int(const MacBackgroundWindowsOptions&, Io)> mac_background_windows;

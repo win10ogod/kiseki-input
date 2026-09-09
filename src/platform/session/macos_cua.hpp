@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ struct MacCuaLaunchOptions {
     std::vector<std::string> urls;
     bool creates_new_instance = false;
     std::vector<std::string> additional_arguments;
+    std::string launch_path;
 };
 
 struct MacCuaWindowListOptions {
@@ -24,13 +26,13 @@ struct MacCuaWindowListOptions {
 
 struct MacCuaWindowStateOptions {
     int pid = 0;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     std::filesystem::path output_path;
     std::string query;
 };
 
 struct MacCuaScreenshotOptions {
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     std::filesystem::path output_path;
     std::string format = "png";
     int quality = 95;
@@ -38,10 +40,12 @@ struct MacCuaScreenshotOptions {
 
 struct MacCuaClickOptions {
     int pid = 0;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     bool has_window_id = false;
     int element_index = 0;
     bool has_element_index = false;
+    std::string snapshot_id;
+    std::string element_token;
     double x = 0.0;
     double y = 0.0;
     bool has_xy = false;
@@ -52,33 +56,37 @@ struct MacCuaClickOptions {
 struct MacCuaTextOptions {
     int pid = 0;
     std::string text;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     bool has_window_id = false;
     int element_index = 0;
     bool has_element_index = false;
+    std::string snapshot_id;
+    std::string element_token;
     int delay_ms = 30;
 };
 
 struct MacCuaKeyOptions {
     int pid = 0;
     std::string key;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     bool has_window_id = false;
     int element_index = 0;
     bool has_element_index = false;
+    std::string snapshot_id;
+    std::string element_token;
     std::vector<std::string> modifiers;
 };
 
 struct MacCuaHotkeyOptions {
     int pid = 0;
     std::vector<std::string> keys;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     bool has_window_id = false;
 };
 
 struct MacCuaDragOptions {
     int pid = 0;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     bool has_window_id = false;
     double from_x = 0.0;
     double from_y = 0.0;
@@ -97,7 +105,7 @@ struct MacCuaPoint {
 
 struct MacCuaDrawOptions {
     int pid = 0;
-    unsigned int window_id = 0;
+    std::uint64_t window_id = 0;
     std::vector<MacCuaPoint> points;
     int duration_ms = 120;
     int steps = 6;

@@ -3,5 +3,5 @@
 #include "core/version.hpp"
 
 TEST_CASE("version is available") {
-    REQUIRE(kiseki::core::version() == "0.1.0");
+    REQUIRE(kiseki::core::version() == KISEKI_TEST_VERSION);
 }

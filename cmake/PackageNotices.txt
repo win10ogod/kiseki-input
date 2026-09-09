@@ -1,0 +1,12 @@
+Kiseki Input
+https://github.com/win10ogod/kiseki-input
+
+Third-party notices are included in share/kiseki/licenses:
+
+CLI11
+nlohmann/json
+cpp-httplib
+IbInputSimulator (Windows packages that include its DLL)
+
+Cua Driver is obtained separately from its official installer when needed.
+Its project and installation information are available at https://cua.ai.

@@ -32,6 +32,7 @@
 #include "platform/runtime_capabilities.hpp"
 #include "platform/session/background_desktop.hpp"
 #include "platform/session/macos_cua.hpp"
+#include "platform/session/cua_runtime.hpp"
 #include "platform/target/target.hpp"
 #include "platform/teach/recording.hpp"
 #include "webui/web_server.hpp"
@@ -80,7 +81,8 @@ int print_operation_result(const kiseki::platform::OperationResult& result, Io i
         if (!result.message.empty()) {
             io.out << result.message << '\n';
         }
-    } else {
+    }
+    if (!result.error.empty()) {
         io.err << result.error << '\n';
     }
     return result.code;
@@ -1306,6 +1308,23 @@ Dependencies default_dependencies() {
                                                   }),
                                               io);
             },
+        .cua_control = [](const CuaControlOptions& options, Io io) {
+            using namespace kiseki::platform::session;
+            if (options.operation == "setup") return print_operation_result(cua_setup(!options.no_update, options.startup_wait_ms), io);
+            if (options.operation == "update") return print_operation_result(cua_update(options.apply), io);
+            if (options.operation == "tools") return print_operation_result(cua_driver_command({"list-tools"}), io);
+            if (options.operation == "describe") return print_operation_result(cua_driver_command({"describe", options.tool}), io);
+            if (options.operation == "driver") return print_operation_result(cua_driver_command(options.driver_arguments), io);
+            try {
+                nlohmann::json arguments;
+                if (!options.arguments_file.empty()) {
+                    std::ifstream file(options.arguments_file, std::ios::binary);
+                    if (!file) throw std::runtime_error("cannot read CUA argument file: " + options.arguments_file.string());
+                    arguments = nlohmann::json::parse(file);
+                } else arguments = nlohmann::json::parse(options.json_arguments);
+                return print_operation_result(cua_call(options.tool, arguments, options.output_path), io);
+            } catch (const std::exception& error) { io.err << error.what() << '\n'; return 2; }
+        },
         .mac_background_status =
             [](const MacBackgroundStatusOptions &options, Io io) {
                 return print_operation_result(kiseki::platform::session::macos_cua_status(options.prompt), io);
@@ -1319,6 +1338,7 @@ Dependencies default_dependencies() {
                         .urls = options.urls,
                         .creates_new_instance = options.new_instance,
                         .additional_arguments = options.arguments,
+                        .launch_path = options.launch_path,
                     }),
                     io);
             },
@@ -1363,6 +1383,8 @@ Dependencies default_dependencies() {
                         .has_window_id = options.has_window_id,
                         .element_index = options.element_index,
                         .has_element_index = options.has_element_index,
+                        .snapshot_id = options.snapshot_id,
+                        .element_token = options.element_token,
                         .x = options.x,
                         .y = options.y,
                         .has_xy = options.has_xy,
@@ -1381,6 +1403,8 @@ Dependencies default_dependencies() {
                         .has_window_id = options.has_window_id,
                         .element_index = options.element_index,
                         .has_element_index = options.has_element_index,
+                        .snapshot_id = options.snapshot_id,
+                        .element_token = options.element_token,
                         .delay_ms = options.delay_ms,
                     }),
                     io);
@@ -1395,6 +1419,8 @@ Dependencies default_dependencies() {
                         .has_window_id = options.has_window_id,
                         .element_index = options.element_index,
                         .has_element_index = options.has_element_index,
+                        .snapshot_id = options.snapshot_id,
+                        .element_token = options.element_token,
                         .modifiers = options.modifiers,
                     }),
                     io);
@@ -2505,6 +2531,7 @@ int run(
     auto* background_cua_launch_help = background_cua_alias->add_subcommand("launch", "Launch an app through Cua Driver");
     background_cua_launch_help->add_option("--bundle-id", mac_background_launch_options.bundle_id, "Application bundle id when supported, such as com.apple.Safari");
     background_cua_launch_help->add_option("--name", mac_background_launch_options.name, "Application display name when bundle id is unknown");
+    background_cua_launch_help->add_option("--launch-path", mac_background_launch_options.launch_path, "Exact launch path from native Windows/Linux list_apps");
     background_cua_launch_help->add_option("--url", mac_background_launch_options.urls, "URL or file path to hand to the app; repeat for multiple values");
     background_cua_launch_help->add_flag("--new-instance", mac_background_launch_options.new_instance, "Ask Cua Driver to create a new app instance when supported");
     background_cua_launch_help->add_option("--arg", mac_background_launch_options.arguments, "Additional argv entry for the launched process; repeat for multiple values");
@@ -2525,6 +2552,8 @@ int run(
     background_cua_click_help->add_option("--pid", mac_background_click_options.pid, "Target process id")->required();
     background_cua_click_help->add_option("--window-id", mac_background_click_options.window_id, "Target Cua Driver window id");
     background_cua_click_help->add_option("--element-index", mac_background_click_options.element_index, "Element index from the last state call");
+    background_cua_click_help->add_option("--snapshot-id", mac_background_click_options.snapshot_id, "Snapshot id paired with --element-index");
+    background_cua_click_help->add_option("--element-token", mac_background_click_options.element_token, "Opaque element token from state");
     background_cua_click_help->add_option("--x", mac_background_click_options.x, "Window-local screenshot pixel X");
     background_cua_click_help->add_option("--y", mac_background_click_options.y, "Window-local screenshot pixel Y");
     background_cua_click_help->add_option("--button", mac_background_click_options.button, "left, right, or double");
@@ -2535,12 +2564,16 @@ int run(
     background_cua_text_help->add_option("--file", mac_background_text_options.text_file, "UTF-8 text file to type");
     background_cua_text_help->add_option("--window-id", mac_background_text_options.window_id, "Target Cua Driver window id");
     background_cua_text_help->add_option("--element-index", mac_background_text_options.element_index, "Element index from the last state call");
+    background_cua_text_help->add_option("--snapshot-id", mac_background_text_options.snapshot_id, "Snapshot id paired with --element-index");
+    background_cua_text_help->add_option("--element-token", mac_background_text_options.element_token, "Opaque element token from state");
     background_cua_text_help->add_option("--delay-ms", mac_background_text_options.delay_ms, "Character delay for CGEvent fallback");
     auto* background_cua_key_help = background_cua_alias->add_subcommand("key", "Press a key in a Cua Driver target pid");
     background_cua_key_help->add_option("--pid", mac_background_key_options.pid, "Target process id")->required();
     background_cua_key_help->add_option("--key", mac_background_key_options.key, "Key name")->required();
     background_cua_key_help->add_option("--window-id", mac_background_key_options.window_id, "Target Cua Driver window id");
     background_cua_key_help->add_option("--element-index", mac_background_key_options.element_index, "Element index from the last state call");
+    background_cua_key_help->add_option("--snapshot-id", mac_background_key_options.snapshot_id, "Snapshot id paired with --element-index");
+    background_cua_key_help->add_option("--element-token", mac_background_key_options.element_token, "Opaque element token from state");
     background_cua_key_help->add_option("--modifiers", mac_background_key_modifiers, "Comma or plus separated modifier keys");
     auto* background_cua_hotkey_help = background_cua_alias->add_subcommand("hotkey", "Press a key combination in a Cua Driver target pid");
     background_cua_hotkey_help->add_option("--pid", mac_background_hotkey_options.pid, "Target process id")->required();
@@ -2596,6 +2629,44 @@ int run(
     mac_background->group("");
     mac_background->require_subcommand(1);
 
+    // Register the same native lifecycle/help surface for integrated and legacy aliases.
+    CuaControlOptions cua_setup_options{.operation = "setup"};
+    CuaControlOptions cua_update_options{.operation = "update"};
+    CuaControlOptions cua_tools_options{.operation = "tools"};
+    CuaControlOptions cua_describe_options{.operation = "describe"};
+    CuaControlOptions cua_call_options{.operation = "call"};
+    CuaControlOptions cua_driver_options{.operation = "driver"};
+    auto register_cua_controls = [&](CLI::App* parent) {
+        auto bind = [&](CLI::App* command, CuaControlOptions& options) {
+            command->callback([&, option_ptr = &options]() {
+                if (!dependencies.cua_control) { io.err << "CUA control backend is not configured\n"; exit_code = 2; return; }
+                exit_code = dependencies.cua_control(*option_ptr, io);
+            });
+        };
+        auto* setup = parent->add_subcommand("setup", "Begin a CUA workflow: install if missing, check and apply updates, and start the native daemon");
+        setup->add_flag("--no-update", cua_setup_options.no_update, "Skip automatic update for this workflow");
+        setup->add_option("--startup-wait-ms", cua_setup_options.startup_wait_ms, "Wait for daemon readiness; does not limit tool execution")->check(CLI::NonNegativeNumber);
+        bind(setup, cua_setup_options);
+        auto* update = parent->add_subcommand("update", "Check the selected CUA release channel; --apply installs the update");
+        update->add_flag("--apply", cua_update_options.apply, "Apply the official update before a new workflow");
+        bind(update, cua_update_options);
+        bind(parent->add_subcommand("tools", "List the installed native provider's tools"), cua_tools_options);
+        auto* describe = parent->add_subcommand("describe", "Read the installed provider's exact JSON input schema");
+        describe->add_option("tool", cua_describe_options.tool)->required();
+        bind(describe, cua_describe_options);
+        auto* call = parent->add_subcommand("call", "Call any native provider tool with its full JSON arguments");
+        call->add_option("tool", cua_call_options.tool)->required();
+        auto* inline_json = call->add_option("--json", cua_call_options.json_arguments, "JSON object (use --file for long text)");
+        call->add_option("--file", cua_call_options.arguments_file, "UTF-8 JSON object file")->excludes(inline_json);
+        call->add_option("--output", cua_call_options.output_path, "Save the first returned image without modifying tool arguments");
+        bind(call, cua_call_options);
+        auto* driver = parent->add_subcommand("driver", "Pass arguments to cua-driver, e.g. driver -- channel status --json");
+        driver->add_option("arguments", cua_driver_options.driver_arguments)->required()->expected(-1);
+        bind(driver, cua_driver_options);
+    };
+    register_cua_controls(background_cua_alias);
+    register_cua_controls(mac_background);
+
     auto* mac_background_status = mac_background->add_subcommand("status", "Check Cua Driver permissions and availability");
     mac_background_status->add_flag("--prompt", mac_background_status_options.prompt, "Request missing Accessibility and Screen Recording permissions");
     mac_background_status->callback([&]() {
@@ -2610,6 +2681,7 @@ int run(
     auto* mac_background_launch = mac_background->add_subcommand("launch", "Launch an app through Cua Driver");
     mac_background_launch->add_option("--bundle-id", mac_background_launch_options.bundle_id, "Application bundle id when supported, such as com.apple.Safari");
     mac_background_launch->add_option("--name", mac_background_launch_options.name, "Application display name when bundle id is unknown");
+    mac_background_launch->add_option("--launch-path", mac_background_launch_options.launch_path, "Exact launch path from native Windows/Linux list_apps");
     mac_background_launch->add_option("--url", mac_background_launch_options.urls, "URL or file path to hand to the app; repeat for multiple values");
     mac_background_launch->add_flag("--new-instance", mac_background_launch_options.new_instance, "Ask Cua Driver to create a new app instance when supported");
     mac_background_launch->add_option("--arg", mac_background_launch_options.arguments, "Additional argv entry for the launched process; repeat for multiple values");
@@ -2619,8 +2691,8 @@ int run(
             exit_code = 2;
             return;
         }
-        if (mac_background_launch_options.bundle_id.empty() && mac_background_launch_options.name.empty()) {
-            io.err << "background cua launch requires --bundle-id or --name\n";
+        if (mac_background_launch_options.bundle_id.empty() && mac_background_launch_options.name.empty() && mac_background_launch_options.launch_path.empty()) {
+            io.err << "background cua launch requires --bundle-id, --name, or --launch-path\n";
             exit_code = 2;
             return;
         }
@@ -2672,6 +2744,8 @@ int run(
     mac_background_click->add_option("--pid", mac_background_click_options.pid, "Target process id")->required();
     auto* mac_background_click_window_id = mac_background_click->add_option("--window-id", mac_background_click_options.window_id, "Target Cua Driver window id");
     auto* mac_background_click_element = mac_background_click->add_option("--element-index", mac_background_click_options.element_index, "Element index from the last state call");
+    mac_background_click->add_option("--snapshot-id", mac_background_click_options.snapshot_id, "Snapshot id paired with --element-index");
+    mac_background_click->add_option("--element-token", mac_background_click_options.element_token, "Opaque element token from state");
     auto* mac_background_click_x = mac_background_click->add_option("--x", mac_background_click_options.x, "Window-local screenshot pixel X");
     auto* mac_background_click_y = mac_background_click->add_option("--y", mac_background_click_options.y, "Window-local screenshot pixel Y");
     mac_background_click->add_option("--button", mac_background_click_options.button, "left, right, or double");
@@ -2693,12 +2767,12 @@ int run(
             exit_code = 2;
             return;
         }
-        if (mac_background_click_options.has_element_index == mac_background_click_options.has_xy) {
+        if ((mac_background_click_options.has_element_index || !mac_background_click_options.element_token.empty()) == mac_background_click_options.has_xy) {
             io.err << "background cua click requires either --element-index or both --x and --y\n";
             exit_code = 2;
             return;
         }
-        if (mac_background_click_options.has_element_index && !mac_background_click_options.has_window_id) {
+        if (mac_background_click_options.has_element_index && mac_background_click_options.element_token.empty() && !mac_background_click_options.has_window_id) {
             io.err << "background cua click with --element-index requires --window-id\n";
             exit_code = 2;
             return;
@@ -2712,6 +2786,8 @@ int run(
     mac_background_text->add_option("--file", mac_background_text_options.text_file, "UTF-8 text file to type");
     auto* mac_background_text_window_id = mac_background_text->add_option("--window-id", mac_background_text_options.window_id, "Target Cua Driver window id");
     auto* mac_background_text_element = mac_background_text->add_option("--element-index", mac_background_text_options.element_index, "Element index from the last state call");
+    mac_background_text->add_option("--snapshot-id", mac_background_text_options.snapshot_id, "Snapshot id paired with --element-index");
+    mac_background_text->add_option("--element-token", mac_background_text_options.element_token, "Opaque element token from state");
     mac_background_text->add_option("--delay-ms", mac_background_text_options.delay_ms, "Character delay for CGEvent fallback");
     mac_background_text->callback([&]() {
         if (!dependencies.mac_background_text) {
@@ -2735,7 +2811,7 @@ int run(
         }
         mac_background_text_options.has_window_id = mac_background_text_window_id->count() > 0;
         mac_background_text_options.has_element_index = mac_background_text_element->count() > 0;
-        if (mac_background_text_options.has_element_index && !mac_background_text_options.has_window_id) {
+        if (mac_background_text_options.has_element_index && mac_background_text_options.element_token.empty() && !mac_background_text_options.has_window_id) {
             io.err << "background cua text with --element-index requires --window-id\n";
             exit_code = 2;
             return;
@@ -2748,6 +2824,8 @@ int run(
     mac_background_key->add_option("--key", mac_background_key_options.key, "Key name")->required();
     auto* mac_background_key_window_id = mac_background_key->add_option("--window-id", mac_background_key_options.window_id, "Target Cua Driver window id");
     auto* mac_background_key_element = mac_background_key->add_option("--element-index", mac_background_key_options.element_index, "Element index from the last state call");
+    mac_background_key->add_option("--snapshot-id", mac_background_key_options.snapshot_id, "Snapshot id paired with --element-index");
+    mac_background_key->add_option("--element-token", mac_background_key_options.element_token, "Opaque element token from state");
     mac_background_key->add_option("--modifiers", mac_background_key_modifiers, "Comma or plus separated modifier keys");
     mac_background_key->callback([&]() {
         if (!dependencies.mac_background_key) {
@@ -2758,7 +2836,7 @@ int run(
         mac_background_key_options.has_window_id = mac_background_key_window_id->count() > 0;
         mac_background_key_options.has_element_index = mac_background_key_element->count() > 0;
         mac_background_key_options.modifiers = split_delimited_values(mac_background_key_modifiers);
-        if (mac_background_key_options.has_element_index && !mac_background_key_options.has_window_id) {
+        if (mac_background_key_options.has_element_index && mac_background_key_options.element_token.empty() && !mac_background_key_options.has_window_id) {
             io.err << "background cua key with --element-index requires --window-id\n";
             exit_code = 2;
             return;

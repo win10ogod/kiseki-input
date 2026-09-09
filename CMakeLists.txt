@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(KisekiInput VERSION 0.1.0 LANGUAGES CXX)
+set(KISEKI_VERSION "0.1.0" CACHE STRING "Kiseki version (release workflow uses the version tag)")
+project(KisekiInput VERSION ${KISEKI_VERSION} LANGUAGES CXX)
 
 option(KISEKI_BUILD_TESTING "Build Kiseki tests" ON)
 option(KISEKI_BUILD_IBINPUTSIMULATOR "Build and copy IbInputSimulator.dll on Windows" ON)
@@ -52,6 +53,7 @@ add_library(kiseki_core STATIC ${KISEKI_CORE_SOURCES})
 target_compile_features(kiseki_core PUBLIC cxx_std_20)
 target_include_directories(kiseki_core PUBLIC src)
 target_link_libraries(kiseki_core PUBLIC nlohmann_json::nlohmann_json)
+target_compile_definitions(kiseki_core PRIVATE KISEKI_VERSION="${PROJECT_VERSION}")
 set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 
 add_library(kiseki_platform STATIC
@@ -65,6 +67,8 @@ add_library(kiseki_platform STATIC
     src/platform/runtime_capabilities.cpp
     src/platform/session/background_desktop.cpp
     src/platform/session/macos_cua.cpp
+    src/platform/session/cua_process.cpp
+    src/platform/session/cua_runtime.cpp
     src/platform/target/target.cpp
     src/platform/teach/recording.cpp
     src/platform/teach/event_stream.cpp
@@ -224,10 +228,17 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/webui/static_assets_test.cpp
         test/smoke_test.cpp
         test/platform/input_sequence_test.cpp
+        test/platform/cua_test.cpp
     )
 
+    add_executable(kiseki_cua_stub test/platform/cua_stub.cpp)
+    target_compile_features(kiseki_cua_stub PRIVATE cxx_std_20)
+    target_link_libraries(kiseki_cua_stub PRIVATE nlohmann_json::nlohmann_json)
     add_executable(kiseki_tests ${KISEKI_TEST_SOURCES})
+    add_dependencies(kiseki_tests kiseki_cua_stub)
+    target_compile_definitions(kiseki_tests PRIVATE KISEKI_CUA_STUB="$<TARGET_FILE:kiseki_cua_stub>")
     target_compile_features(kiseki_tests PRIVATE cxx_std_20)
+    target_compile_definitions(kiseki_tests PRIVATE KISEKI_TEST_VERSION="${PROJECT_VERSION}")
     target_link_libraries(kiseki_tests PRIVATE kiseki_cli kiseki_core kiseki_platform kiseki_webui Catch2::Catch2WithMain)
     target_link_libraries(kiseki_tests PRIVATE
         "$<$<PLATFORM_ID:Windows>:d3d11.lib>"
@@ -235,6 +246,11 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
     )
     set_target_properties(kiseki_tests PROPERTIES CXX_EXTENSIONS OFF)
     catch_discover_tests(kiseki_tests)
+    find_package(Python3 3.9 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME skill_helper_regressions
+            COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s "${CMAKE_CURRENT_SOURCE_DIR}/test/skills" -v)
+    endif()
 endif()
 
 # Opt-in: this executable opens its own GUI window and exercises real input.
@@ -278,3 +294,5 @@ if(APPLE AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
         ${KISEKI_APPLICATIONSERVICES_FRAMEWORK} ${KISEKI_APPKIT_FRAMEWORK} ${KISEKI_FOUNDATION_FRAMEWORK})
     add_test(NAME macos_input_delayed_boundary COMMAND kiseki_macos_input_fault_test)
 endif()
+
+include(cmake/Packaging.cmake)
