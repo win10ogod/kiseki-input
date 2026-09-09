@@ -109,33 +109,6 @@ struct ImageResult {
     std::string error;
 };
 
-ImageResult capture_rect(CGRect rect) {
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    __block CGImageRef image = nullptr;
-    __block NSError* captured_error = nil;
-
-    [SCScreenshotManager captureImageInRect:rect
-                          completionHandler:^(CGImageRef blockImage, NSError* blockError) {
-                              if (blockImage != nullptr) {
-                                  image = CGImageRetain(blockImage);
-                              }
-                              captured_error = blockError;
-                              dispatch_semaphore_signal(semaphore);
-                          }];
-
-    const long wait_result = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 15LL * NSEC_PER_SEC));
-    if (wait_result != 0) {
-        return ImageResult{nullptr, "ScreenCaptureKit screenshot request timed out"};
-    }
-    if (captured_error != nil) {
-        return ImageResult{nullptr, ns_error_string(captured_error)};
-    }
-    if (image == nullptr) {
-        return ImageResult{nullptr, "ScreenCaptureKit returned no image"};
-    }
-    return ImageResult{image, ""};
-}
-
 ImageResult capture_filter(SCContentFilter* filter, SCStreamConfiguration* configuration) {
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
     __block CGImageRef image = nullptr;
@@ -170,6 +143,51 @@ CGRect union_display_rect(SCShareableContent* content) {
         rect = CGRectIsNull(rect) ? display.frame : CGRectUnion(rect, display.frame);
     }
     return rect;
+}
+
+// captureImageInRect requires macOS 15.2. Use the macOS 14 filter API for
+// each display and compose the complete global-point bounds at the highest
+// display scale, retaining all displays and the screenshot/input transform.
+ImageResult capture_displays(SCShareableContent* content, CGRect bounds) {
+    CGFloat scale = 1.0;
+    for (SCDisplay* display in content.displays) {
+        SCContentFilter* filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+        scale = std::max<CGFloat>(scale, filter.pointPixelScale);
+    }
+    const auto width = static_cast<std::size_t>(std::ceil(bounds.size.width * scale));
+    const auto height = static_cast<std::size_t>(std::ceil(bounds.size.height * scale));
+    CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+    if (color_space == nullptr) return {nullptr, "CGColorSpaceCreateDeviceRGB failed"};
+    CGContextRef context = CGBitmapContextCreate(nullptr, width, height, 8, width * 4, color_space,
+        static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedFirst) | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(color_space);
+    if (context == nullptr) return {nullptr, "CGBitmapContextCreate failed"};
+    CGContextSetRGBFillColor(context, 0, 0, 0, 1);
+    CGContextFillRect(context, CGRectMake(0, 0, width, height));
+    for (SCDisplay* display in content.displays) {
+        SCContentFilter* filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+        SCStreamConfiguration* configuration = [[SCStreamConfiguration alloc] init];
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA;
+        configuration.showsCursor = NO;
+        configuration.captureResolution = SCCaptureResolutionBest;
+        configuration.width = static_cast<std::size_t>(std::ceil(display.frame.size.width * scale));
+        configuration.height = static_cast<std::size_t>(std::ceil(display.frame.size.height * scale));
+        const auto captured = capture_filter(filter, configuration);
+        if (captured.image == nullptr) {
+            CGContextRelease(context);
+            return captured;
+        }
+        // Core Graphics bitmap drawing uses a bottom-left origin; SCDisplay
+        // frames and input coordinates use a top-left global origin.
+        const auto frame = display.frame;
+        CGContextDrawImage(context, CGRectMake((frame.origin.x - bounds.origin.x) * scale,
+            (CGRectGetMaxY(bounds) - CGRectGetMaxY(frame)) * scale,
+            frame.size.width * scale, frame.size.height * scale), captured.image);
+        CGImageRelease(captured.image);
+    }
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    CGContextRelease(context);
+    return image == nullptr ? ImageResult{nullptr, "CGBitmapContextCreateImage failed"} : ImageResult{image, ""};
 }
 
 SCWindow* find_window(SCShareableContent* content, std::uint32_t window_id) {
@@ -214,7 +232,7 @@ CaptureResult capture_desktop_bmp_screencapturekit(const std::filesystem::path& 
             return fail_capture(output_path, "ScreenCaptureKit returned no display bounds");
         }
 
-        const auto image = capture_rect(rect);
+        const auto image = capture_displays(content, rect);
         if (image.image == nullptr) {
             return fail_capture(output_path, image.error);
         }

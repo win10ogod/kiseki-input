@@ -97,7 +97,7 @@ Windows 需在操作桌面的使用者 session 中執行。Linux 需有實際 X1
 
 ### 自動更新的時機
 
-- 在 `setup`、`windows`、`launch` 這些**開始／重新探索工作流程**的命令中，每 24 小時向官方檢查一次。
+- 在 `setup`、`windows`、`launch` 這些**開始／重新探索工作流程**的命令中，每次向官方檢查並套用更新。
 - 鍵鼠 action、state、screenshot 和原樣 tool call 不會在操作中啟動更新。更新後請重新觀察，不沿用先前的 element index／snapshot。
 - 新安裝預設使用官方 stable 通道；現有的 stable／nightly 選擇會保留。
 - 無網路或更新失敗時保留已安裝的 Driver，輸出包含 `warnings` 或標準錯誤中的原因。沒有可用 Driver 的首次安裝失敗會回傳非零退出碼。

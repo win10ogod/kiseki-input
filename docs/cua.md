@@ -10,9 +10,9 @@ kiseki background cua status
 kiseki background cua windows
 ```
 
-`setup`, `windows`, and `launch` are workflow boundaries. They install a missing official Driver, check for updates once every 24 hours, and start its daemon if necessary. Input commands, state, screenshots, and raw tool calls do not update or restart the provider. After a workflow boundary that updates CUA, acquire fresh state before any indexed action.
+`setup`, `windows`, and `launch` are workflow boundaries. They install a missing official Driver, check and apply updates at each workflow start, and start its daemon if necessary. Input commands, state, screenshots, and raw tool calls do not update or restart the provider. After a workflow boundary that updates CUA, acquire fresh state before any indexed action.
 
-Automatic checks use the official `check-update --json --no-cache`; installation uses the official platform installer and updates use `update --apply`. The selected stable/nightly channel is retained. Checks and setup are serialized across Kiseki processes; successful checks are cached in the current user's Kiseki CUA state directory. Failed checks remain visible and are retried at the next workflow start. An installed provider stays usable when a check fails.
+Automatic checks use the official `check-update --json --no-cache`; installation uses the official platform installer and updates use `update --apply`. The selected stable/nightly channel is retained. Checks and setup are serialized across Kiseki processes. Failed checks remain visible and are retried at the next workflow start. An installed provider stays usable when a check fails.
 
 `status` is read-only. On macOS, `status --prompt` requests CuaDriver's Accessibility/Screen Recording grants. macOS startup opens the installed app bundle so its identity owns those grants. Windows/Linux startup launches the provider in the caller's desktop session. A custom daemon endpoint is used as configured and must already be running. Kiseki does not add permission-mode flags or replace the user's provider policies.
 
@@ -22,7 +22,7 @@ Automatic checks use the official `check-update --json --no-cache`; installation
 | `KISEKI_CUA_AUTO_UPDATE=0` | Disable automatic updates, retaining manual update |
 | `KISEKI_CUA_SESSION` | Named session used by the convenience state/action/feedback commands; default `kiseki` |
 | `KISEKI_CUA_SOCKET` | Explicit provider socket/named pipe, forwarded to tool calls; owner manages lifecycle and updates |
-| `KISEKI_CUA_STATE_DIR` | Override Kiseki's update cache, setup lock and daemon log directory |
+| `KISEKI_CUA_STATE_DIR` | Override Kiseki's setup lock, daemon ownership and log directory |
 | `CUA_DRIVER_RS_VERSION` / `CUA_DRIVER_VERSION` | Official installer pin; automatic updates preserve it |
 
 Normal state locations are `%LOCALAPPDATA%\Kiseki\cua` (Windows), `~/Library/Application Support/Kiseki/cua` (macOS), and `$XDG_STATE_HOME/kiseki/cua` or `~/.local/state/kiseki/cua` (Linux). `setup --startup-wait-ms` controls only the readiness wait, not tool duration, response size, input timing, or path detail. A readiness timeout reports the next status/log check; it does not relaunch an action.

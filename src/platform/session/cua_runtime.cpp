@@ -134,10 +134,6 @@ unsigned long long daemon_pid(const std::string& status) {
     try { return std::stoull(status.substr(position + 4)); } catch (...) { return 0; }
 }
 
-long long now_seconds() {
-    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-}
-
 json check_update(const std::filesystem::path& binary, bool force) {
     std::vector<std::string> args{"check-update", "--json"};
     if (force) args.push_back("--no-cache");
@@ -221,29 +217,23 @@ OperationResult cua_setup(bool update, int startup_wait_ms) {
         report["version"] = before.output;
         const auto exception = automatic_update_exception();
         if (update && automatic_updates_enabled() && exception.empty()) {
-            const auto path = directory / "update-state.json";
-            auto saved = read_state(path);
-            const auto last = saved.contains("checked_at") && saved["checked_at"].is_number_integer() ? saved["checked_at"].get<long long>() : 0LL;
-            const auto now = now_seconds();
-            const bool due = string_field(saved, "binary") != path_text(binary) || string_field(saved, "version") != before.output || last <= 0 || last > now || now - last >= 86400;
-            if (due) {
-                // A network failure leaves the installed driver available and is
-                // visible in the report; it never changes the action backend.
-                try {
-                    auto checked = check_update(binary, true);
-                    report["update"] = checked;
-                    if (checked.value("update_available", false)) {
-                        const auto applied = driver(binary, {"update", "--apply"});
-                        if (applied.code != 0) throw std::runtime_error("CUA update failed: " + applied.error + applied.output);
-                        report["updated"] = true;
-                        report["update_output"] = applied.output;
-                        binary = cua_driver_path();
-                        if (binary.empty()) throw std::runtime_error("updated CUA binary was not found");
-                        report["version"] = driver(binary, {"--version"}).output;
-                    }
-                    write_state(path, {{"checked_at", now}, {"binary", path_text(binary)}, {"version", report["version"]}});
-                } catch (const std::exception& error) { report["warnings"].push_back(error.what()); }
-            } else report["update"] = {{"cached", true}, {"next_check_at", last + 86400}};
+            // Each workflow start checks the selected channel. An offline check
+            // stays visible while leaving the installed runtime usable.
+            try {
+                auto checked = check_update(binary, true);
+                report["update"] = checked;
+                if (checked.value("update_available", false)) {
+                    const auto applied = driver(binary, {"update", "--apply"});
+                    if (applied.code != 0) throw std::runtime_error("CUA update failed: " + applied.error + applied.output);
+                    report["updated"] = true;
+                    report["update_output"] = applied.output;
+                    binary = cua_driver_path();
+                    if (binary.empty()) throw std::runtime_error("updated CUA binary was not found");
+                    const auto version = driver(binary, {"--version"});
+                    if (version.code != 0) throw std::runtime_error("updated CUA version check failed: " + version.error + version.output);
+                    report["version"] = version.output;
+                }
+            } catch (const std::exception& error) { report["warnings"].push_back(error.what()); }
         } else report["update"] = {{"skipped", exception.empty() ? "automatic updates disabled for this workflow" : exception}};
 
         auto status = driver(binary, daemon_arguments("status"));

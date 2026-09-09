@@ -131,7 +131,7 @@ TEST_CASE("CUA indexed actions retain full window IDs and snapshot identity") {
     REQUIRE(json::parse(macos_cua_feedback_state().message)["session"] == "precision session");
 }
 
-TEST_CASE("CUA workflow updates latest selected channel once a day and starts daemon") {
+TEST_CASE("CUA workflow checks latest selected channel at each start and starts daemon") {
     Fixture fixture;
     fixture.config({{"current", "0.24.0"}, {"latest", "0.25.0"}, {"channel", "nightly"}});
     const auto first = cua_setup();
@@ -149,7 +149,7 @@ TEST_CASE("CUA workflow updates latest selected channel once a day and starts da
         if (call["args"][0] == "check-update") { ++checks; REQUIRE(call["args"] == json::array({"check-update", "--json", "--no-cache"})); }
         if (call["args"][0] == "update") ++applies;
     }
-    REQUIRE(checks == 1);
+    REQUIRE(checks == 2);
     REQUIRE(applies == 1);
 }
 

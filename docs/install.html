@@ -28,7 +28,7 @@ kiseki capabilities</code></pre>
 <pre><code>kiseki background cua setup
 kiseki background cua status
 kiseki background cua windows</code></pre>
-<p>第一次 setup 會下載官方 Driver。之後每次開始流程，最多一天檢查一次所選通道的新版本並自動更新。<code>windows</code> 與 <code>launch</code> 也會執行此準備流程。鍵鼠 action 不會在中途觸發更新。</p>
+<p>第一次 setup 會下載官方 Driver。之後每次開始流程，都會檢查所選通道的新版本並自動更新。<code>windows</code> 與 <code>launch</code> 也會執行此準備流程。鍵鼠 action 不會在中途觸發更新。</p>
 <p><strong>macOS：</strong>請在有登入桌面的 Terminal 執行。依系統提示為 CuaDriver 開啟「輔助使用」及「螢幕錄製」。若沒有跳出提示，執行 <code>kiseki background cua status --prompt</code>，再到「系統設定 → 隱私權與安全性」確認。回到終端機重新執行 setup / status 即可。</p>
 <p><strong>Windows / Linux：</strong>請在要操作的使用者桌面中執行。Linux 原生 X11 與 Wayland 的可用功能依 compositor、桌面 session 和 provider 回報而定；<code>status</code> 顯示實際準備狀態。</p>
 <p>網路暫時不可用時，已安裝的 Driver 仍可使用，更新失敗原因會保留在輸出中。指定的 Driver 路徑、版本 pin 或自訂 daemon 端點不會被自動替換。</p></section>

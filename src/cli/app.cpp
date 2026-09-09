@@ -2643,7 +2643,7 @@ int run(
                 exit_code = dependencies.cua_control(*option_ptr, io);
             });
         };
-        auto* setup = parent->add_subcommand("setup", "Begin a CUA workflow: install if missing, automatically update daily, and start the native daemon");
+        auto* setup = parent->add_subcommand("setup", "Begin a CUA workflow: install if missing, check and apply updates, and start the native daemon");
         setup->add_flag("--no-update", cua_setup_options.no_update, "Skip automatic update for this workflow");
         setup->add_option("--startup-wait-ms", cua_setup_options.startup_wait_ms, "Wait for daemon readiness; does not limit tool execution")->check(CLI::NonNegativeNumber);
         bind(setup, cua_setup_options);
