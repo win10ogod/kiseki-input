@@ -50,7 +50,7 @@ bool executable_file(const std::filesystem::path& path) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(path, error)) return false;
 #ifdef _WIN32
-    return !path.empty() && _access(path.string().c_str(), 0) == 0;
+    return !path.empty() && _waccess(path.c_str(), 0) == 0;
 #else
     return !path.empty() && access(path.c_str(), X_OK) == 0;
 #endif
@@ -135,9 +135,11 @@ struct CaptureOutput {
         staged = directory / target.filename();
     }
     ~CaptureOutput() { std::error_code error; std::filesystem::remove_all(directory, error); }
-    void finish() {
+    void validate() const {
         if (!std::filesystem::is_regular_file(staged) || std::filesystem::file_size(staged) == 0)
             throw std::runtime_error("CUA returned without writing a new screenshot: " + detail::path_text(target));
+    }
+    void finish() {
         std::filesystem::rename(staged, target);
     }
     static std::string normalized_path(const std::filesystem::path& path) {
@@ -167,17 +169,17 @@ OperationResult run_cua_tool(
     }
     try {
         auto tool_arguments = arguments;
-        std::unique_ptr<CaptureOutput> capture;
+        std::vector<std::unique_ptr<CaptureOutput>> captures;
         const bool argument_capture = arguments.contains("screenshot_out_file") && arguments["screenshot_out_file"].is_string();
         if (argument_capture) {
-            capture = std::make_unique<CaptureOutput>(std::filesystem::u8path(arguments["screenshot_out_file"].get<std::string>()));
-            tool_arguments["screenshot_out_file"] = detail::path_text(capture->staged);
-        } else if (!screenshot_output.empty()) capture = std::make_unique<CaptureOutput>(screenshot_output);
+            captures.push_back(std::make_unique<CaptureOutput>(std::filesystem::u8path(arguments["screenshot_out_file"].get<std::string>())));
+            tool_arguments["screenshot_out_file"] = detail::path_text(captures.back()->staged);
+        }
         std::vector<std::string> command{detail::path_text(binary), "call", tool};
         if (!screenshot_output.empty()) {
-            // A raw request can explicitly use both routes with distinct outputs;
-            // preserve the caller's CLI output rather than rewriting its JSON.
-            command.insert(command.end(), {"--screenshot-out-file", detail::path_text(argument_capture ? std::filesystem::absolute(screenshot_output) : capture->staged)});
+            if (captures.empty() || CaptureOutput::normalized_path(screenshot_output) != CaptureOutput::normalized_path(captures.front()->target))
+                captures.push_back(std::make_unique<CaptureOutput>(screenshot_output));
+            command.insert(command.end(), {"--screenshot-out-file", detail::path_text(captures.back()->staged)});
         }
         if (const auto socket = detail::environment_text("KISEKI_CUA_SOCKET"); !socket.empty()) command.insert(command.end(), {"--socket", socket});
         auto result = detail::run_process(command, tool_arguments.dump());
@@ -194,10 +196,15 @@ OperationResult run_cua_tool(
                 return fail(result.error + result.output);
             }
         }
-        if (capture) {
-            capture->finish();
+        if (!captures.empty()) {
+            // Validate every requested output before replacing any prior file.
+            for (const auto& capture : captures) capture->validate();
+            for (const auto& capture : captures) capture->finish();
             auto parsed = nlohmann::json::parse(result.output, nullptr, false);
-            if (!parsed.is_discarded()) { capture->fix_paths(parsed); result.output = parsed.dump(2); }
+            if (!parsed.is_discarded()) {
+                for (const auto& capture : captures) capture->fix_paths(parsed);
+                result.output = parsed.dump(2);
+            }
         }
         return OperationResult{.ok = true, .code = 0, .message = result.output, .error = result.error};
     } catch (const std::exception& error) { return fail(error.what()); }

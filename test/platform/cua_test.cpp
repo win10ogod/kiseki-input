@@ -204,3 +204,24 @@ TEST_CASE("CUA structured refusal is a failure even when provider process exits 
     REQUIRE(result.code == 2);
     REQUIRE(result.error.find("target_unavailable") != std::string::npos);
 }
+
+TEST_CASE("CUA validates JSON and CLI screenshot outputs before replacing either") {
+    Fixture fixture;
+    const auto json_path = fixture.directory / "json.png";
+    const auto cli_path = fixture.directory / "cli.png";
+    std::ofstream(json_path) << "previous JSON";
+    std::ofstream(cli_path) << "previous CLI";
+    const json arguments{{"screenshot_out_file", detail::path_text(json_path)}};
+    fixture.config({{"write_screenshot", true}});
+    REQUIRE_FALSE(cua_call("get_window_state", arguments, cli_path).ok);
+    std::string content;
+    { std::ifstream stream(json_path); std::getline(stream, content); }
+    REQUIRE(content == "previous JSON");
+    { std::ifstream stream(cli_path); std::getline(stream, content); }
+    REQUIRE(content == "previous CLI");
+    fixture.config({{"write_screenshot", true}, {"write_cli_screenshot", true}});
+    REQUIRE(cua_call("get_window_state", arguments, cli_path).ok);
+    { std::ifstream stream(cli_path); std::getline(stream, content); }
+    REQUIRE(content == "new CLI screenshot");
+    REQUIRE(cua_call("get_window_state", arguments, json_path).ok);
+}

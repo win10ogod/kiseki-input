@@ -45,6 +45,11 @@ int main(int argc, char** argv) {
         if (config.value("write_screenshot", false) && arguments.contains("screenshot_out_file")) {
             std::ofstream(std::filesystem::u8path(arguments["screenshot_out_file"].get<std::string>()), std::ios::binary) << "new screenshot";
         }
+        if (config.value("write_cli_screenshot", false)) {
+            for (std::size_t i = 0; i + 1 < args.size(); ++i)
+                if (args[i] == "--screenshot-out-file")
+                    std::ofstream(std::filesystem::u8path(args[i + 1]), std::ios::binary) << "new CLI screenshot";
+        }
     } else std::cout << json{{"args", args}};
     std::cerr << config.value("stderr", "");
     return config.value("exit_code", 0);
