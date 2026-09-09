@@ -4,6 +4,18 @@ Kiseki Input is a native C++ CLI for local desktop automation: keyboard and mous
 
 It is built for developers who want a practical automation lab instead of a pile of one-off scripts. The project is CLI-first, keeps each backend slice separate, and reports platform limits explicitly instead of pretending every desktop, game, or compositor behaves the same way.
 
+## Install
+
+Download the matching installer from [Releases](https://github.com/win10ogod/kiseki-input/releases): Windows `.exe`, macOS `.pkg` (Apple Silicon or Intel), or Linux `.deb` (x64 or arm64). ZIP/TAR.GZ archives are also available. The [step-by-step installation guide](docs/install.md) covers package selection, PATH, first CUA startup, permissions, updates, and removal. An offline guide is included at `share/kiseki/install.html`.
+
+```sh
+kiseki --version
+kiseki background cua setup
+kiseki background cua status
+```
+
+GitHub Actions builds and tests all five targets, verifies the installed CLI and skills, and produces installers plus SHA-256 sidecars. Pull requests and manual runs publish Actions artifacts; successful `vMAJOR.MINOR.PATCH` tag builds publish a GitHub Release. CUA remains a runtime provider and is installed for the desktop user when first needed.
+
 ## Why Try It
 
 - Single native CLI for input, screenshots, macros, diagnostics, and heartbeat notifications.
@@ -12,7 +24,7 @@ It is built for developers who want a practical automation lab instead of a pile
 - Burst screenshots can grab short frame sequences such as 8 frames at 60 FPS.
 - Target-window and explicit background window screenshots are available for windows that accept the platform APIs.
 - Linux can run an isolated Xvfb background desktop so GUI apps execute on a separate DISPLAY instead of the user's current desktop.
-- Optional Cua Driver integration exposes background app launch, per-window screenshots/state, targeted clicks, text, keys, hotkeys, drags, point-path drawing, and configurable visual feedback when `cua-driver` is installed and authorized. Upstream CUA currently targets macOS and Windows, with Linux available as a pre-release backend.
+- Optional Cua Driver integration exposes background app launch, per-window screenshots/state, targeted clicks, text, keys, hotkeys, drags, point-path drawing, and configurable visual feedback when `cua-driver` is installed and authorized. Cua Driver provides native macOS, Linux, and Windows backends. Kiseki installs a missing provider and automatically updates it at workflow startup; see [installation](docs/install.md) and [CUA integration](docs/cua.md).
 - WebUI can edit configuration and inspect local teaching bundles, but it does not expose operational input/screenshot routes.
 - Windows can use `IbInputSimulator.dll` when available and falls back to system input when it is not.
 - Linux support uses native X11/XTest paths where the session permits it, with XDG Desktop Portal fallback for current-session screenshots on Wayland.
@@ -138,7 +150,8 @@ kiseki input key|combo|text|mouse|drag ...
 kiseki background window screenshot [target selector] --output window.bmp
 kiseki background window text|key|mouse|drag [target selector] ...
 kiseki background desktop start|launch|screenshot|text|key|mouse|stop ...
-kiseki background cua status|launch|windows|state|screenshot|click|text|key|hotkey|drag|draw ...
+kiseki background cua setup|status|update|tools|describe|call|driver ...
+kiseki background cua launch|windows|state|screenshot|click|text|key|hotkey|drag|draw ...
 kiseki background cua feedback status|enable|motion|style|preset ...
 
 # Repeatable workflows
@@ -148,6 +161,24 @@ kiseki teach annotate --session session-dir --frame-index n|--event-index n --te
 kiseki teach transcribe --audio-file note.wav --output transcript.json
 kiseki daemon run [--once]
 ```
+
+## Agent skills
+
+Repository agent instructions route to two bundled skills:
+
+| Skill | Purpose |
+| --- | --- |
+| [kiseki-project](skills/kiseki-project/SKILL.md) | Discover targets, select the correct operation mode, perform precise input, verify app state, and develop/test platform slices. |
+| [kiseki-teach-recording](skills/kiseki-teach-recording/SKILL.md) | Record or inspect demonstrations, control recorder lifecycle, validate evidence, and compile it into reusable procedures. |
+
+Read-only runtime discovery and skill helper checks:
+
+```bash
+python3 skills/kiseki-project/scripts/inspect_runtime.py --probe
+python3 -m unittest discover -s test/skills -v
+```
+
+The teaching skill provides an explicit `status`/`stop` helper that never starts a new recording, and its draft generator preserves all actions by default. Helpers require Python 3.9+ with no third-party packages. Existing bundles can be inspected without rebuilding C++ or starting desktop capture.
 
 ## WebUI Contract
 
@@ -234,7 +265,7 @@ Windows screenshots, target listing, target-window screenshots, system input, an
 
 Windows background screenshot uses selected-window capture through `background window screenshot`. It is the Windows native background observation path for this project; it does not require a VM, Docker, or separate session backend. Windows selected-window input remains a message/API helper for ordinary Win32 controls and apps that accept public window messages. Optional `background cua` support is separate and requires an installed Cua Driver in the interactive desktop session.
 
-Linux support is split by session type. X11/XTest provides current-session input, target-window helpers, selected-window capture, and Xvfb isolated background desktops. Wayland current-session desktop screenshots use XDG Desktop Portal when Kiseki is built with `gio-2.0` and `gdk-pixbuf-2.0`; the compositor may still require permission or return a denial. Wayland global input is not exposed by this native backend. `kiseki target list` is the recommended first step before using target-window screenshots or background input, especially when a desktop environment exposes both a window-manager frame and a client window. Linux true background desktop support uses `Xvfb` to create an isolated X11 `DISPLAY`; commands launched there can be clicked, typed into, and captured without using the physical desktop session. Optional `background cua` support follows upstream CUA's Linux pre-release status and should be verified on a real graphical Linux session before claims.
+Linux support is split by session type. X11/XTest provides current-session input, target-window helpers, selected-window capture, and Xvfb isolated background desktops. Wayland current-session desktop screenshots use XDG Desktop Portal when Kiseki is built with `gio-2.0` and `gdk-pixbuf-2.0`; the compositor may still require permission or return a denial. Wayland global input is not exposed by this native backend. `kiseki target list` is the recommended first step before using target-window screenshots or background input, especially when a desktop environment exposes both a window-manager frame and a client window. Linux true background desktop support uses `Xvfb` to create an isolated X11 `DISPLAY`; commands launched there can be clicked, typed into, and captured without using the physical desktop session. Optional `background cua` uses the native Linux Cua Driver; its actual session/compositor readiness is reported by the provider.
 
 macOS has two deliberately separate paths. Native macOS commands use Apple desktop APIs in the active GUI session: target listing uses Window Services, `observe ui --provider ax` reads the same Accessibility API surface used by Accessibility Inspector, screenshots use ScreenCaptureKit with Screen Recording permission, and global keyboard/mouse input uses Quartz CGEvent with Accessibility permission. Use `kiseki permissions macos screen-recording --prompt --open-settings` and `kiseki permissions macos accessibility --prompt --open-settings` from the same GUI Terminal/app that will run Kiseki when macOS does not show a prompt automatically. CUA background app operation is exposed through the optional Cua Driver provider under `background cua`. It requires `cua-driver`, Accessibility permission, and Screen Recording permission. For drawing, use `input drag --file` when foreground control is acceptable, and use `background cua draw` when the target-routed CUA path is required. Professional drawing apps also need normal app state prepared first: select the intended tool, set a visible foreground color, then verify with before/after screenshots. Dense drawing paths belong on `input drag`; `background cua draw` expects sparse window-local control points and rejects overly dense paths unless `--max-segments` is raised intentionally. See [docs/roadmap.md](docs/roadmap.md).
 

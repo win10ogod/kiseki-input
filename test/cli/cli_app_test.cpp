@@ -15,6 +15,57 @@
 #include "cli/app.hpp"
 #include "platform/input/sequence_support.hpp"
 
+TEST_CASE("CUA lifecycle and raw native commands preserve their CLI arguments") {
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    std::vector<kiseki::cli::CuaControlOptions> calls;
+    dependencies.cua_control = [&](const kiseki::cli::CuaControlOptions& options, kiseki::cli::Io) {
+        calls.push_back(options);
+        return 0;
+    };
+    const auto run = [&](std::vector<std::string> arguments) {
+        return kiseki::cli::run(arguments, "unused-cua-config.json", {out, err}, dependencies);
+    };
+    REQUIRE(run({"background", "cua", "setup", "--no-update", "--startup-wait-ms", "90000"}) == 0);
+    REQUIRE(calls.back().no_update);
+    REQUIRE(calls.back().startup_wait_ms == 90000);
+    REQUIRE(run({"background", "cua", "update", "--apply"}) == 0);
+    REQUIRE(calls.back().apply);
+    REQUIRE(run({"background", "cua", "call", "future_tool", "--json", R"({"steps":100000,"future_field":"kept"})"}) == 0);
+    REQUIRE(calls.back().tool == "future_tool");
+    REQUIRE(nlohmann::json::parse(calls.back().json_arguments)["steps"] == 100000);
+    REQUIRE(run({"background", "cua", "driver", "--", "channel", "status", "--json"}) == 0);
+    REQUIRE(calls.back().driver_arguments == std::vector<std::string>{"channel", "status", "--json"});
+    const auto count = calls.size();
+    REQUIRE(run({"background", "cua", "call", "click", "--json", "{}", "--file", "request.json"}) != 0);
+    REQUIRE(calls.size() == count);
+}
+
+TEST_CASE("CUA CLI accepts a native launch path and full snapshot target identity") {
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    int calls = 0;
+    dependencies.mac_background_launch = [&](const kiseki::cli::MacBackgroundLaunchOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.launch_path == "native application path");
+        REQUIRE(options.arguments == std::vector<std::string>{"literal argument"});
+        ++calls;
+        return 0;
+    };
+    dependencies.mac_background_click = [&](const kiseki::cli::MacBackgroundClickOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.window_id == 1099511627793ULL);
+        REQUIRE(options.element_index == 7);
+        REQUIRE(options.snapshot_id == "snapshot-7");
+        REQUIRE(options.element_token == "opaque-token");
+        ++calls;
+        return 0;
+    };
+    REQUIRE(kiseki::cli::run({"background", "cua", "launch", "--launch-path", "native application path", "--arg", "literal argument"},
+        "unused-cua-config.json", {out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"background", "cua", "click", "--pid", "42", "--window-id", "1099511627793", "--element-index", "7",
+        "--snapshot-id", "snapshot-7", "--element-token", "opaque-token"}, "unused-cua-config.json", {out, err}, dependencies) == 0);
+    REQUIRE(calls == 2);
+}
+
 namespace {
 
 class TempConfigDirectory {

@@ -28,7 +28,7 @@ Linux support currently targets graphical X11 sessions and true-machine validati
 - X11/XTest global input where the active session accepts it.
 - X11 target-window events where the selected target accepts them.
 - Isolated Xvfb background desktops for running, clicking, typing into, and capturing Linux GUI applications on a separate `DISPLAY`.
-- Optional CUA Driver provider through `background cua`; upstream CUA currently marks Linux as pre-release while platform testing continues.
+- Optional CUA Driver provider through `background cua`; Cua Driver provides a native Linux backend; validate its reported graphical-session readiness.
 
 Wayland and compositor-restricted sessions need their own backend work. WSL-only results are not treated as Linux desktop proof.
 
@@ -58,7 +58,7 @@ CUA support is optional and runtime-detected. Installing `cua-driver` should not
 - Preferred command surface: `kiseki background cua ...`.
 - Detect `cua-driver` from `PATH` or `KISEKI_CUA_DRIVER`; platform-specific default install locations are probed where known.
 - Windows support requires CUA's installed driver in an interactive desktop session.
-- Linux support follows upstream CUA's pre-release status and needs true graphical Linux validation, not WSL-only proof.
+- Linux uses the native Cua Driver backend and needs graphical Linux validation, not WSL-only proof.
 - macOS support still requires Accessibility and Screen Recording permissions.
 - Public claims should distinguish CUA binary detection, CUA permission/status output, and live-verified target action artifacts.
 

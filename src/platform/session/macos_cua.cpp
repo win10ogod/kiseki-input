@@ -1,6 +1,10 @@
 #include "platform/session/macos_cua.hpp"
+#include "platform/session/cua_process.hpp"
+#include "platform/session/cua_runtime.hpp"
 
 #include <array>
+#include <atomic>
+#include <memory>
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
@@ -43,6 +47,8 @@ OperationResult fail(std::string error, int code = 2) {
 }
 
 bool executable_file(const std::filesystem::path& path) {
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(path, error)) return false;
 #ifdef _WIN32
     return !path.empty() && _access(path.string().c_str(), 0) == 0;
 #else
@@ -59,8 +65,8 @@ char path_separator() {
 }
 
 std::filesystem::path find_on_path(const std::string& name) {
-    const char* raw_path = std::getenv("PATH");
-    if (raw_path == nullptr) {
+    const auto raw_path = detail::environment_text("PATH");
+    if (raw_path.empty()) {
         return {};
     }
 
@@ -70,7 +76,7 @@ std::filesystem::path find_on_path(const std::string& name) {
         if (segment.empty()) {
             segment = ".";
         }
-        const auto candidate = std::filesystem::path{segment} / name;
+        const auto candidate = std::filesystem::u8path(segment) / name;
         if (executable_file(candidate)) {
             return candidate;
         }
@@ -79,9 +85,8 @@ std::filesystem::path find_on_path(const std::string& name) {
 }
 
 std::filesystem::path cua_driver_binary() {
-    if (const char* override_path = std::getenv("KISEKI_CUA_DRIVER");
-        override_path != nullptr && executable_file(override_path)) {
-        return override_path;
+    if (const auto override_path = detail::environment_text("KISEKI_CUA_DRIVER"); !override_path.empty()) {
+        return executable_file(std::filesystem::u8path(override_path)) ? std::filesystem::u8path(override_path) : std::filesystem::path{};
     }
 #ifdef _WIN32
     if (const auto path = find_on_path("cua-driver.exe"); !path.empty()) {
@@ -90,9 +95,9 @@ std::filesystem::path cua_driver_binary() {
     if (const auto path = find_on_path("cua-driver"); !path.empty()) {
         return path;
     }
-    if (const char* local_app_data = std::getenv("LOCALAPPDATA"); local_app_data != nullptr) {
+    if (const auto local_app_data = detail::environment_text("LOCALAPPDATA"); !local_app_data.empty()) {
         const auto visible_binary =
-            std::filesystem::path{local_app_data} / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe";
+            std::filesystem::u8path(local_app_data) / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe";
         if (executable_file(visible_binary)) {
             return visible_binary;
         }
@@ -107,8 +112,8 @@ std::filesystem::path cua_driver_binary() {
         return app_binary;
     }
 #else
-    if (const char* home = std::getenv("HOME"); home != nullptr) {
-        const auto local_binary = std::filesystem::path{home} / ".local" / "bin" / "cua-driver";
+    if (const auto home = detail::environment_text("HOME"); !home.empty()) {
+        const auto local_binary = std::filesystem::u8path(home) / ".local" / "bin" / "cua-driver";
         if (executable_file(local_binary)) {
             return local_binary;
         }
@@ -118,97 +123,39 @@ std::filesystem::path cua_driver_binary() {
     return {};
 }
 
-std::string shell_quote(const std::string& value) {
-#ifdef _WIN32
-    std::string quoted = "\"";
-    for (const char c : value) {
-        if (c == '"') {
-            quoted += "\"\"";
-        } else {
-            quoted.push_back(c);
-        }
+struct CaptureOutput {
+    std::filesystem::path target, directory, staged;
+    explicit CaptureOutput(const std::filesystem::path& output) : target(std::filesystem::weakly_canonical(std::filesystem::absolute(output))) {
+        std::filesystem::create_directories(target.parent_path());
+        static std::atomic<unsigned long long> counter{0};
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        do {
+            directory = target.parent_path() / (".kiseki-cua-capture-" + std::to_string(stamp) + "-" + std::to_string(counter++));
+        } while (!std::filesystem::create_directory(directory));
+        staged = directory / target.filename();
     }
-    quoted.push_back('"');
-    return quoted;
-#else
-    std::string quoted = "'";
-    for (const char c : value) {
-        if (c == '\'') {
-            quoted += "'\"'\"'";
-        } else {
-            quoted.push_back(c);
-        }
+    ~CaptureOutput() { std::error_code error; std::filesystem::remove_all(directory, error); }
+    void finish() {
+        if (!std::filesystem::is_regular_file(staged) || std::filesystem::file_size(staged) == 0)
+            throw std::runtime_error("CUA returned without writing a new screenshot: " + detail::path_text(target));
+        std::filesystem::rename(staged, target);
     }
-    quoted.push_back('\'');
-    return quoted;
-#endif
-}
-
-struct CommandResult {
-    int code = 2;
-    std::string output;
-};
-
-CommandResult run_shell_command(const std::string& command) {
-    std::array<char, 4096> buffer{};
-    std::string output;
-
-#ifdef _WIN32
-    FILE* pipe = _popen((command + " 2>&1").c_str(), "r");
-#else
-    FILE* pipe = popen((command + " 2>&1").c_str(), "r");
-#endif
-    if (pipe == nullptr) {
-        return CommandResult{.code = 2, .output = "failed to launch cua-driver"};
-    }
-
-    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe) != nullptr) {
-        output += buffer.data();
-    }
-
-#ifdef _WIN32
-    const int status = _pclose(pipe);
-    if (status == -1) {
-        return CommandResult{.code = 2, .output = output.empty() ? "failed to read cua-driver exit status" : output};
-    }
-    return CommandResult{.code = status, .output = output};
-#else
-    const int status = pclose(pipe);
-    if (status == -1) {
-        return CommandResult{.code = 2, .output = output.empty() ? "failed to read cua-driver exit status" : output};
-    }
-    if (WIFEXITED(status)) {
-        return CommandResult{.code = WEXITSTATUS(status), .output = output};
-    }
-    return CommandResult{.code = 2, .output = output.empty() ? "cua-driver did not exit normally" : output};
-#endif
-}
-
-std::filesystem::path make_temp_json_path() {
-    const auto base = std::filesystem::temp_directory_path();
-    const auto seed = std::chrono::steady_clock::now().time_since_epoch().count();
-    for (int attempt = 0; attempt < 100; ++attempt) {
-        auto candidate = base / ("kiseki-cua-" + std::to_string(seed) + "-" + std::to_string(attempt) + ".json");
+    static std::string normalized_path(const std::filesystem::path& path) {
         std::error_code error;
-        if (!std::filesystem::exists(candidate, error)) {
-            return candidate;
-        }
+        auto resolved = std::filesystem::weakly_canonical(path, error);
+        const auto utf8 = (error ? path.lexically_normal() : resolved).generic_u8string();
+        std::string text(utf8.begin(), utf8.end());
+#ifdef _WIN32
+        if (text.starts_with("//?/")) text.erase(0, 4);
+        for (auto& character : text) if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
+#endif
+        return text;
     }
-    return base / ("kiseki-cua-" + std::to_string(seed) + ".json");
-}
-
-OperationResult write_cua_arguments(const nlohmann::json& arguments, std::filesystem::path& path) {
-    path = make_temp_json_path();
-    std::ofstream file{path, std::ios::binary | std::ios::trunc};
-    if (!file) {
-        return fail("failed to create temporary Cua Driver argument file: " + path.string());
+    void fix_paths(nlohmann::json& value) const {
+        if (value.is_string() && value.get_ref<const std::string&>().ends_with(detail::path_text(staged.filename())) && normalized_path(std::filesystem::u8path(value.get<std::string>())) == normalized_path(staged)) value = detail::path_text(target);
+        else if (value.is_structured()) for (auto& child : value) fix_paths(child);
     }
-    file << arguments.dump();
-    if (!file) {
-        return fail("failed to write temporary Cua Driver argument file: " + path.string());
-    }
-    return ok("");
-}
+};
 
 OperationResult run_cua_tool(
     const std::string& tool,
@@ -216,31 +163,59 @@ OperationResult run_cua_tool(
     const std::filesystem::path& screenshot_output = {}) {
     const auto binary = cua_driver_binary();
     if (binary.empty()) {
-        return fail("cua-driver was not found. Install Cua Driver or set KISEKI_CUA_DRIVER to the cua-driver binary");
+        return fail("cua-driver was not found. Run kiseki background cua setup; an explicit KISEKI_CUA_DRIVER must point to an executable");
     }
-
-    std::filesystem::path argument_path;
-    const auto write_result = write_cua_arguments(arguments, argument_path);
-    if (!write_result.ok) {
-        return write_result;
-    }
-
-    std::string command = shell_quote(binary.string()) + " call " + shell_quote(tool);
-    if (!screenshot_output.empty()) {
-        command += " --screenshot-out-file " + shell_quote(std::filesystem::absolute(screenshot_output).string());
-    }
-    command += " < " + shell_quote(argument_path.string());
-
-    const auto result = run_shell_command(command);
-    std::error_code remove_error;
-    std::filesystem::remove(argument_path, remove_error);
-    if (result.code == 0) {
-        return ok(result.output.empty() ? ("cua-driver " + tool + " completed") : result.output);
-    }
-    return fail(result.output.empty() ? ("cua-driver " + tool + " failed") : result.output, result.code);
+    try {
+        auto tool_arguments = arguments;
+        std::unique_ptr<CaptureOutput> capture;
+        const bool argument_capture = arguments.contains("screenshot_out_file") && arguments["screenshot_out_file"].is_string();
+        if (argument_capture) {
+            capture = std::make_unique<CaptureOutput>(std::filesystem::u8path(arguments["screenshot_out_file"].get<std::string>()));
+            tool_arguments["screenshot_out_file"] = detail::path_text(capture->staged);
+        } else if (!screenshot_output.empty()) capture = std::make_unique<CaptureOutput>(screenshot_output);
+        std::vector<std::string> command{detail::path_text(binary), "call", tool};
+        if (!screenshot_output.empty()) {
+            // A raw request can explicitly use both routes with distinct outputs;
+            // preserve the caller's CLI output rather than rewriting its JSON.
+            command.insert(command.end(), {"--screenshot-out-file", detail::path_text(argument_capture ? std::filesystem::absolute(screenshot_output) : capture->staged)});
+        }
+        if (const auto socket = detail::environment_text("KISEKI_CUA_SOCKET"); !socket.empty()) command.insert(command.end(), {"--socket", socket});
+        auto result = detail::run_process(command, tool_arguments.dump());
+        if (result.code != 0) return fail(result.error + result.output, result.code);
+        const auto payload = nlohmann::json::parse(result.output, nullptr, false);
+        if (payload.is_object()) {
+            const auto status = payload.contains("status") && payload["status"].is_string() ? payload["status"].get<std::string>() : "";
+            if (status == "refused" || status == "failed" || status == "error" ||
+                (payload.contains("refusal") && !payload["refusal"].is_null()) ||
+                (payload.contains("isError") && payload["isError"] == true) ||
+                (payload.contains("is_error") && payload["is_error"] == true) ||
+                (payload.contains("code") && payload["code"].is_string() && payload.contains("detail") && !payload.contains("effect")) ||
+                (payload.contains("ok") && payload["ok"] == false)) {
+                return fail(result.error + result.output);
+            }
+        }
+        if (capture) {
+            capture->finish();
+            auto parsed = nlohmann::json::parse(result.output, nullptr, false);
+            if (!parsed.is_discarded()) { capture->fix_paths(parsed); result.output = parsed.dump(2); }
+        }
+        return OperationResult{.ok = true, .code = 0, .message = result.output, .error = result.error};
+    } catch (const std::exception& error) { return fail(error.what()); }
 }
 
-void add_window_id(nlohmann::json& json, unsigned int window_id, bool has_window_id) {
+OperationResult begin_workflow_and_call(const std::string& tool, const nlohmann::json& arguments) {
+    const auto prepared = cua_setup();
+    if (!prepared.ok) return prepared;
+    auto called = run_cua_tool(tool, arguments);
+    auto report = nlohmann::json::parse(prepared.message, nullptr, false);
+    if (report.is_object() && (report.value("installed", false) || report.value("updated", false) ||
+        (report.contains("warnings") && !report["warnings"].empty()))) {
+        called.error += "CUA setup: " + report.dump() + "\n";
+    }
+    return called;
+}
+
+void add_window_id(nlohmann::json& json, std::uint64_t window_id, bool has_window_id) {
     if (has_window_id) {
         json["window_id"] = window_id;
     }
@@ -259,11 +234,11 @@ void add_modifiers(nlohmann::json& json, const std::vector<std::string>& modifie
 }
 
 std::string configured_cua_session_id() {
-    const char* session = std::getenv("KISEKI_CUA_SESSION");
-    if (session != nullptr && std::string{session}.size() > 0) {
+    const auto session = detail::environment_text("KISEKI_CUA_SESSION");
+    if (!session.empty()) {
         return session;
     }
-    return {};
+    return "kiseki";
 }
 
 void add_session_if_configured(nlohmann::json& json) {
@@ -275,10 +250,10 @@ void add_session_if_configured(nlohmann::json& json) {
 
 void add_cursor_id(nlohmann::json& json) {
     const auto session = configured_cua_session_id();
-    json["cursor_id"] = session.empty() ? "default" : session;
+    json["session"] = session.empty() ? "default" : session;
 }
 
-int resolve_pid_for_window_id(unsigned int window_id, std::string& error) {
+int resolve_pid_for_window_id(std::uint64_t window_id, std::string& error) {
     const auto windows_result = run_cua_tool("list_windows", nlohmann::json::object());
     if (!windows_result.ok) {
         error = windows_result.error;
@@ -314,6 +289,13 @@ int resolve_pid_for_window_id(unsigned int window_id, std::string& error) {
 
 }
 
+std::filesystem::path cua_driver_path() { return cua_driver_binary(); }
+
+OperationResult cua_call(const std::string& tool, const nlohmann::json& arguments, const std::filesystem::path& output) {
+    if (!arguments.is_object()) return fail("CUA arguments must be a JSON object");
+    return run_cua_tool(tool, arguments, output);
+}
+
 bool cua_background_available() {
     return !cua_driver_binary().empty();
 }
@@ -327,12 +309,18 @@ bool macos_cua_background_available() {
 }
 
 OperationResult macos_cua_status(bool prompt) {
-    return run_cua_tool("check_permissions", nlohmann::json{{"prompt", prompt}});
+    nlohmann::json arguments = nlohmann::json::object();
+#ifdef __APPLE__
+    arguments["prompt"] = prompt;
+#else
+    if (prompt) return fail("--prompt requests macOS permissions; use background cua status for native Windows/Linux readiness");
+#endif
+    return run_cua_tool("check_permissions", arguments);
 }
 
 OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
-    if (options.bundle_id.empty() && options.name.empty()) {
-        return fail("background cua launch requires --bundle-id or --name");
+    if (options.bundle_id.empty() && options.name.empty() && options.launch_path.empty()) {
+        return fail("background cua launch requires --bundle-id, --name, or --launch-path");
     }
     nlohmann::json arguments = nlohmann::json::object();
     if (!options.bundle_id.empty()) {
@@ -341,6 +329,7 @@ OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
     if (!options.name.empty()) {
         arguments["name"] = options.name;
     }
+    if (!options.launch_path.empty()) arguments["launch_path"] = options.launch_path;
     if (!options.urls.empty()) {
         arguments["urls"] = options.urls;
     }
@@ -350,7 +339,7 @@ OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
     if (!options.additional_arguments.empty()) {
         arguments["additional_arguments"] = options.additional_arguments;
     }
-    return run_cua_tool("launch_app", arguments);
+    return begin_workflow_and_call("launch_app", arguments);
 }
 
 OperationResult macos_cua_list_windows(const MacCuaWindowListOptions& options) {
@@ -361,7 +350,7 @@ OperationResult macos_cua_list_windows(const MacCuaWindowListOptions& options) {
     if (options.on_screen_only) {
         arguments["on_screen_only"] = true;
     }
-    return run_cua_tool("list_windows", arguments);
+    return begin_workflow_and_call("list_windows", arguments);
 }
 
 OperationResult macos_cua_window_state(const MacCuaWindowStateOptions& options) {
@@ -372,11 +361,12 @@ OperationResult macos_cua_window_state(const MacCuaWindowStateOptions& options) 
         {"pid", options.pid},
         {"window_id", options.window_id},
     };
+    add_session_if_configured(arguments);
     if (!options.query.empty()) {
         arguments["query"] = options.query;
     }
     if (!options.output_path.empty()) {
-        arguments["screenshot_out_file"] = std::filesystem::absolute(options.output_path).string();
+        arguments["screenshot_out_file"] = detail::path_text(std::filesystem::absolute(options.output_path));
     }
     return run_cua_tool("get_window_state", arguments);
 }
@@ -388,59 +378,37 @@ OperationResult macos_cua_screenshot(const MacCuaScreenshotOptions& options) {
     if (options.output_path.empty()) {
         return fail("background cua screenshot requires --output");
     }
-    nlohmann::json arguments = {
-        {"window_id", options.window_id},
-        {"format", options.format.empty() ? "png" : options.format},
-        {"quality", options.quality},
-    };
-    const auto direct = run_cua_tool("screenshot", arguments, options.output_path);
-    if (direct.ok) {
-        return direct;
+    const auto format = options.format.empty() ? "png" : options.format;
+    if (format != "png") {
+        // Older providers offer JPEG through screenshot. Preserve the request
+        // and its error; never label a PNG as JPEG on the modern state route.
+        return run_cua_tool("screenshot", {{"window_id", options.window_id}, {"format", format}, {"quality", options.quality}}, options.output_path);
     }
-
-    std::string resolve_error;
-    const int pid = resolve_pid_for_window_id(options.window_id, resolve_error);
-    if (pid <= 0) {
-        return fail(
-            "background cua screenshot failed through Cua Driver screenshot tool and fallback pid resolution failed. "
-            "screenshot error: " +
-                direct.error + "; fallback error: " + resolve_error,
-            direct.code);
-    }
-
-    nlohmann::json fallback_arguments = {
-        {"pid", pid},
-        {"window_id", options.window_id},
-        {"screenshot_out_file", std::filesystem::absolute(options.output_path).string()},
-    };
-    const auto fallback = run_cua_tool("get_window_state", fallback_arguments);
-    if (!fallback.ok) {
-        return fail(
-            "background cua screenshot failed through Cua Driver screenshot tool and get_window_state fallback. "
-            "screenshot error: " +
-                direct.error + "; fallback error: " + fallback.error,
-            fallback.code);
-    }
+    std::string error;
+    const int pid = resolve_pid_for_window_id(options.window_id, error);
+    if (pid <= 0) return fail(error);
+    nlohmann::json arguments{{"pid", pid}, {"window_id", options.window_id},
+        {"include_accessibility_tree", false}, {"include_screenshot", true},
+        {"screenshot_out_file", detail::path_text(std::filesystem::absolute(options.output_path))}};
+    add_session_if_configured(arguments);
+    const auto captured = run_cua_tool("get_window_state", arguments);
+    if (!captured.ok) return captured;
     std::error_code file_error;
-    if (!std::filesystem::exists(options.output_path, file_error) ||
+    if (!std::filesystem::is_regular_file(options.output_path, file_error) ||
         std::filesystem::file_size(options.output_path, file_error) == 0) {
-        return fail(
-            "background cua screenshot fallback completed but did not create a non-empty output file: " +
-            std::filesystem::absolute(options.output_path).string());
+        return fail("CUA returned without creating the requested screenshot: " + detail::path_text(options.output_path));
     }
-    return ok(
-        "background cua screenshot captured through get_window_state fallback: " +
-        std::filesystem::absolute(options.output_path).string());
+    return captured;
 }
 
 OperationResult macos_cua_click(const MacCuaClickOptions& options) {
     if (options.pid <= 0) {
         return fail("background cua click requires positive --pid");
     }
-    if (options.has_element_index == options.has_xy) {
+    if ((options.has_element_index || !options.element_token.empty()) == options.has_xy) {
         return fail("background cua click requires either --element-index or both --x and --y");
     }
-    if (options.has_element_index && !options.has_window_id) {
+    if (options.has_element_index && options.element_token.empty() && !options.has_window_id) {
         return fail("background cua click with --element-index requires --window-id");
     }
 
@@ -448,6 +416,8 @@ OperationResult macos_cua_click(const MacCuaClickOptions& options) {
     add_session_if_configured(arguments);
     add_window_id(arguments, options.window_id, options.has_window_id);
     add_element_index(arguments, options.element_index, options.has_element_index);
+    if (!options.snapshot_id.empty()) arguments["snapshot_id"] = options.snapshot_id;
+    if (!options.element_token.empty()) arguments["element_token"] = options.element_token;
     if (options.has_xy) {
         arguments["x"] = options.x;
         arguments["y"] = options.y;
@@ -471,7 +441,7 @@ OperationResult macos_cua_type_text(const MacCuaTextOptions& options) {
     if (options.pid <= 0 || options.text.empty()) {
         return fail("background cua text requires positive --pid and non-empty --text or --file");
     }
-    if (options.has_element_index && !options.has_window_id) {
+    if (options.has_element_index && options.element_token.empty() && !options.has_window_id) {
         return fail("background cua text with --element-index requires --window-id");
     }
     nlohmann::json arguments = {
@@ -482,6 +452,8 @@ OperationResult macos_cua_type_text(const MacCuaTextOptions& options) {
     add_session_if_configured(arguments);
     add_window_id(arguments, options.window_id, options.has_window_id);
     add_element_index(arguments, options.element_index, options.has_element_index);
+    if (!options.snapshot_id.empty()) arguments["snapshot_id"] = options.snapshot_id;
+    if (!options.element_token.empty()) arguments["element_token"] = options.element_token;
     return run_cua_tool("type_text", arguments);
 }
 
@@ -489,7 +461,7 @@ OperationResult macos_cua_press_key(const MacCuaKeyOptions& options) {
     if (options.pid <= 0 || options.key.empty()) {
         return fail("background cua key requires positive --pid and --key");
     }
-    if (options.has_element_index && !options.has_window_id) {
+    if (options.has_element_index && options.element_token.empty() && !options.has_window_id) {
         return fail("background cua key with --element-index requires --window-id");
     }
     nlohmann::json arguments = {
@@ -499,6 +471,8 @@ OperationResult macos_cua_press_key(const MacCuaKeyOptions& options) {
     add_session_if_configured(arguments);
     add_window_id(arguments, options.window_id, options.has_window_id);
     add_element_index(arguments, options.element_index, options.has_element_index);
+    if (!options.snapshot_id.empty()) arguments["snapshot_id"] = options.snapshot_id;
+    if (!options.element_token.empty()) arguments["element_token"] = options.element_token;
     if (!options.modifiers.empty()) {
         arguments["modifiers"] = options.modifiers;
     }
@@ -676,6 +650,13 @@ OperationResult macos_cua_feedback_preset(const MacCuaFeedbackPresetOptions& opt
             return enabled;
         }
         return ok("background cua feedback preset quiet applied");
+    }
+
+    const auto style_schema = cua_driver_command({"describe", "set_agent_cursor_style"});
+    if (!style_schema.ok) {
+        return fail("This provider does not expose the legacy set_agent_cursor_style tool required by this preset. "
+                    "No preset changes were sent. Use feedback motion and an installed theme through "
+                    "background cua call set_agent_cursor_theme; inspect its schema with background cua describe. " + style_schema.error);
     }
 
     nlohmann::json motion = nlohmann::json::object();

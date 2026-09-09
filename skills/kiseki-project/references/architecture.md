@@ -75,12 +75,12 @@ macOS:
 
 - Keep native ScreenCaptureKit/Quartz support separate from the optional CUA provider.
 - Keep macOS TCC permission helpers under `kiseki permissions macos ...`. When screenshot/input fails from SSH, retest from the same GUI Terminal/app that will run Kiseki before making capability claims.
-- `src/platform/session/macos_cua.*` shells out to `cua-driver`; despite the historical filename, the wrapper is the optional cross-platform CUA Driver bridge. Do not make CUA a hard build dependency.
+- `src/platform/session/macos_cua.*` invokes `cua-driver` through native process APIs; despite the historical filename, the wrapper is the optional cross-platform CUA Driver bridge. Do not make CUA a hard build dependency.
 - `background cua` commands are CLI-only and must not add WebUI operation routes. Older direct CUA/background command families are removed from the public CLI.
 - Treat `kiseki input ...` on macOS as global/current-session input. Treat `kiseki background cua ...` as the target-routed CUA background path.
 - For drawing workflows, keep foreground `input drag --file` and CUA `background cua draw` separate. The former uses the active pointer path and is appropriate for dense sampled strokes with configurable delay; the latter sends sparse window-local CUA drag segments and must be verified with CUA screenshot/state.
 - `background cua feedback ...` is only visual agent-cursor feedback for CUA actions. It must not be described as moving the real system pointer.
-- Treat CUA support as live only after verifying `status`, launch/window listing, screenshot/state, and at least one action command on a real logged-in GUI session with required platform permissions granted.
+- Treat CUA support as live after status, target discovery, matching screenshot/state and a relevant action are verified on the actual GUI session. Reuse an existing target; launch a new app only when that is part of the task.
 
 CUA Driver:
 
@@ -89,7 +89,7 @@ CUA Driver:
 - Pass JSON arguments through stdin rather than fragile shell-quoted JSON command-line arguments.
 - Do not infer live support from binary presence. `session.cuaBackground` means the binary is discoverable; live support needs CUA status plus target action artifacts.
 - Windows CUA runs in the interactive desktop session where the installed driver is available.
-- Linux CUA follows upstream pre-release status and requires true graphical Linux validation.
+- Linux CUA uses its native backend and requires graphical Linux validation.
 
 Windows selected-window:
 
@@ -110,7 +110,7 @@ The current build embeds WebUI assets in `src/webui/static_assets.cpp`. If editi
 
 Tests should continue to assert that WebUI assets do not reference operational API routes.
 
-## Safety Language
+## Project Language
 
 When touching background input or game-targeted wording, preserve this constraint:
 

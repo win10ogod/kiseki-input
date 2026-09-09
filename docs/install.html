@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-Hant">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiseki Input — 安裝與開始使用</title>
+<style>
+body{font:17px/1.7 system-ui,sans-serif;color:#203042;background:#f7f9fc;margin:0;padding:36px 20px}main{max-width:840px;margin:auto}h1{font-size:38px;line-height:1.2}h2{margin-top:36px}p{max-width:75ch}a{color:#155db5}pre{overflow:auto;background:#142236;color:#e6f0ff;padding:18px;border-radius:10px;line-height:1.55}code{font-family:ui-monospace,monospace}section{background:white;border:1px solid #dce4ee;border-radius:14px;padding:8px 24px 20px;margin:20px 0}.muted{color:#53677c}li{margin:8px 0}table{border-collapse:collapse;width:100%}td,th{text-align:left;border-bottom:1px solid #dce4ee;padding:10px}
+</style>
+<main>
+<p class="muted">KISEKI INPUT · GET STARTED</p>
+<h1>安裝後，從一個終端機開始。</h1>
+<p>Kiseki 是讓 agent 操作桌面應用程式的原生 CLI。原生鍵鼠、截圖和視窗操作可直接使用；需要 CUA 時，Kiseki 會在開始流程時安裝或更新官方 Cua Driver。</p>
+<section><h2>1. 選對安裝包</h2>
+<p>從 <a href="https://github.com/win10ogod/kiseki-input/releases">GitHub Releases</a> 的 Assets 下載。一般使用者選安裝程式；要自行選擇位置則選 ZIP / TAR.GZ。</p>
+<table><tr><th>你的系統</th><th>建議檔案</th></tr>
+<tr><td>Windows 10 / 11，64 位元</td><td>Windows 的 <code>.exe</code> 安裝程式</td></tr>
+<tr><td>macOS 14+，Apple Silicon</td><td>Darwin-arm64 的 <code>.pkg</code></td></tr>
+<tr><td>macOS 14+，Intel</td><td>Darwin-x86_64 的 <code>.pkg</code></td></tr>
+<tr><td>Ubuntu 22.04+ / 相容 Debian 系統</td><td>Linux-x86_64 或 Linux-aarch64 的 <code>.deb</code></td></tr></table>
+<p>Windows：執行安裝程式，選擇加入 PATH，完成後開啟<strong>新的 PowerShell</strong>。開始選單中的「Start here」可再次開啟本指南。macOS：開啟 PKG，依安裝精靈完成後開啟 Terminal。Linux：在下載目錄執行 <code>sudo apt install ./KisekiInput-….deb</code>，由 apt 安裝相依套件。</p>
+<p>若系統提示發行者尚未驗證，先核對下載來源及附帶的 SHA-256。簽署狀態取決於該版本是否配置發行憑證；詳細處理方式見完整指南。</p></section>
+<section><h2>2. 確認 Kiseki 已可執行</h2>
+<pre><code>kiseki --version
+kiseki modes --json
+kiseki capabilities</code></pre>
+<p>這三個命令只檢查版本與功能，不會移動滑鼠或開始錄製。若出現找不到命令，重開終端機，或先使用安裝目錄中的 <code>bin/kiseki</code>（Windows 是 <code>bin\kiseki.exe</code>）。</p></section>
+<section><h2>3. 開始 CUA 操作流程</h2>
+<pre><code>kiseki background cua setup
+kiseki background cua status
+kiseki background cua windows</code></pre>
+<p>第一次 setup 會下載官方 Driver。之後每次開始流程，最多一天檢查一次所選通道的新版本並自動更新。<code>windows</code> 與 <code>launch</code> 也會執行此準備流程。鍵鼠 action 不會在中途觸發更新。</p>
+<p><strong>macOS：</strong>請在有登入桌面的 Terminal 執行。依系統提示為 CuaDriver 開啟「輔助使用」及「螢幕錄製」。若沒有跳出提示，執行 <code>kiseki background cua status --prompt</code>，再到「系統設定 → 隱私權與安全性」確認。回到終端機重新執行 setup / status 即可。</p>
+<p><strong>Windows / Linux：</strong>請在要操作的使用者桌面中執行。Linux 原生 X11 與 Wayland 的可用功能依 compositor、桌面 session 和 provider 回報而定；<code>status</code> 顯示實際準備狀態。</p>
+<p>網路暫時不可用時，已安裝的 Driver 仍可使用，更新失敗原因會保留在輸出中。指定的 Driver 路徑、版本 pin 或自訂 daemon 端點不會被自動替換。</p></section>
+<section><h2>4. 交給 agent 使用</h2>
+<p>安裝目錄的 <code>share/kiseki/skills</code> 內附兩份 skill：<strong>kiseki-project</strong> 負責觀察、定位、操作、驗證；<strong>kiseki-teach-recording</strong> 負責教學錄製、檢查與 skill 生成。讓 agent 讀取對應的 <code>SKILL.md</code>，或依 agent 平台的方式安裝整個 skill 資料夾。</p>
+<p>CLI 本身不需要 Python；skill 的檢查、錄製控制及草稿工具需要 Python 3.9+。先讀取視窗狀態，再依本次截圖及 snapshot 選擇目標，最後確認應用程式真的完成操作。</p>
+<pre><code>kiseki background cua tools
+kiseki background cua describe get_window_state
+kiseki background cua call get_window_state --file request.json</code></pre>
+<p>完整 JSON 呼叫保留 provider 的參數與結果，可直接使用該版本新增的工具。</p></section>
+<p><a href="https://github.com/win10ogod/kiseki-input/blob/master/docs/install.md">完整安裝、更新、移除與疑難排解指南</a> · <a href="https://github.com/win10ogod/kiseki-input/issues">回報問題</a></p>
+</main>
+</html>

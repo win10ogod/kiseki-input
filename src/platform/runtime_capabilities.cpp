@@ -56,7 +56,7 @@ kiseki::core::capabilities::CapabilityMatrix runtime_capabilities() {
         "Linux true background desktop requires Xvfb and runs applications inside an isolated X11 DISPLAY",
         "Linux current-session desktop screenshots use X11 when DISPLAY allows capture and can fall back to XDG Desktop Portal on Wayland sessions",
         "Linux Wayland portal screenshots may require compositor permission and are current-session capture, not background input",
-        "Linux CUA background operation uses optional cua-driver; upstream currently marks Linux as pre-release while platform testing continues",
+        "Linux CUA background operation uses native cua-driver; readiness depends on the graphical session and compositor",
 #endif
         "some Raw Input, DirectInput, protected fullscreen, and hardware-overlay targets may ignore background input or window capture",
 #endif

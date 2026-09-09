@@ -1,95 +1,41 @@
-# Teaching Bundle Validation
-
-Use this checklist before saying a Kiseki teaching recording is effective.
-
-## Required Files
-
-A valid bundle directory must contain:
-
-- `manifest.json`
-- `frames.json`
-- `actions.json`
-- `timeline.json`
-- `events.jsonl`
-- `annotations.json`
-- `SKILL.md`
-- `keyframes/` with at least one `.bmp` keyframe
-
-`instruction.txt`, `media/video`, `media/audio`, transcript files, and `video_keyframes/index.json` are optional. Optional files must be real files when referenced by `manifest.json`.
-
-## JSON Shape
-
-`manifest.json` must include:
-
-- `kind: "kiseki-teach-recording"`
-- `schemaVersion: 2`
-- `format: "agivar-style-action-keyframe-bundle"`
-- `framesFile`
-- `actionsFile`
-- `eventsFile`
-- `timelineFile`
-- `annotationsFile`
-- `keyframes[]`
-- `frameCount`
-- `actionCount`
-- `eventCount`
-- `keyframeCount`
-- `warnings[]`
-
-`frames.json` must include `schemaVersion: 1`, `frameFormat: "bmp"`, and `frames[]`. Each frame should include `index`, `timestampMs`, `path`, `width`, and `height`; `mouse` and `mouseNorm` are present when the platform can sample cursor position.
-
-`actions.json` must include `schemaVersion: 1` and `actions[]`. Actions are compact native events with `actionIndex`, `index`, `timestampMs`, and `type`. This is the primary agent-facing action sequence.
-
-`timeline.json` must include `schemaVersion: 2`, `durationMs`, and `items[]`. Items should reference selected keyframes by `frameIndex`, actions by `actionIndex`, and raw events by `eventIndex`.
-
-`events.jsonl` must parse line-by-line as JSON. Common event types are:
-
-- `mouse_move`
-- `mouse_button`
-- `mouse_wheel`
-- `key`
-- `recorder_status`
-
-Native recordings identify `eventSource`, `eventCaptureMode`, and `eventReceptionThread` in the manifest. Check for `incomplete-polling-fallback` and recorder gap warnings before treating short-tap, repeat, or wheel counts as complete. Native events can also carry `timestampUs`, source timestamps, scan codes, repeat, and wheel delta units.
-
-`annotations.json` must include `schemaVersion: 1` and `annotations[]`. Each annotation should target `frameIndex`, `eventIndex`, or both.
-
-When `manifest.media.videoKeyframes` exists, that file must parse as JSON and include `schemaVersion: 1`, `source`, `tool: "ffmpeg"`, `frames[]`, and `warnings[]`. Extracted frame paths must point to real JPEG files.
-
-## Smoke Commands
-
-Use a short recording in ignored artifacts:
+# Bundle validation and evidence
 
 ```bash
-rm -rf artifacts/live-test/teach-skill-smoke
-./build/Debug/kiseki.exe teach record \
-  --output artifacts/live-test/teach-skill-smoke \
-  --state-file artifacts/live-test/teach-skill-smoke-state.json \
-  --duration-ms 10000 \
-  --frame-interval-ms 400 \
-  --event-poll-ms 25 \
-  --title teach-skill-smoke \
-  --text "Validate screen teaching recording."
-sleep 2
-./build/Debug/kiseki.exe teach record \
-  --state-file artifacts/live-test/teach-skill-smoke-state.json \
-  --stop-timeout-ms 15000
-./build/Debug/kiseki.exe teach annotate \
-  --session artifacts/live-test/teach-skill-smoke \
-  --frame-index 0 \
-  --text "Initial keyframe."
+python3 skills/kiseki-teach-recording/scripts/validate_bundle.py "$bundle"
 ```
 
-Parse the result:
+The command is read-only, needs only Python 3.9+, and reports JSON even for missing files, malformed JSON/JSONL or wrong value types. Exit 0 means structural checks passed; exit 2 includes diagnostic `errors`. Warnings remain visible and do not automatically reject a useful partial recording.
 
-```bash
-node -e "const fs=require('fs'); const dir='artifacts/live-test/teach-skill-smoke'; const m=JSON.parse(fs.readFileSync(dir+'/manifest.json','utf8')); const f=JSON.parse(fs.readFileSync(dir+'/'+m.framesFile,'utf8')); const ac=JSON.parse(fs.readFileSync(dir+'/'+m.actionsFile,'utf8')); const t=JSON.parse(fs.readFileSync(dir+'/'+m.timelineFile,'utf8')); const an=JSON.parse(fs.readFileSync(dir+'/'+m.annotationsFile,'utf8')); const e=fs.readFileSync(dir+'/'+m.eventsFile,'utf8').trim().split(/\r?\n/).filter(Boolean).map(JSON.parse); const ok=m.kind==='kiseki-teach-recording' && m.schemaVersion===2 && m.format==='agivar-style-action-keyframe-bundle' && m.keyframes.length>0 && f.frames.length>=m.keyframes.length && ac.actions.length===m.actionCount && t.items.length>=m.keyframes.length && Array.isArray(an.annotations); if(!ok) process.exit(2); console.log(JSON.stringify({frames:f.frames.length,keyframes:m.keyframes.length,actions:ac.actions.length,events:e.length,timelineItems:t.items.length,annotations:an.annotations.length},null,2));"
-```
+## What is checked
 
-## Evidence Levels
+- Manifest kind `kiseki-teach-recording`, schema 2 and format `agivar-style-action-keyframe-bundle`.
+- Referenced frames/actions/timeline/events/annotations files plus the bundle reading guide `SKILL.md`.
+- Object/array shapes, manifest counts, frame paths and at least one selected keyframe.
+- Unique frame/action/event indexes; selected frame path/timestamp consistency.
+- Action-to-raw-event type/timestamp linkage; timeline frame/action/event references and monotonic ordering; annotation targets.
+- Referenced instruction/media files and extracted video keyframe index/assets when supplied.
+- Capture source/mode and recorder warnings, including incomplete polling fallback.
 
-- Verified: The bundle was produced by the toggle form of `kiseki teach record`, required files exist, JSON/JSONL parse, `actions.json` and `timeline.json` agree with `manifest.json`, and at least one selected keyframe file exists.
-- Partially verified: CLI command routes and tests pass, but no live recording artifact was produced.
-- Not verified: Only documentation or code was inspected.
+Paths in a bundle manifest are relative to the bundle, not to the shell working directory. Referenced files must remain inside the bundle. The validator does not execute recorded commands, decode every image, prove that the pictured task completed, or establish that a generated skill generalizes.
 
-State which level was achieved in final reports.
+## Reading order
+
+1. `manifest.json`: task title, recording options, source/mode, warnings, actual artifact paths.
+2. Referenced instruction, then `annotations.json`: human intent and corrections.
+3. `actions.json`: every relevant action, including wheel events, motion inside drags, key up/down and late completion steps.
+4. `timeline.json`: map actions to selected keyframes and inspect those images.
+5. Referenced transcript/media when needed; raw `events.jsonl` when resolving timing, scan/repeat or capture questions.
+
+`frames.json` indexes all captured frames; `manifest.keyframes` selects the primary teaching views. `actions.json` preserves compact event records; their `index` points to the raw event and `actionIndex` identifies the action. Annotations may refer to frame or event indexes. Native event timestamps/units and screenshot coordinate transforms must be interpreted in their recorded platform/session.
+
+## Interpret failures
+
+| Result | Next action |
+| --- | --- |
+| Active recorder or partially written files | Inspect the original state/log and finalize; do not treat a partial manifest as complete |
+| Missing media/frame | Locate the source artifact or report the missing evidence; do not manufacture a replacement |
+| Malformed JSON or broken indexes | Report the exact file/reference; preserve the original while making any authorized repair in a copy |
+| Polling fallback or recorder gap warning | Use available evidence, but do not assert complete short-tap, wheel or repeat counts |
+| Structure passes but goal/final state is unclear | Read relevant instructions, late actions and keyframes; ask only for essential intent that remains absent |
+
+Report evidence at the level actually achieved: structural validation, visual interpretation, or a replay verified in the target app. A script's exit code alone does not make a teaching bundle effective.

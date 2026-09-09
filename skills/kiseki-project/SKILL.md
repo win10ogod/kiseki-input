@@ -1,55 +1,63 @@
 ---
 name: kiseki-project
-description: Use when working inside the Kiseki Input repository on CLI commands, configuration WebUI, screenshot capture, keyboard or mouse input, drawing-app automation, heartbeat notifications, platform backends, live Windows tests, Linux true-machine tests, build/test verification, or project documentation.
+description: Operate desktop apps with Kiseki Input or develop its CLI and platform backends. Use for target discovery, structured observation, screenshots, precise keyboard/mouse sequences, selected-window or isolated-display operations, configuration, and native verification.
 ---
 
 # Kiseki Project
 
-## Overview
+Kiseki is a native C++ CLI for agent desktop operation. The WebUI edits configuration and inspects local teaching bundles; operation stays in CLI commands.
 
-Kiseki Input is a pure C++ CLI with an embedded local WebUI for configuration and local teaching-bundle inspection. Operational capabilities are CLI-only: screenshots, input simulation, teaching recording, notifications, daemon mode, capabilities, and diagnostics.
+## Start with the actual task
 
-## First Rules
+| Request | Next step | Read only when needed |
+| --- | --- | --- |
+| Operate or inspect an app | Locate the executable, discover the target, choose the operation family | [Operating guide](references/operating.md) |
+| Draw, drag, or manipulate a canvas | Establish the canvas and coordinate transform, then use a sequence/path | [Drawing guide](references/drawing-apps.md) |
+| Inspect an existing teaching bundle or record a demonstration | Use the sibling teaching skill; existing-bundle inspection does not start a recorder | [kiseki-teach-recording](../kiseki-teach-recording/SKILL.md) |
+| Change source, CLI, or WebUI | Inspect the relevant slice and its tests | [Architecture](references/architecture.md), [testing](references/testing.md) |
+| Find a command, configure, notify, or run a daemon | Read the matching command's help | [Command index](references/features.md) |
 
-- Keep WebUI non-operational. It may edit config and read user-selected local teaching bundles, but must not add input, screenshot, shell, daemon, process launch, or execution routes.
-- Prefer small platform slices: input, screenshot, notification, config, WebUI, and CLI wiring should remain separable.
-- For ambiguous automation or weak-model handoff, run or consult `kiseki modes --json` first. Keep current-session commands, background commands, and verification screenshots in the same mode family.
-- Use the integrated `kiseki background ...` command group for background-operation docs and tests. Older direct background command families are removed and should be treated as errors.
-- On Windows, use the Windows executable for live UI verification from WSL; WSL is only the orchestration shell.
-- Do not claim Linux support from WSL-only results. Linux screenshot/input must be tested on a real Linux graphical session when the user asks for Linux proof.
-- Do not overclaim game background input. It depends on whether the target accepts system window messages or public automation events.
-- Optional CUA Driver background operation should be invoked through `kiseki background cua ...`. Do not claim it is live unless `cua-driver` is installed, status/permissions are checked, and a real target action is verified on that platform/session.
-- Treat `kiseki input ...` and `kiseki screenshot ...` as current-session/non-background command families. Treat `kiseki background ...` as background, isolated-session, or target-routed command families.
-- On macOS, distinguish global/current-session `kiseki input ...` commands from target-routed CUA `kiseki background cua ...` commands. Do not describe the CUA overlay cursor as the real system pointer.
-- On macOS, when Screen Recording or Accessibility permission is missing or no prompt appears, run `kiseki permissions macos screen-recording --prompt --open-settings` or `kiseki permissions macos accessibility --prompt --open-settings` from the same GUI Terminal/app that will run Kiseki; SSH-launched binaries may not receive the same TCC grant.
-- On Windows, distinguish native selected-window/background screenshot support from optional CUA Driver support in the interactive desktop session.
-- On Linux, distinguish X11/XTest, Xvfb isolated desktop, Wayland XDG Desktop Portal screenshots, and optional CUA Driver support. Wayland portal is current-session screenshot support only; do not claim Wayland global input from it.
-- For drawing software work, read `references/drawing-apps.md` before acting. Do not draw until the target window, operation mode, canvas area, tool, visible color, and before-screenshot are established.
-- For screen teaching recordings, use `skills/kiseki-teach-recording/SKILL.md` and validate the produced bundle before claiming it is effective.
+Respect an established target, mode, timing, and authorization. Do not rerun the whole setup before each command or ask again for already authorized work. Resolve target ambiguity from discovery results; ask only when the user's choice is necessary, while continuing independent inspection.
 
-## Project Anchors
+## Find the current executable
 
-- Repo in WSL: `/mnt/f/輝色臻至/項目本體`
-- Repo in Windows: `F:\輝色臻至\項目本體`
-- Windows executable: `build/Debug/kiseki.exe`
-- Live-test artifacts: `artifacts/live-test/`
-- Windows IbInputSimulator source: `F:\輝色臻至\原始參考\IbInputSimulator`
-- CUA binary lookup: `$KISEKI_CUA_DRIVER`, `cua-driver` on `PATH`, Windows `%LOCALAPPDATA%\Programs\Cua\cua-driver\bin\cua-driver.exe`, macOS `/Applications/CuaDriver.app/Contents/MacOS/cua-driver`, or Linux `~/.local/bin/cua-driver`
-
-## Quick Verification
+From the repository root:
 
 ```bash
-"/mnt/c/Program Files/CMake/bin/cmake.exe" --build build
-"/mnt/c/Program Files/CMake/bin/ctest.exe" --test-dir build --output-on-failure
+python3 skills/kiseki-project/scripts/inspect_runtime.py --probe
 ```
 
-Before final claims, also run `git diff --check` after edits. For live Windows UI work, capture screenshots under `artifacts/live-test/` and report the paths.
+The helper reports the repository, executable, execution platform, version, mode matrix, and runtime capability JSON. It runs only `--version`, `modes --json`, and `capabilities`. `--exe <path>` selects an exact build without silently falling back. Without `--probe`, it only inspects paths/environment.
 
-For CUA work, verify `kiseki background cua status`, `launch`, `windows`, `state`, `screenshot`, and at least one action command on a real logged-in GUI session before claiming live support. For drawing changes, inspect a before/after screenshot from the same target window. Do not treat WSL as Linux CUA proof.
+Use the returned executable for subsequent commands. In Bash examples below and in references, `kiseki_exe` means that path, and `run_dir` means a fresh task artifact directory. Quote both. PowerShell users can invoke the same executable directly with PowerShell path syntax.
 
-## References
+- WSL defaults to the Windows `.exe` for Windows work. Native macOS/Linux work runs on those hosts with their binaries.
+- Use an existing appropriate build for operation. Build when missing, when testing source changes, or when version evidence shows the binary is stale; reading a bundle or editing skills does not require rebuilding C++.
+- Local machine paths, SSH keys, host IPs, and previous `/tmp` checkouts are not project defaults. Use available connection instructions for an authorized host; verify temporary paths before reuse.
 
-- Full feature map: `references/features.md`
-- Architecture and extension points: `references/architecture.md`
-- Build, unit tests, and live UI recipes: `references/testing.md`
-- Drawing app operation guide: `references/drawing-apps.md`
+## Operation loop
+
+1. **Observe:** discover current PID/window IDs; use structured UI data for controls and text, screenshots for pixels/canvas.
+2. **Bind:** retain host/session, target IDs, input backend, coordinate space, and matching screenshot family.
+3. **Act:** execute the next useful action or bounded sequence within the requested task. Keep requested timing and path detail.
+4. **Check:** inspect the expected state transition. A submitted input event is not proof that the application completed its response.
+5. **Continue or recover:** use the observed result to choose the next action. After a failed command, inspect current state before retrying a mutation that may already have happened.
+
+Use `input sequence` for mixed held-key/button actions, `input drag` for a path, and `macro validate` before executing a new sequence file. Read [native input](../../docs/native-input.md) for exact fields, timing, cleanup, physical key identities, wheel units, and screenshot transforms.
+
+## Mode invariants
+
+| Mode | Action family | Coordinates | Matching verification |
+| --- | --- | --- | --- |
+| Current GUI session | `input ...` | Screen/virtual-screen; macOS global points | `screenshot desktop` or `screenshot window` |
+| Selected window | `background window ...` | Target client area | `background window screenshot` |
+| Linux isolated display | `background desktop ...` | Chosen Xvfb display | `background desktop screenshot` |
+| Optional CUA target | `background cua ...` | Provider window-local coordinates for window-targeted actions | `background cua screenshot` or `state --output` |
+
+Keep the target, display, and coordinate transform attached to the observation. Window-local screenshot pixels are not automatically screen coordinates or client coordinates. A background request must retain its selected mode; do not silently move to current-session input to make an action work.
+
+`capabilities` describes runtime detection; an optional provider being found does not prove target delivery. For a new CUA workflow, run `background cua setup` once (installs a missing Driver, checks for updates daily, starts its native daemon), then check status and discover the target. `windows` and `launch` also prepare a new workflow. Keep actions/state within that workflow; do not run setup between a snapshot and its indexed action. See [CUA operation](references/cua.md) for session/snapshot identity, current tools, and update overrides. Launch an app or change permissions only when the task needs it. For native platform claims, use that platform's actual result, not a WSL substitute.
+
+## Completion
+
+Report the achieved application state or code change, the useful evidence, and any unresolved limitation in the tested scope. Keep logs/screenshots under the task's ignored artifacts directory. Release inputs and stop only processes/recorders/servers created for this task unless the user asked to keep them running. For code edits, run relevant checks and `git diff --check`; [testing](references/testing.md) distinguishes script, unit, and live validation.
