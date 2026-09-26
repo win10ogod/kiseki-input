@@ -8,6 +8,10 @@
 
 #include "core/config/config_store.hpp"
 
+#ifdef __APPLE__
+#include "platform/notification/mac_notification.hpp"
+#endif
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -35,7 +39,7 @@ OperationResult fail(std::string error) {
     };
 }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__)
 std::string shell_quote(const std::string& value) {
     std::string quoted = "'";
     for (char c : value) {
@@ -48,7 +52,7 @@ std::string shell_quote(const std::string& value) {
     quoted.push_back('\'');
     return quoted;
 }
-#else
+#elif defined(_WIN32)
 std::wstring utf8_to_utf16(const std::string& text) {
     if (text.empty()) {
         return {};
@@ -90,6 +94,8 @@ OperationResult notify_once(const std::string& message) {
         L"Kiseki Input",
         MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
     return ok("notification shown");
+#elif defined(__APPLE__)
+    return notify_once_macos(message);
 #else
     const std::string command = "notify-send " + shell_quote("Kiseki Input") + " " + shell_quote(message);
     const int code = std::system(command.c_str());
