@@ -81,7 +81,10 @@ if(WIN32)
     target_link_libraries(kiseki_platform PUBLIC user32 gdi32 d3d11.lib dxgi.lib uiautomationcore ole32 oleaut32)
 elseif(APPLE)
     enable_language(OBJCXX)
-    target_sources(kiseki_platform PRIVATE src/platform/capture/mac_capture.mm src/platform/input/mac_input.mm)
+    target_sources(kiseki_platform PRIVATE
+        src/platform/capture/mac_capture.mm
+        src/platform/input/mac_input.mm
+        src/platform/notification/mac_notification.mm)
     find_library(KISEKI_APPKIT_FRAMEWORK AppKit REQUIRED)
     find_library(KISEKI_APPLICATIONSERVICES_FRAMEWORK ApplicationServices REQUIRED)
     find_library(KISEKI_FOUNDATION_FRAMEWORK Foundation REQUIRED)
@@ -230,6 +233,9 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/platform/input_sequence_test.cpp
         test/platform/cua_test.cpp
     )
+    if(APPLE)
+        list(APPEND KISEKI_TEST_SOURCES test/platform/mac_notification_test.cpp)
+    endif()
 
     add_executable(kiseki_cua_stub test/platform/cua_stub.cpp)
     target_compile_features(kiseki_cua_stub PRIVATE cxx_std_20)
