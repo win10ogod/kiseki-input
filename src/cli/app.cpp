@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <sstream>
 #include <string>
@@ -1322,7 +1323,7 @@ Dependencies default_dependencies() {
                     if (!file) throw std::runtime_error("cannot read CUA argument file: " + options.arguments_file.string());
                     arguments = nlohmann::json::parse(file);
                 } else arguments = nlohmann::json::parse(options.json_arguments);
-                return print_operation_result(cua_call(options.tool, arguments, options.output_path), io);
+                return print_operation_result(options.default_session ? cua_session_call(options.tool, arguments, options.output_path) : cua_call(options.tool, arguments, options.output_path), io);
             } catch (const std::exception& error) { io.err << error.what() << '\n'; return 2; }
         },
         .mac_background_status =
@@ -1360,6 +1361,7 @@ Dependencies default_dependencies() {
                                                       .window_id = options.window_id,
                                                       .output_path = options.output_path,
                                                       .query = options.query,
+                                                      .provider_json = options.provider_json,
                                                   }),
                                               io);
             },
@@ -1390,6 +1392,7 @@ Dependencies default_dependencies() {
                         .has_xy = options.has_xy,
                         .button = options.button,
                         .modifiers = options.modifiers,
+                        .provider_json = options.provider_json,
                     }),
                     io);
             },
@@ -1406,6 +1409,7 @@ Dependencies default_dependencies() {
                         .snapshot_id = options.snapshot_id,
                         .element_token = options.element_token,
                         .delay_ms = options.delay_ms,
+                        .provider_json = options.provider_json,
                     }),
                     io);
             },
@@ -1422,6 +1426,7 @@ Dependencies default_dependencies() {
                         .snapshot_id = options.snapshot_id,
                         .element_token = options.element_token,
                         .modifiers = options.modifiers,
+                        .provider_json = options.provider_json,
                     }),
                     io);
             },
@@ -1433,6 +1438,7 @@ Dependencies default_dependencies() {
                         .keys = options.keys,
                         .window_id = options.window_id,
                         .has_window_id = options.has_window_id,
+                        .provider_json = options.provider_json,
                     }),
                     io);
             },
@@ -1451,6 +1457,7 @@ Dependencies default_dependencies() {
                         .steps = options.steps,
                         .button = options.button,
                         .modifiers = options.modifiers,
+                        .provider_json = options.provider_json,
                     }),
                     io);
             },
@@ -1475,6 +1482,7 @@ Dependencies default_dependencies() {
                             .max_segments = options.max_segments,
                             .button = options.button,
                             .modifiers = options.modifiers,
+                            .provider_json = options.provider_json,
                         }),
                         io);
                 } catch (const std::exception &error) {
@@ -2539,6 +2547,7 @@ int run(
     background_cua_windows_help->add_option("--pid", mac_background_windows_options.pid, "Restrict windows to a process id");
     background_cua_windows_help->add_flag("--on-screen-only", mac_background_windows_options.on_screen_only, "Drop off-screen, minimized, or off-Space windows");
     auto* background_cua_state_help = background_cua_alias->add_subcommand("state", "Read a Cua Driver window snapshot and optionally write a screenshot");
+    background_cua_state_help->add_option("--provider-json", mac_background_state_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_state_help->add_option("--pid", mac_background_state_options.pid, "Target process id")->required();
     background_cua_state_help->add_option("--window-id", mac_background_state_options.window_id, "Target Cua Driver window id")->required();
     background_cua_state_help->add_option("-o,--output", mac_background_state_options.output_path, "Optional screenshot output path");
@@ -2549,6 +2558,7 @@ int run(
     background_cua_screenshot_help->add_option("--format", mac_background_screenshot_options.format, "png or jpeg");
     background_cua_screenshot_help->add_option("--quality", mac_background_screenshot_options.quality, "JPEG quality 1-95");
     auto* background_cua_click_help = background_cua_alias->add_subcommand("click", "Click a Cua Driver target pid by element index or window-local pixels");
+    background_cua_click_help->add_option("--provider-json", mac_background_click_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_click_help->add_option("--pid", mac_background_click_options.pid, "Target process id")->required();
     background_cua_click_help->add_option("--window-id", mac_background_click_options.window_id, "Target Cua Driver window id");
     background_cua_click_help->add_option("--element-index", mac_background_click_options.element_index, "Element index from the last state call");
@@ -2559,6 +2569,7 @@ int run(
     background_cua_click_help->add_option("--button", mac_background_click_options.button, "left, right, or double");
     background_cua_click_help->add_option("--modifiers", mac_background_click_modifiers, "Comma or plus separated modifier keys");
     auto* background_cua_text_help = background_cua_alias->add_subcommand("text", "Type text into a Cua Driver target pid");
+    background_cua_text_help->add_option("--provider-json", mac_background_text_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_text_help->add_option("--pid", mac_background_text_options.pid, "Target process id")->required();
     background_cua_text_help->add_option("--text", mac_background_text_options.text, "Text to type");
     background_cua_text_help->add_option("--file", mac_background_text_options.text_file, "UTF-8 text file to type");
@@ -2568,6 +2579,7 @@ int run(
     background_cua_text_help->add_option("--element-token", mac_background_text_options.element_token, "Opaque element token from state");
     background_cua_text_help->add_option("--delay-ms", mac_background_text_options.delay_ms, "Character delay for CGEvent fallback");
     auto* background_cua_key_help = background_cua_alias->add_subcommand("key", "Press a key in a Cua Driver target pid");
+    background_cua_key_help->add_option("--provider-json", mac_background_key_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_key_help->add_option("--pid", mac_background_key_options.pid, "Target process id")->required();
     background_cua_key_help->add_option("--key", mac_background_key_options.key, "Key name")->required();
     background_cua_key_help->add_option("--window-id", mac_background_key_options.window_id, "Target Cua Driver window id");
@@ -2576,10 +2588,12 @@ int run(
     background_cua_key_help->add_option("--element-token", mac_background_key_options.element_token, "Opaque element token from state");
     background_cua_key_help->add_option("--modifiers", mac_background_key_modifiers, "Comma or plus separated modifier keys");
     auto* background_cua_hotkey_help = background_cua_alias->add_subcommand("hotkey", "Press a key combination in a Cua Driver target pid");
+    background_cua_hotkey_help->add_option("--provider-json", mac_background_hotkey_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_hotkey_help->add_option("--pid", mac_background_hotkey_options.pid, "Target process id")->required();
     background_cua_hotkey_help->add_option("--keys", mac_background_hotkey_keys, "Comma or plus separated key combo, such as cmd+c")->required();
     background_cua_hotkey_help->add_option("--window-id", mac_background_hotkey_options.window_id, "Target Cua Driver window id");
     auto* background_cua_drag_help = background_cua_alias->add_subcommand("drag", "Drag inside a Cua Driver target window");
+    background_cua_drag_help->add_option("--provider-json", mac_background_drag_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_drag_help->add_option("--pid", mac_background_drag_options.pid, "Target process id")->required();
     background_cua_drag_help->add_option("--window-id", mac_background_drag_options.window_id, "Target Cua Driver window id");
     background_cua_drag_help->add_option("--from-x", mac_background_drag_options.from_x, "Drag start X")->required();
@@ -2591,6 +2605,7 @@ int run(
     background_cua_drag_help->add_option("--button", mac_background_drag_options.button, "left, right, or middle");
     background_cua_drag_help->add_option("--modifiers", mac_background_drag_modifiers, "Comma or plus separated modifier keys");
     auto* background_cua_draw_help = background_cua_alias->add_subcommand("draw", "Draw a point path inside a Cua Driver target window");
+    background_cua_draw_help->add_option("--provider-json", mac_background_draw_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     background_cua_draw_help->add_option("--pid", mac_background_draw_options.pid, "Target process id")->required();
     background_cua_draw_help->add_option("--window-id", mac_background_draw_options.window_id, "Target Cua Driver window id")->required();
     background_cua_draw_help
@@ -2636,6 +2651,7 @@ int run(
     CuaControlOptions cua_describe_options{.operation = "describe"};
     CuaControlOptions cua_call_options{.operation = "call"};
     CuaControlOptions cua_driver_options{.operation = "driver"};
+    std::vector<std::unique_ptr<CuaControlOptions>> modern_cua_options;
     auto register_cua_controls = [&](CLI::App* parent) {
         auto bind = [&](CLI::App* command, CuaControlOptions& options) {
             command->callback([&, option_ptr = &options]() {
@@ -2663,6 +2679,46 @@ int run(
         auto* driver = parent->add_subcommand("driver", "Pass arguments to cua-driver, e.g. driver -- channel status --json");
         driver->add_option("arguments", cua_driver_options.driver_arguments)->required()->expected(-1);
         bind(driver, cua_driver_options);
+        auto modern_tool = [&](CLI::App* group, const std::string& verb, const std::string& tool, bool named_session) {
+            auto options = std::make_unique<CuaControlOptions>();
+            options->operation = "call"; options->tool = tool; options->default_session = named_session;
+            auto* command = group->add_subcommand(verb, "Native CUA " + tool + "; accepts its complete JSON schema");
+            auto* json_option = command->add_option("--json", options->json_arguments, "Full provider JSON arguments");
+            command->add_option("--file", options->arguments_file, "UTF-8 JSON argument file")->excludes(json_option);
+            command->add_option("--output", options->output_path, "Save first returned image");
+            bind(command, *options);
+            modern_cua_options.push_back(std::move(options));
+        };
+        auto* browser = parent->add_subcommand("browser", "Exactly-bound browser targets, semantic snapshots and actions");
+        browser->require_subcommand(1);
+        for (const auto& [verb, tool] : std::vector<std::pair<std::string, std::string>>{
+            {"state", "get_browser_state"}, {"prepare", "browser_prepare"}, {"navigate", "browser_navigate"},
+            {"click", "browser_click"}, {"type", "browser_type"}, {"dialog", "browser_dialog"},
+            {"upload", "browser_set_input_files"}, {"download", "browser_download"}, {"pointer", "browser_pointer"}})
+            modern_tool(browser, verb, tool, true);
+        auto* sessions = parent->add_subcommand("session", "Named CUA session lifecycle and state");
+        sessions->require_subcommand(1);
+        for (const auto& [verb, tool] : std::vector<std::pair<std::string, std::string>>{
+            {"start", "start_session"}, {"get", "get_session"}, {"state", "get_session_state"},
+            {"list", "list_sessions"}, {"end", "end_session"}})
+            modern_tool(sessions, verb, tool, verb != "list");
+        modern_tool(parent, "visual-regions", "parse_visual_regions", true);
+        modern_tool(parent, "theme", "set_agent_cursor_theme", true);
+        for (const auto* family : {"recording", "extension", "cursor-theme", "manifest", "doctor"}) {
+            auto options = std::make_unique<CuaControlOptions>();
+            options->operation = "driver";
+            auto* command = parent->add_subcommand(family, "Forward native CUA CLI arguments; place flags after --");
+            command->add_option("arguments", options->driver_arguments)->expected(-1);
+            auto* selected = options.get();
+            command->callback([&, selected, family]() {
+                if (!dependencies.cua_control) { io.err << "CUA control backend is not configured\n"; exit_code = 2; return; }
+                auto request = *selected;
+                request.driver_arguments.insert(request.driver_arguments.begin(), family);
+                exit_code = dependencies.cua_control(request, io);
+            });
+            modern_cua_options.push_back(std::move(options));
+        }
+
     };
     register_cua_controls(background_cua_alias);
     register_cua_controls(mac_background);
@@ -2713,6 +2769,7 @@ int run(
     });
 
     auto* mac_background_state = mac_background->add_subcommand("state", "Read a Cua Driver window snapshot and optionally write a screenshot");
+    mac_background_state->add_option("--provider-json", mac_background_state_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_state->add_option("--pid", mac_background_state_options.pid, "Target process id")->required();
     mac_background_state->add_option("--window-id", mac_background_state_options.window_id, "Target Cua Driver window id")->required();
     mac_background_state->add_option("-o,--output", mac_background_state_options.output_path, "Optional screenshot output path");
@@ -2741,6 +2798,7 @@ int run(
     });
 
     auto* mac_background_click = mac_background->add_subcommand("click", "Click a Cua Driver target pid by element index or window-local pixels");
+    mac_background_click->add_option("--provider-json", mac_background_click_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_click->add_option("--pid", mac_background_click_options.pid, "Target process id")->required();
     auto* mac_background_click_window_id = mac_background_click->add_option("--window-id", mac_background_click_options.window_id, "Target Cua Driver window id");
     auto* mac_background_click_element = mac_background_click->add_option("--element-index", mac_background_click_options.element_index, "Element index from the last state call");
@@ -2781,6 +2839,7 @@ int run(
     });
 
     auto* mac_background_text = mac_background->add_subcommand("text", "Type text into a Cua Driver target pid");
+    mac_background_text->add_option("--provider-json", mac_background_text_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_text->add_option("--pid", mac_background_text_options.pid, "Target process id")->required();
     mac_background_text->add_option("--text", mac_background_text_options.text, "Text to type");
     mac_background_text->add_option("--file", mac_background_text_options.text_file, "UTF-8 text file to type");
@@ -2820,6 +2879,7 @@ int run(
     });
 
     auto* mac_background_key = mac_background->add_subcommand("key", "Press a key in a Cua Driver target pid");
+    mac_background_key->add_option("--provider-json", mac_background_key_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_key->add_option("--pid", mac_background_key_options.pid, "Target process id")->required();
     mac_background_key->add_option("--key", mac_background_key_options.key, "Key name")->required();
     auto* mac_background_key_window_id = mac_background_key->add_option("--window-id", mac_background_key_options.window_id, "Target Cua Driver window id");
@@ -2845,6 +2905,7 @@ int run(
     });
 
     auto* mac_background_hotkey = mac_background->add_subcommand("hotkey", "Press a key combination in a Cua Driver target pid");
+    mac_background_hotkey->add_option("--provider-json", mac_background_hotkey_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_hotkey->add_option("--pid", mac_background_hotkey_options.pid, "Target process id")->required();
     mac_background_hotkey->add_option("--keys", mac_background_hotkey_keys, "Comma or plus separated key combo, such as cmd+c")->required();
     auto* mac_background_hotkey_window_id = mac_background_hotkey->add_option("--window-id", mac_background_hotkey_options.window_id, "Target Cua Driver window id");
@@ -2865,6 +2926,7 @@ int run(
     });
 
     auto* mac_background_drag = mac_background->add_subcommand("drag", "Drag inside a Cua Driver target window");
+    mac_background_drag->add_option("--provider-json", mac_background_drag_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_drag->add_option("--pid", mac_background_drag_options.pid, "Target process id")->required();
     auto* mac_background_drag_window_id = mac_background_drag->add_option("--window-id", mac_background_drag_options.window_id, "Target Cua Driver window id");
     mac_background_drag->add_option("--from-x", mac_background_drag_options.from_x, "Drag start X")->required();
@@ -2887,6 +2949,7 @@ int run(
     });
 
     auto* mac_background_draw = mac_background->add_subcommand("draw", "Draw a point path inside a Cua Driver target window");
+    mac_background_draw->add_option("--provider-json", mac_background_draw_options.provider_json, "Additional provider JSON fields; explicit target/action fields cannot be overwritten");
     mac_background_draw->add_option("--pid", mac_background_draw_options.pid, "Target process id")->required();
     mac_background_draw->add_option("--window-id", mac_background_draw_options.window_id, "Target Cua Driver window id")->required();
     mac_background_draw

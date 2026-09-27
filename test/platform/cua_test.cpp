@@ -225,3 +225,65 @@ TEST_CASE("CUA validates JSON and CLI screenshot outputs before replacing either
     REQUIRE(content == "new CLI screenshot");
     REQUIRE(cua_call("get_window_state", arguments, json_path).ok);
 }
+
+TEST_CASE("CUA 0.30 action refusals fail across plain and structured envelopes") {
+    Fixture fixture;
+    for (const auto& payload : std::vector<json>{
+        {{"effect", "refused"}, {"code", "capture_not_found"}, {"detail", "expired capture"}},
+        {{"structuredContent", {{"effect", "refused"}, {"code", "background_unavailable"}}}},
+        {{"structured_content", {{"ok", false}}}}
+    }) {
+        fixture.config({{"stdout", payload.dump()}});
+        const auto result = cua_call("click", {{"capture_id", "capture-1"}});
+        REQUIRE_FALSE(result.ok);
+        REQUIRE(result.error.find(payload.dump()) != std::string::npos);
+    }
+    for (const auto* effect : {"confirmed", "submitted", "unverifiable"}) {
+        const json payload{{"effect", effect}, {"detail", "retained"}};
+        fixture.config({{"stdout", payload.dump()}});
+        const auto result = cua_call("click", json::object());
+        REQUIRE(result.ok);
+        REQUIRE(json::parse(result.message) == payload);
+    }
+}
+
+TEST_CASE("CUA provider options preserve capture delivery and observation controls") {
+    Fixture fixture;
+    MacCuaClickOptions click;
+    click.pid = 42; click.has_window_id = true; click.window_id = 123;
+    click.has_xy = true; click.x = 12.5; click.y = 31.75;
+    click.provider_json = R"({"capture_id":"capture-1","delivery_mode":"background","future_field":{"keep":[1,2,3]}})";
+    auto result = macos_cua_click(click);
+    REQUIRE(result.ok);
+    auto sent = json::parse(result.message);
+    REQUIRE(sent["capture_id"] == "capture-1");
+    REQUIRE(sent["delivery_mode"] == "background");
+    REQUIRE(sent["future_field"]["keep"] == json::array({1,2,3}));
+    REQUIRE(sent["x"] == 12.5);
+    MacCuaWindowStateOptions state{.pid = 42, .window_id = 123};
+    state.provider_json = R"({"include_screenshot":false,"max_image_dimension":0,"max_elements":900000,"timeout_ms":120000})";
+    result = macos_cua_window_state(state);
+    REQUIRE(result.ok);
+    sent = json::parse(result.message);
+    REQUIRE(sent["max_image_dimension"] == 0);
+    REQUIRE(sent["max_elements"] == 900000);
+    REQUIRE(sent["timeout_ms"] == 120000);
+    REQUIRE(sent["include_screenshot"] == false);
+    const auto count = fixture.calls().size();
+    click.provider_json = R"({"pid":999})";
+    REQUIRE_FALSE(macos_cua_click(click).ok);
+    click.provider_json = "[]";
+    REQUIRE_FALSE(macos_cua_click(click).ok);
+    REQUIRE(fixture.calls().size() == count);
+}
+
+TEST_CASE("CUA named convenience calls retain explicit session and semantic snapshot fields") {
+    Fixture fixture;
+    const json request{{"target_id","bt-target"},{"tab_id","tab-1"},{"snapshot_format","semantic_v2"},{"continuation","bc-next"}};
+    const auto sent = json::parse(cua_session_call("get_browser_state", request).message);
+    REQUIRE(sent["session"] == "precision session");
+    REQUIRE(sent["snapshot_format"] == "semantic_v2");
+    REQUIRE(sent["continuation"] == "bc-next");
+    REQUIRE(json::parse(cua_session_call("get_browser_state", {{"session","explicit"}}).message)["session"] == "explicit");
+    REQUIRE_FALSE(json::parse(cua_call("parse_visual_regions", {{"capture_id","cap-1"}}).message).contains("session"));
+}

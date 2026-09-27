@@ -159,6 +159,25 @@ struct CaptureOutput {
     }
 };
 
+bool refused_result(const nlohmann::json& value) {
+    if (!value.is_object()) return false;
+    for (const auto* field : {"status", "effect"}) {
+        if (value.contains(field) && value[field].is_string()) {
+            const auto result = value[field].get<std::string>();
+            if (result == "refused" || result == "failed" || result == "error") return true;
+        }
+    }
+    if ((value.contains("isError") && value["isError"] == true) ||
+        (value.contains("is_error") && value["is_error"] == true) ||
+        (value.contains("ok") && value["ok"] == false) ||
+        (value.contains("refusal") && !value["refusal"].is_null())) return true;
+    if (value.contains("code") && value["code"].is_string() && value.contains("detail") && !value.contains("effect")) return true;
+    // Driver transports may wrap the same ActionResult in structuredContent.
+    for (const auto* field : {"structuredContent", "structured_content"})
+        if (value.contains(field) && refused_result(value[field])) return true;
+    return false;
+}
+
 OperationResult run_cua_tool(
     const std::string& tool,
     const nlohmann::json& arguments,
@@ -185,17 +204,7 @@ OperationResult run_cua_tool(
         auto result = detail::run_process(command, tool_arguments.dump());
         if (result.code != 0) return fail(result.error + result.output, result.code);
         const auto payload = nlohmann::json::parse(result.output, nullptr, false);
-        if (payload.is_object()) {
-            const auto status = payload.contains("status") && payload["status"].is_string() ? payload["status"].get<std::string>() : "";
-            if (status == "refused" || status == "failed" || status == "error" ||
-                (payload.contains("refusal") && !payload["refusal"].is_null()) ||
-                (payload.contains("isError") && payload["isError"] == true) ||
-                (payload.contains("is_error") && payload["is_error"] == true) ||
-                (payload.contains("code") && payload["code"].is_string() && payload.contains("detail") && !payload.contains("effect")) ||
-                (payload.contains("ok") && payload["ok"] == false)) {
-                return fail(result.error + result.output);
-            }
-        }
+        if (refused_result(payload)) return fail(result.error + result.output);
         if (!captures.empty()) {
             // Validate every requested output before replacing any prior file.
             for (const auto& capture : captures) capture->validate();
@@ -207,6 +216,18 @@ OperationResult run_cua_tool(
             }
         }
         return OperationResult{.ok = true, .code = 0, .message = result.output, .error = result.error};
+    } catch (const std::exception& error) { return fail(error.what()); }
+}
+
+OperationResult run_cua_with_options(const std::string& tool, nlohmann::json arguments, const std::string& provider_json) {
+    try {
+        const auto extra = nlohmann::json::parse(provider_json);
+        if (!extra.is_object()) return fail("--provider-json must be a JSON object");
+        for (const auto& [key, value] : extra.items()) {
+            if (arguments.contains(key)) return fail("--provider-json conflicts with explicit field: " + key);
+            arguments[key] = value;
+        }
+        return run_cua_tool(tool, arguments);
     } catch (const std::exception& error) { return fail(error.what()); }
 }
 
@@ -303,6 +324,12 @@ OperationResult cua_call(const std::string& tool, const nlohmann::json& argument
     return run_cua_tool(tool, arguments, output);
 }
 
+OperationResult cua_session_call(const std::string& tool, nlohmann::json arguments, const std::filesystem::path& output) {
+    if (!arguments.is_object()) return fail("CUA arguments must be a JSON object");
+    if (!arguments.contains("session")) add_session_if_configured(arguments);
+    return run_cua_tool(tool, arguments, output);
+}
+
 bool cua_background_available() {
     return !cua_driver_binary().empty();
 }
@@ -375,7 +402,7 @@ OperationResult macos_cua_window_state(const MacCuaWindowStateOptions& options) 
     if (!options.output_path.empty()) {
         arguments["screenshot_out_file"] = detail::path_text(std::filesystem::absolute(options.output_path));
     }
-    return run_cua_tool("get_window_state", arguments);
+    return run_cua_with_options("get_window_state", arguments, options.provider_json);
 }
 
 OperationResult macos_cua_screenshot(const MacCuaScreenshotOptions& options) {
@@ -433,13 +460,13 @@ OperationResult macos_cua_click(const MacCuaClickOptions& options) {
 
     const std::string button = options.button.empty() ? "left" : options.button;
     if (button == "left") {
-        return run_cua_tool("click", arguments);
+        return run_cua_with_options("click", arguments, options.provider_json);
     }
     if (button == "double") {
-        return run_cua_tool("double_click", arguments);
+        return run_cua_with_options("double_click", arguments, options.provider_json);
     }
     if (button == "right") {
-        return run_cua_tool("right_click", arguments);
+        return run_cua_with_options("right_click", arguments, options.provider_json);
     }
     return fail("background cua click --button must be left, right, or double");
 }
@@ -461,7 +488,7 @@ OperationResult macos_cua_type_text(const MacCuaTextOptions& options) {
     add_element_index(arguments, options.element_index, options.has_element_index);
     if (!options.snapshot_id.empty()) arguments["snapshot_id"] = options.snapshot_id;
     if (!options.element_token.empty()) arguments["element_token"] = options.element_token;
-    return run_cua_tool("type_text", arguments);
+    return run_cua_with_options("type_text", arguments, options.provider_json);
 }
 
 OperationResult macos_cua_press_key(const MacCuaKeyOptions& options) {
@@ -483,7 +510,7 @@ OperationResult macos_cua_press_key(const MacCuaKeyOptions& options) {
     if (!options.modifiers.empty()) {
         arguments["modifiers"] = options.modifiers;
     }
-    return run_cua_tool("press_key", arguments);
+    return run_cua_with_options("press_key", arguments, options.provider_json);
 }
 
 OperationResult macos_cua_hotkey(const MacCuaHotkeyOptions& options) {
@@ -496,7 +523,7 @@ OperationResult macos_cua_hotkey(const MacCuaHotkeyOptions& options) {
     };
     add_session_if_configured(arguments);
     add_window_id(arguments, options.window_id, options.has_window_id);
-    return run_cua_tool("hotkey", arguments);
+    return run_cua_with_options("hotkey", arguments, options.provider_json);
 }
 
 OperationResult macos_cua_drag(const MacCuaDragOptions& options) {
@@ -516,7 +543,7 @@ OperationResult macos_cua_drag(const MacCuaDragOptions& options) {
     add_session_if_configured(arguments);
     add_window_id(arguments, options.window_id, options.has_window_id);
     add_modifiers(arguments, options.modifiers);
-    return run_cua_tool("drag", arguments);
+    return run_cua_with_options("drag", arguments, options.provider_json);
 }
 
 OperationResult macos_cua_draw(const MacCuaDrawOptions& options) {
@@ -563,7 +590,7 @@ OperationResult macos_cua_draw(const MacCuaDrawOptions& options) {
         add_session_if_configured(arguments);
         add_modifiers(arguments, options.modifiers);
 
-        const auto result = run_cua_tool("drag", arguments);
+        const auto result = run_cua_with_options("drag", arguments, options.provider_json);
         if (!result.ok) {
             return fail(
                 "background cua draw segment " + std::to_string(index) + " failed: " + result.error,

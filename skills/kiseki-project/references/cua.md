@@ -1,6 +1,6 @@
 # CUA operation
 
-Begin a new CUA workflow with `background cua setup`. It installs a missing native Driver and updates the selected channel at most once per day. `windows` and `launch` also prepare a workflow; `status` only checks readiness. Do not insert setup/discovery between a snapshot and its indexed action. Read [CUA integration](../../../docs/cua.md) for exact update controls and service ownership.
+Begin a new CUA workflow with `background cua setup`. It installs a missing native Driver and checks and applies selected-channel updates at each workflow start. `windows` and `launch` also prepare a workflow; `status` only checks readiness. Do not insert setup/discovery between a snapshot and its indexed action. Read [CUA integration](../../../docs/cua.md) for update controls, Driver 0.30.1 feature families and service ownership.
 
 1. Set `KISEKI_CUA_SESSION` to a task-specific name for concurrent or repeated work. Convenience state/action/feedback commands use that name (default `kiseki`).
 2. Call `start_session` with the same explicit JSON `session` if starting/reviving that named lifecycle. Arbitrary raw calls require their own supported session argument.
@@ -15,3 +15,5 @@ Use `background cua tools` and `describe TOOL` to learn the installed provider. 
 PNG screenshots use the current `get_window_state` capture route. JPEG and old custom-style commands depend on legacy provider tools and report their real errors if absent. Current visual feedback uses `session`; cursor themes use `set_agent_cursor_theme`. A style-dependent preset checks compatibility before sending changes.
 
 When setup reports a warning, keep it in the result. An offline update can leave the installed version usable; first-time installation failure needs its exact installer error. macOS permissions belong to CuaDriver.app; Windows/Linux need the target graphical session. A custom `KISEKI_CUA_DRIVER`, version pin or `KISEKI_CUA_SOCKET` stays under its owner's control.
+
+Current feature entries: `browser state` accepts `snapshot_format: "semantic_v2"` and full continuation/scope fields; `visual-regions` takes a retained capture ID; `theme` selects an installed theme. All accept `--json` or `--file`. Convenience observation/input commands accept `--provider-json` for additional native fields. Keep `capture_id` separate from `snapshot_id`, preserve delivery mode, and inspect ActionResult effects. Driver recording and extension management are available through their named families with native arguments after `--`.

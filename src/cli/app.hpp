@@ -207,6 +207,7 @@ struct CuaControlOptions {
     bool apply = false;
     bool no_update = false;
     int startup_wait_ms = 30000;
+    bool default_session = false;
 };
 
 struct MacBackgroundStatusOptions {
@@ -233,6 +234,7 @@ struct MacBackgroundStateOptions {
     std::uint64_t window_id;
     std::filesystem::path output_path;
     std::string query;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundScreenshotOptions {
@@ -255,6 +257,7 @@ struct MacBackgroundClickOptions {
     bool has_xy;
     std::string button;
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundTextOptions {
@@ -268,6 +271,7 @@ struct MacBackgroundTextOptions {
     std::string snapshot_id;
     std::string element_token;
     int delay_ms;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundKeyOptions {
@@ -280,6 +284,7 @@ struct MacBackgroundKeyOptions {
     std::string snapshot_id;
     std::string element_token;
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundHotkeyOptions {
@@ -287,6 +292,7 @@ struct MacBackgroundHotkeyOptions {
     std::vector<std::string> keys;
     std::uint64_t window_id;
     bool has_window_id;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundDragOptions {
@@ -301,6 +307,7 @@ struct MacBackgroundDragOptions {
     int steps;
     std::string button;
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundDrawOptions {
@@ -313,6 +320,7 @@ struct MacBackgroundDrawOptions {
     int max_segments;
     std::string button;
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacBackgroundFeedbackStatusOptions {};
