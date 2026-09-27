@@ -74,6 +74,50 @@ End the task's session when finished:
 kiseki background cua call end_session --json '{"session":"kiseki-editing-example"}'
 ```
 
+## Cua Driver 0.30.1 features
+
+The current integration is checked against Driver 0.30.1. Read `tools` and `describe` from the installed build: optional extensions and backend-specific tools report their own availability.
+
+### Browser semantic snapshots
+
+The `browser` family exposes `state`, `prepare`, `navigate`, `click`, `type`, `dialog`, `upload`, `download`, and `pointer`. Each accepts the provider's full `--json` or `--file` request and optional `--output` image destination. These commands use `KISEKI_CUA_SESSION` when the request omits `session`; an explicit session is preserved.
+
+```sh
+kiseki background cua session start
+kiseki background cua browser state --json '{"pid":123,"window_id":456}'
+kiseki background cua browser state --json '{"target_id":"RETURNED_TARGET","tab_id":"RETURNED_TAB","snapshot_format":"semantic_v2"}'
+```
+
+First bind the exact native browser window, then use its returned target and tab IDs. `semantic_v2` supplies an outline, typed action refs, content refs, visibility and continuation. Preserve `continuation`, `query` and `scope_ref` as returned/required by the current schema; a partial snapshot is not evidence that omitted controls are absent. Browser preparation is an explicit operation and is not automatically performed by state inspection.
+
+### Current observation and action fields
+
+Convenience `state`, `click`, `text`, `key`, `hotkey`, `drag`, and `draw` accept `--provider-json` for additional native fields without waiting for new CLI flags. Conflicts with fields already set by the convenience command are rejected before dispatch; use `call` when the complete request needs a different shape.
+
+```sh
+kiseki background cua state --pid 123 --window-id 456 --provider-json '{"max_image_dimension":0,"timeout_ms":5000}' --output native.png
+kiseki background cua click --pid 123 --window-id 456 --x 20 --y 30 --provider-json '{"delivery_mode":"background","capture_id":"CURRENT_CAPTURE"}'
+```
+
+`capture_id` identifies retained image evidence and is separate from accessibility `snapshot_id`. Keep the same daemon endpoint and named session through capture, action and verification. A refused capture-bound action must not be retried after stripping its capture ID. Native `effect: refused` results, including structured result envelopes, produce a nonzero Kiseki exit code. `submitted` and `unverifiable` remain visible as those exact effects; they are not relabeled as confirmed.
+
+### Visual regions, themes, recording and extensions
+
+```sh
+kiseki background cua theme --json '{"theme_id":"cua.default"}'
+kiseki background cua visual-regions --json '{"capture_id":"CURRENT_CAPTURE","options":{"kinds":["text","icon"]}}'
+kiseki background cua extension -- list --json
+kiseki background cua recording -- status
+kiseki background cua recording -- start trajectory-directory
+kiseki background cua recording -- stop
+kiseki background cua recording -- render trajectory-directory trajectory.mp4
+kiseki background cua session end
+```
+
+`visual-regions` passes the capture-bound `parse_visual_regions` request with the same named session as capture. Driver accepts this lifecycle metadata outside the perception tool's portable input schema; omitting it on a one-shot CLI call would select a disposable session that cannot own the earlier capture. The optional perception extension is still a separately installed preview; this bridge neither installs it implicitly nor replaces its `not_installed` or capture-validity result. Its local-file parse path remains reachable through `driver -- perception parse ...`. New CLI families `recording`, `extension`, `cursor-theme`, `manifest`, and `doctor` forward all arguments after `--` to the native driver. Driver trajectories record agent operations and are distinct from Kiseki's human demonstration `teach record` bundles.
+
+The session family also provides `get`, `state`, and `list`. Legacy `feedback style` behavior remains available for older providers; use `theme` for current installed theme selection.
+
 ## Updating and service ownership
 
 `background cua update` forces a read-only current-channel check. Add `--apply` to install an available update. Run setup before a new observation/action workflow afterward. A daemon previously started by Kiseki is restarted when its recorded binary version changes. For a daemon launched separately with custom flags, retain those flags when restarting it; Kiseki does not reconstruct or silently replace an external launch configuration. Provider/package-manager installation errors remain visible.

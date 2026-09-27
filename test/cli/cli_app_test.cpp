@@ -2122,3 +2122,39 @@ TEST_CASE("macro rejects unknown fields invalid values and malformed path timing
         REQUIRE(run_cli({"macro", "validate", "--file", path.string()}, temp.file("config.json")).code == 2);
     }
 }
+
+TEST_CASE("CUA modern feature families preserve provider requests and CLI argument arrays") {
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    std::vector<kiseki::cli::CuaControlOptions> calls;
+    dependencies.cua_control = [&](const kiseki::cli::CuaControlOptions& value, kiseki::cli::Io) { calls.push_back(value); return 0; };
+    const auto run = [&](std::vector<std::string> args) { return kiseki::cli::run(args, "unused-cua.json", {out,err}, dependencies); };
+    REQUIRE(run({"background","cua","browser","state","--json",R"({"snapshot_format":"semantic_v2","continuation":"bc-next"})"}) == 0);
+    REQUIRE(calls.back().tool == "get_browser_state");
+    REQUIRE(calls.back().default_session);
+    REQUIRE(nlohmann::json::parse(calls.back().json_arguments)["continuation"] == "bc-next");
+    REQUIRE(run({"background","cua","visual-regions","--json",R"({"capture_id":"capture-1"})"}) == 0);
+    REQUIRE(calls.back().tool == "parse_visual_regions");
+    REQUIRE(calls.back().default_session);
+    REQUIRE(run({"background","cua","theme","--json",R"({"theme_id":"cua.default"})"}) == 0);
+    REQUIRE(calls.back().tool == "set_agent_cursor_theme");
+    REQUIRE(run({"background","cua","session","start"}) == 0);
+    REQUIRE(calls.back().tool == "start_session");
+    REQUIRE(run({"background","cua","recording","--","render","path with spaces","out.mp4","--no-zoom"}) == 0);
+    REQUIRE(calls.back().driver_arguments == std::vector<std::string>{"recording","render","path with spaces","out.mp4","--no-zoom"});
+    REQUIRE(run({"background","cua","extension","--","list","--json"}) == 0);
+    REQUIRE(calls.back().driver_arguments == std::vector<std::string>{"extension","list","--json"});
+}
+
+TEST_CASE("CUA convenience CLI retains new provider JSON without losing existing identity") {
+    std::ostringstream out,err;
+    kiseki::cli::Dependencies dependencies;
+    dependencies.mac_background_click = [&](const kiseki::cli::MacBackgroundClickOptions& value, kiseki::cli::Io) {
+        REQUIRE(value.pid == 42);
+        REQUIRE(value.has_xy);
+        REQUIRE(nlohmann::json::parse(value.provider_json)["capture_id"] == "cap-1");
+        return 0;
+    };
+    REQUIRE(kiseki::cli::run({"background","cua","click","--pid","42","--x","1","--y","2","--provider-json",R"({"capture_id":"cap-1","delivery_mode":"background"})"},
+        "unused-cua.json", {out,err}, dependencies) == 0);
+}

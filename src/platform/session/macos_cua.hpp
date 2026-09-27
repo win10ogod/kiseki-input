@@ -29,6 +29,7 @@ struct MacCuaWindowStateOptions {
     std::uint64_t window_id = 0;
     std::filesystem::path output_path;
     std::string query;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaScreenshotOptions {
@@ -51,6 +52,7 @@ struct MacCuaClickOptions {
     bool has_xy = false;
     std::string button = "left";
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaTextOptions {
@@ -63,6 +65,7 @@ struct MacCuaTextOptions {
     std::string snapshot_id;
     std::string element_token;
     int delay_ms = 30;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaKeyOptions {
@@ -75,6 +78,7 @@ struct MacCuaKeyOptions {
     std::string snapshot_id;
     std::string element_token;
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaHotkeyOptions {
@@ -82,6 +86,7 @@ struct MacCuaHotkeyOptions {
     std::vector<std::string> keys;
     std::uint64_t window_id = 0;
     bool has_window_id = false;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaDragOptions {
@@ -96,6 +101,7 @@ struct MacCuaDragOptions {
     int steps = 20;
     std::string button = "left";
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaPoint {
@@ -113,6 +119,7 @@ struct MacCuaDrawOptions {
     int max_segments = 96;
     std::string button = "left";
     std::vector<std::string> modifiers;
+    std::string provider_json = "{}";
 };
 
 struct MacCuaFeedbackEnableOptions {
