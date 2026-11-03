@@ -1,5 +1,7 @@
 # Kiseki Input
 
+English · [简体中文](README.zh-CN.md)
+
 Kiseki Input is a native C++ CLI for local desktop automation: keyboard and mouse input, system screenshots, replayable JSON macros, Agivar-style teaching recordings, burst capture, heartbeat notifications, and a configuration-first WebUI in one small tool.
 
 It is built for developers who want a practical automation lab instead of a pile of one-off scripts. The project is CLI-first, keeps each backend slice separate, and reports platform limits explicitly instead of pretending every desktop, game, or compositor behaves the same way.
