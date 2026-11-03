@@ -119,6 +119,16 @@ kiseki background cua click --pid 123 --window-id 456 --x 20 --y 30 --provider-j
 
 `capture_id` identifies retained image evidence and is separate from accessibility `snapshot_id`. Keep the same daemon endpoint and named session through capture, action and verification. A refused capture-bound action must not be retried after stripping its capture ID. Native `effect: refused` results, including structured result envelopes, produce a nonzero Kiseki exit code. `submitted` and `unverifiable` remain visible as those exact effects; they are not relabeled as confirmed.
 
+An answer that is only a short code saying the action could not be delivered (`{"code":"background_unavailable"}`, or another code ending in `_unavailable`, `_refused`, `_denied` or `_failed`, with no `effect`) is also a refusal: nothing was done, and Kiseki exits nonzero (`draw` stops at the first such segment and names it). Seen on Cua Driver 0.28.1 with Krita 5.3.1 on macOS 26: a `drag` into the canvas in background mode answers `background_unavailable`, and a Qt dialog's `state` is degraded (`ax_window_unresolved`, no elements) with background input refused. Such targets can be driven in foreground mode, which uses global input: it moves the real pointer and needs the target in front.
+
+```sh
+kiseki background cua call bring_to_front --json '{"pid":123,"window_id":456}'
+kiseki background cua drag --pid 123 --window-id 456 --from-x 400 --from-y 300 --to-x 800 --to-y 500 --provider-json '{"delivery_mode":"foreground"}'
+kiseki background cua draw --pid 123 --window-id 456 --file circle.txt --provider-json '{"delivery_mode":"foreground"}'
+```
+
+In foreground mode the driver cannot read the effect back (`effect: unverifiable`); take a new `state` picture to see what happened.
+
 ### Visual regions, themes, recording and extensions
 
 ```sh

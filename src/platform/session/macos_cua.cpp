@@ -172,6 +172,14 @@ bool refused_result(const nlohmann::json& value) {
         (value.contains("ok") && value["ok"] == false) ||
         (value.contains("refusal") && !value["refusal"].is_null())) return true;
     if (value.contains("code") && value["code"].is_string() && value.contains("detail") && !value.contains("effect")) return true;
+    // A short answer that is only a code saying the action could not be delivered. Found on Cua Driver 0.28.1: a drag into a Qt canvas in background
+    // mode answers {"code":"background_unavailable"} and nothing else, and nothing was done. Codes that name what happened
+    // ("bring_to_front_exact_window_verified") and long answers (a window's state) are not refusals.
+    if (value.contains("code") && value["code"].is_string() && !value.contains("effect") && value.size() <= 4) {
+        const auto code = value["code"].get<std::string>();
+        for (const auto* suffix : {"_unavailable", "_refused", "_denied", "_failed"})
+            if (code.ends_with(suffix)) return true;
+    }
     // Driver transports may wrap the same ActionResult in structuredContent.
     for (const auto* field : {"structuredContent", "structured_content"})
         if (value.contains(field) && refused_result(value[field])) return true;
