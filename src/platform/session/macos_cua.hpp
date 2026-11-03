@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "platform/result.hpp"
 
 namespace kiseki::platform::session {
@@ -17,6 +19,11 @@ struct MacCuaLaunchOptions {
     std::vector<std::string> additional_arguments;
     std::string launch_path;
 };
+
+// The arguments for the provider's launch_app. Driver 0.38 accepts an absolute .app path in `name` on macOS (list_apps reports it as
+// `launch_path`), so a --launch-path that names a .app bundle goes there when MACOS_APP_PATHS is set and no --name was given; any other path
+// stays `launch_path` (native Windows/Linux launch paths). The function is pure so both targets are tested on any host.
+nlohmann::json cua_launch_arguments(const MacCuaLaunchOptions& options, bool macos_app_paths);
 
 struct MacCuaWindowListOptions {
     int pid = 0;

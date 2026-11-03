@@ -231,7 +231,10 @@ TEST_CASE("CUA 0.30 action refusals fail across plain and structured envelopes")
     for (const auto& payload : std::vector<json>{
         {{"effect", "refused"}, {"code", "capture_not_found"}, {"detail", "expired capture"}},
         {{"structuredContent", {{"effect", "refused"}, {"code", "background_unavailable"}}}},
-        {{"structured_content", {{"ok", false}}}}
+        {{"structured_content", {{"ok", false}}}},
+        // Cua Driver 0.28.1 answers a background drag into a Qt canvas with only a code, and nothing was done.
+        {{"code", "background_unavailable"}},
+        {{"code", "foreground_unavailable"}, {"message", "no focus"}}
     }) {
         fixture.config({{"stdout", payload.dump()}});
         const auto result = cua_call("click", {{"capture_id", "capture-1"}});
@@ -245,6 +248,41 @@ TEST_CASE("CUA 0.30 action refusals fail across plain and structured envelopes")
         REQUIRE(result.ok);
         REQUIRE(json::parse(result.message) == payload);
     }
+    // A code that names what happened is not a refusal, and neither is a long answer that happens to carry a code.
+    for (const auto& payload : std::vector<json>{
+        {{"code", "bring_to_front_exact_window_verified"}, {"activated", true}},
+        {{"code", "screenshot_unavailable"}, {"elements", json::array()}, {"window_id", 7}, {"pid", 42}, {"snapshot_id", "s1"}}
+    }) {
+        fixture.config({{"stdout", payload.dump()}});
+        const auto result = cua_call("get_window_state", json::object());
+        REQUIRE(result.ok);
+        REQUIRE(json::parse(result.message) == payload);
+    }
+}
+
+TEST_CASE("CUA draw stops at the first segment the driver cannot deliver and says why") {
+    Fixture fixture;
+    fixture.config({{"stdout", R"({"code":"background_unavailable"})"}});
+    MacCuaDrawOptions options;
+    options.pid = 42;
+    options.window_id = 7;
+    options.points = {{10, 10}, {20, 20}, {30, 30}, {40, 40}};
+    options.duration_ms = 10;
+    const auto result = macos_cua_draw(options);
+    REQUIRE_FALSE(result.ok);
+    REQUIRE(result.error.find("segment 1 failed") != std::string::npos);
+    REQUIRE(result.error.find("background_unavailable") != std::string::npos);
+    std::size_t drags = 0;
+    for (const auto& call : fixture.calls())
+        if (call["args"][0] == "call" && call["args"][1] == "drag") ++drags;
+    REQUIRE(drags == 1);
+
+    // Delivered segments are all sent, and the count is the truth.
+    Fixture working;
+    options.points = {{10, 10}, {20, 20}, {30, 30}};
+    const auto done = macos_cua_draw(options);
+    REQUIRE(done.ok);
+    REQUIRE(done.message.find("sent 2 drag segment(s)") != std::string::npos);
 }
 
 TEST_CASE("CUA provider options preserve capture delivery and observation controls") {
@@ -286,4 +324,88 @@ TEST_CASE("CUA named convenience calls retain explicit session and semantic snap
     REQUIRE(sent["continuation"] == "bc-next");
     REQUIRE(json::parse(cua_session_call("get_browser_state", {{"session","explicit"}}).message)["session"] == "explicit");
     REQUIRE_FALSE(json::parse(cua_call("parse_visual_regions", {{"capture_id","cap-1"}}).message).contains("session"));
+}
+
+TEST_CASE("CUA 0.38 launch takes a macOS .app path as the name and keeps native paths as launch_path") {
+    MacCuaLaunchOptions app;
+    app.launch_path = "/Applications/Calculator.app";
+    const auto macos = cua_launch_arguments(app, true);
+    REQUIRE(macos["name"] == "/Applications/Calculator.app");
+    REQUIRE_FALSE(macos.contains("launch_path"));
+
+    app.launch_path = "/Applications/Calculator.app///";
+    REQUIRE(cua_launch_arguments(app, true)["name"] == "/Applications/Calculator.app");
+
+    // Another target does not know .app paths: the provider gets the field it documents there.
+    const auto other = cua_launch_arguments(app, false);
+    REQUIRE_FALSE(other.contains("name"));
+    REQUIRE(other["launch_path"] == "/Applications/Calculator.app///");
+
+    // An explicit name wins; a path that is not a .app bundle (or a bare ".app") is never rewritten.
+    MacCuaLaunchOptions named;
+    named.name = "Calculator";
+    named.launch_path = "/Applications/Calculator.app";
+    const auto both = cua_launch_arguments(named, true);
+    REQUIRE(both["name"] == "Calculator");
+    REQUIRE(both["launch_path"] == "/Applications/Calculator.app");
+    MacCuaLaunchOptions exe;
+    exe.launch_path = "/usr/local/bin/tool";
+    REQUIRE(cua_launch_arguments(exe, true)["launch_path"] == "/usr/local/bin/tool");
+    MacCuaLaunchOptions bare;
+    bare.launch_path = ".app";
+    REQUIRE(cua_launch_arguments(bare, true)["launch_path"] == ".app");
+
+    // The other launch fields are carried unchanged.
+    MacCuaLaunchOptions rich;
+    rich.bundle_id = "com.apple.Safari";
+    rich.urls = {"https://example.com"};
+    rich.creates_new_instance = true;
+    rich.additional_arguments = {"--incognito"};
+    const auto carried = cua_launch_arguments(rich, true);
+    REQUIRE(carried["bundle_id"] == "com.apple.Safari");
+    REQUIRE(carried["urls"] == json::array({"https://example.com"}));
+    REQUIRE(carried["creates_new_application_instance"] == true);
+    REQUIRE(carried["additional_arguments"] == json::array({"--incognito"}));
+}
+
+TEST_CASE("CUA starts a session again when the provider says it has ended, and repeats the call once") {
+    Fixture fixture;
+    fixture.config({{"ended_session", "precision session"}});
+    MacCuaWindowStateOptions state{.pid = 42, .window_id = 7};
+    const auto result = macos_cua_window_state(state);
+    REQUIRE(result.ok);
+    REQUIRE(json::parse(result.message)["session"] == "precision session");
+    const auto calls = fixture.calls();
+    std::vector<std::string> tools;
+    for (const auto& call : calls)
+        if (call["args"][0] == "call") tools.push_back(call["args"][1]);
+    REQUIRE(tools == std::vector<std::string>{"get_window_state", "start_session", "get_window_state"});
+    for (const auto& call : calls)
+        if (call["args"][0] == "call" && call["args"][1] == "start_session") REQUIRE(json::parse(call["stdin"].get<std::string>()) == json{{"session", "precision session"}});
+    // Revived: the next call goes straight through.
+    REQUIRE(macos_cua_window_state(state).ok);
+    std::size_t states = 0;
+    for (const auto& call : fixture.calls())
+        if (call["args"][0] == "call" && call["args"][1] == "get_window_state") ++states;
+    REQUIRE(states == 3);
+}
+
+TEST_CASE("CUA does not revive a session the caller did not name, and reports a start_session that fails") {
+    Fixture fixture;
+    fixture.config({{"exit_code", 1}, {"stderr", "session 'somebody-else' has ended; tool call 'get_window_state' was rejected. Call start_session with this id to revive it"}});
+    MacCuaWindowStateOptions state{.pid = 42, .window_id = 7};
+    const auto other = macos_cua_window_state(state);
+    REQUIRE_FALSE(other.ok);
+    REQUIRE(fixture.calls().size() == 1);
+
+    Fixture failing;
+    failing.config({{"ended_session", "precision session"}, {"revive_fails", true}});
+    const auto result = macos_cua_window_state(state);
+    REQUIRE_FALSE(result.ok);
+    REQUIRE(result.error.find("has ended") != std::string::npos);
+    REQUIRE(result.error.find("Kiseki tried start_session for 'precision session'") != std::string::npos);
+    std::size_t attempts = 0;
+    for (const auto& call : failing.calls())
+        if (call["args"][0] == "call") ++attempts;
+    REQUIRE(attempts == 2);
 }

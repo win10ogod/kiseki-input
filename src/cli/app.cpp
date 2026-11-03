@@ -2539,7 +2539,7 @@ int run(
     auto* background_cua_launch_help = background_cua_alias->add_subcommand("launch", "Launch an app through Cua Driver");
     background_cua_launch_help->add_option("--bundle-id", mac_background_launch_options.bundle_id, "Application bundle id when supported, such as com.apple.Safari");
     background_cua_launch_help->add_option("--name", mac_background_launch_options.name, "Application display name when bundle id is unknown");
-    background_cua_launch_help->add_option("--launch-path", mac_background_launch_options.launch_path, "Exact launch path from native Windows/Linux list_apps");
+    background_cua_launch_help->add_option("--launch-path", mac_background_launch_options.launch_path, "Exact launch path from list_apps (a .app bundle path on macOS, a native path on Windows/Linux)");
     background_cua_launch_help->add_option("--url", mac_background_launch_options.urls, "URL or file path to hand to the app; repeat for multiple values");
     background_cua_launch_help->add_flag("--new-instance", mac_background_launch_options.new_instance, "Ask Cua Driver to create a new app instance when supported");
     background_cua_launch_help->add_option("--arg", mac_background_launch_options.arguments, "Additional argv entry for the launched process; repeat for multiple values");
@@ -2694,7 +2694,8 @@ int run(
         for (const auto& [verb, tool] : std::vector<std::pair<std::string, std::string>>{
             {"state", "get_browser_state"}, {"prepare", "browser_prepare"}, {"navigate", "browser_navigate"},
             {"click", "browser_click"}, {"type", "browser_type"}, {"dialog", "browser_dialog"},
-            {"upload", "browser_set_input_files"}, {"download", "browser_download"}, {"pointer", "browser_pointer"}})
+            {"upload", "browser_set_input_files"}, {"download", "browser_download"}, {"pointer", "browser_pointer"},
+            {"select", "browser_select"}})
             modern_tool(browser, verb, tool, true);
         auto* sessions = parent->add_subcommand("session", "Named CUA session lifecycle and state");
         sessions->require_subcommand(1);
@@ -2704,7 +2705,9 @@ int run(
             modern_tool(sessions, verb, tool, verb != "list");
         modern_tool(parent, "visual-regions", "parse_visual_regions", true);
         modern_tool(parent, "theme", "set_agent_cursor_theme", true);
-        for (const auto* family : {"recording", "extension", "cursor-theme", "manifest", "doctor"}) {
+        modern_tool(parent, "guide", "get_guide", false);
+        modern_tool(parent, "health", "health_report", false);
+        for (const auto* family : {"recording", "extension", "cursor-theme", "cursor", "manifest", "doctor", "skills", "history", "perception", "config"}) {
             auto options = std::make_unique<CuaControlOptions>();
             options->operation = "driver";
             auto* command = parent->add_subcommand(family, "Forward native CUA CLI arguments; place flags after --");
@@ -2737,7 +2740,7 @@ int run(
     auto* mac_background_launch = mac_background->add_subcommand("launch", "Launch an app through Cua Driver");
     mac_background_launch->add_option("--bundle-id", mac_background_launch_options.bundle_id, "Application bundle id when supported, such as com.apple.Safari");
     mac_background_launch->add_option("--name", mac_background_launch_options.name, "Application display name when bundle id is unknown");
-    mac_background_launch->add_option("--launch-path", mac_background_launch_options.launch_path, "Exact launch path from native Windows/Linux list_apps");
+    mac_background_launch->add_option("--launch-path", mac_background_launch_options.launch_path, "Exact launch path from list_apps (a .app bundle path on macOS, a native path on Windows/Linux)");
     mac_background_launch->add_option("--url", mac_background_launch_options.urls, "URL or file path to hand to the app; repeat for multiple values");
     mac_background_launch->add_flag("--new-instance", mac_background_launch_options.new_instance, "Ask Cua Driver to create a new app instance when supported");
     mac_background_launch->add_option("--arg", mac_background_launch_options.arguments, "Additional argv entry for the launched process; repeat for multiple values");

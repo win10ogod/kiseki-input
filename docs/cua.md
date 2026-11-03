@@ -44,6 +44,8 @@ kiseki background cua click --pid 123 --window-id 456 --element-index 7 --snapsh
 kiseki background cua text --pid 123 --window-id 456 --element-token CURRENT_TOKEN --text "Example"
 ```
 
+A provider session ends after a while without use (the provider then rejects calls naming it with `session '...' has ended ... Call start_session`). Kiseki starts the session you named again and repeats the call once, unchanged; it never revives a session you did not name, and a failing `start_session` is reported together with the original error.
+
 A new state snapshot can replace the old index map. Re-observe after changes and use the new tokens. Do not silently use an old index against a newer snapshot. Coordinate actions use the provider's window screenshot frame, including the scale reported in that observation.
 
 PNG screenshots use `get_window_state` with the accessibility-tree walk disabled and screenshot enabled; they do not depend on the retired standalone `screenshot` tool. Kiseki verifies that a new nonempty file was produced before replacing an existing capture. JPEG requests retain the legacy screenshot route and return its actual availability/error, rather than writing PNG bytes under a JPEG name.
@@ -74,9 +76,25 @@ End the task's session when finished:
 kiseki background cua call end_session --json '{"session":"kiseki-editing-example"}'
 ```
 
-## Cua Driver 0.30.1 features
+## Cua Driver 0.38 features
 
-The current integration is checked against Driver 0.30.1. Read `tools` and `describe` from the installed build: optional extensions and backend-specific tools report their own availability.
+The current integration is checked against Driver 0.38.0 (stable, 2026-10-21); it was previously checked against 0.30.1. Read `tools` and `describe` from the installed build: optional extensions and backend-specific tools report their own availability. Kiseki forwards tool calls instead of copying their schemas, so a newer Driver keeps working; this section lists what changed on the way from 0.30 to 0.38 and how Kiseki reaches it.
+
+| Driver | Change | In Kiseki |
+| --- | --- | --- |
+| 0.31, 0.33 | Element tokens resolve against a snapshot store that is invalidated on read; tool schemas constrain `element_token` | Retain the token from the latest `state`; never reuse a token or an index after the next `state` of the same window |
+| 0.34 | Six agent-cursor motion styles, chosen in `start_session` and as a saved default | `background cua cursor -- motion ...` (forwarded); `call start_session --json` for per-session choice |
+| 0.36 | The bare binary refuses to run without a WindowServer connection and asks for CuaDriver.app; `health_report` gains a `windowserver_connection` check | `background cua health`; Kiseki's macOS startup already opens the installed app bundle |
+| 0.36 | Background drag, menus and typing into LibreOffice; no focus bounce after background clicks | Reached through `drag`, `call` and `delivery_mode`; a refused background drag (Electron) is a native refusal |
+| 0.37 | `browser_select` for a native HTML `<select>`; a background web `<select>` is no longer opened (use `set_value` or `browser select`) | `background cua browser select --json ...` |
+| 0.37 | `get_guide`: the Driver's own guide for agents; recovery hints on refusals and unverifiable results | `background cua guide`; hints stay in the structured result, and a native `effect: refused` is still a nonzero exit |
+| 0.37 | An owner may let an agent approve the Driver's macOS prompts; direct-capture consent is requested during setup instead of over the user's window | `background cua status --prompt`; `driver -- permissions grant` |
+| 0.37 | Skill pack install for agents, optional foreground step for native drag-and-drop on macOS | `background cua skills -- status` (forwarded) |
+| 0.38 | `launch_app` accepts the absolute `.app` path that `list_apps` reports as `launch_path`, in `name` | `background cua launch --launch-path /Applications/Example.app` sends it as `name` on macOS and as `launch_path` on Windows/Linux |
+
+The forwarded families (`recording`, `extension`, `cursor-theme`, `cursor`, `manifest`, `doctor`, `skills`, `history`, `perception`, `config`) pass their arguments to `cua-driver` unchanged; put flags after `--`, for example `kiseki background cua skills -- status --json`.
+
+`health` and `guide` call `health_report` and `get_guide`; neither takes a session. Run `health` first when a workflow does nothing: it is the Driver's single-call end-to-end diagnostics and, on macOS, includes the WindowServer connection check (the daemon must run from CuaDriver.app). `status` reports the Accessibility and Screen Recording grants of CuaDriver.app.
 
 ### Browser semantic snapshots
 
@@ -100,6 +118,16 @@ kiseki background cua click --pid 123 --window-id 456 --x 20 --y 30 --provider-j
 ```
 
 `capture_id` identifies retained image evidence and is separate from accessibility `snapshot_id`. Keep the same daemon endpoint and named session through capture, action and verification. A refused capture-bound action must not be retried after stripping its capture ID. Native `effect: refused` results, including structured result envelopes, produce a nonzero Kiseki exit code. `submitted` and `unverifiable` remain visible as those exact effects; they are not relabeled as confirmed.
+
+An answer that is only a short code saying the action could not be delivered (`{"code":"background_unavailable"}`, or another code ending in `_unavailable`, `_refused`, `_denied` or `_failed`, with no `effect`) is also a refusal: nothing was done, and Kiseki exits nonzero (`draw` stops at the first such segment and names it). Seen on Cua Driver 0.28.1 with Krita 5.3.1 on macOS 26: a `drag` into the canvas in background mode answers `background_unavailable`, and a Qt dialog's `state` is degraded (`ax_window_unresolved`, no elements) with background input refused. Such targets can be driven in foreground mode, which uses global input: it moves the real pointer and needs the target in front.
+
+```sh
+kiseki background cua call bring_to_front --json '{"pid":123,"window_id":456}'
+kiseki background cua drag --pid 123 --window-id 456 --from-x 400 --from-y 300 --to-x 800 --to-y 500 --provider-json '{"delivery_mode":"foreground"}'
+kiseki background cua draw --pid 123 --window-id 456 --file circle.txt --provider-json '{"delivery_mode":"foreground"}'
+```
+
+In foreground mode the driver cannot read the effect back (`effect: unverifiable`); take a new `state` picture to see what happened.
 
 ### Visual regions, themes, recording and extensions
 

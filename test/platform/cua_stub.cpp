@@ -34,6 +34,20 @@ int main(int argc, char** argv) {
     else if (args[0] == "serve") std::filesystem::remove(directory / "stopped");
     else if (args[0] == "call") {
         auto arguments = json::parse(input);
+        // Scripted session lifetime: the named session has ended until start_session revives it.
+        if (config.contains("ended_session") && arguments.value("session", std::string{}) == config["ended_session"].get<std::string>()) {
+            if (args[1] == "start_session") {
+                if (config.value("revive_fails", false)) { std::cerr << "cannot start session"; return 5; }
+                std::ofstream(directory / "revived");
+                std::cout << json{{"revived", true}, {"session", arguments["session"]}};
+                return 0;
+            }
+            if (!std::filesystem::exists(directory / "revived")) {
+                std::cerr << "session '" << arguments["session"].get<std::string>() << "' has ended; tool call '" << args[1]
+                          << "' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.";
+                return 1;
+            }
+        }
 #ifdef _WIN32
         if (config.value("extended_path", false) && arguments.contains("screenshot_out_file")) {
             arguments["screenshot_out_file"] = "\\\\?\\" + arguments["screenshot_out_file"].get<std::string>();

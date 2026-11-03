@@ -172,13 +172,21 @@ bool refused_result(const nlohmann::json& value) {
         (value.contains("ok") && value["ok"] == false) ||
         (value.contains("refusal") && !value["refusal"].is_null())) return true;
     if (value.contains("code") && value["code"].is_string() && value.contains("detail") && !value.contains("effect")) return true;
+    // A short answer that is only a code saying the action could not be delivered. Found on Cua Driver 0.28.1: a drag into a Qt canvas in background
+    // mode answers {"code":"background_unavailable"} and nothing else, and nothing was done. Codes that name what happened
+    // ("bring_to_front_exact_window_verified") and long answers (a window's state) are not refusals.
+    if (value.contains("code") && value["code"].is_string() && !value.contains("effect") && value.size() <= 4) {
+        const auto code = value["code"].get<std::string>();
+        for (const auto* suffix : {"_unavailable", "_refused", "_denied", "_failed"})
+            if (code.ends_with(suffix)) return true;
+    }
     // Driver transports may wrap the same ActionResult in structuredContent.
     for (const auto* field : {"structuredContent", "structured_content"})
         if (value.contains(field) && refused_result(value[field])) return true;
     return false;
 }
 
-OperationResult run_cua_tool(
+OperationResult run_cua_tool_once(
     const std::string& tool,
     const nlohmann::json& arguments,
     const std::filesystem::path& screenshot_output = {}) {
@@ -217,6 +225,36 @@ OperationResult run_cua_tool(
         }
         return OperationResult{.ok = true, .code = 0, .message = result.output, .error = result.error};
     } catch (const std::exception& error) { return fail(error.what()); }
+}
+
+// A provider session ends after a while without use. A call that names an ended session is rejected with
+// "session 'X' has ended; ... Call start_session with this id to revive it ...". This returns X, or "" when the text says nothing of the kind.
+std::string ended_session_id(const std::string& text) {
+    const std::string head = "session '";
+    const std::string tail = "' has ended";
+    const auto end = text.find(tail);
+    if (end == std::string::npos) return {};
+    const auto start = text.rfind(head, end);
+    if (start == std::string::npos) return {};
+    return text.substr(start + head.size(), end - (start + head.size()));
+}
+
+// Calls the provider; when it says the session the caller named has ended, starts that session again and repeats the call once, unchanged.
+// Only the caller's own session is revived (never another one the provider mentions), and a failing start_session is reported with the original error.
+OperationResult run_cua_tool(
+    const std::string& tool,
+    const nlohmann::json& arguments,
+    const std::filesystem::path& screenshot_output = {}) {
+    auto result = run_cua_tool_once(tool, arguments, screenshot_output);
+    if (result.ok || tool == "start_session") return result;
+    const auto ended = ended_session_id(result.error);
+    if (ended.empty() || !arguments.contains("session") || !arguments["session"].is_string() || arguments["session"].get<std::string>() != ended) return result;
+    const auto revived = run_cua_tool_once("start_session", nlohmann::json{{"session", ended}});
+    if (!revived.ok) {
+        result.error += "\nKiseki tried start_session for '" + ended + "': " + revived.error;
+        return result;
+    }
+    return run_cua_tool_once(tool, arguments, screenshot_output);
 }
 
 OperationResult run_cua_with_options(const std::string& tool, nlohmann::json arguments, const std::string& provider_json) {
@@ -352,18 +390,21 @@ OperationResult macos_cua_status(bool prompt) {
     return run_cua_tool("check_permissions", arguments);
 }
 
-OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
-    if (options.bundle_id.empty() && options.name.empty() && options.launch_path.empty()) {
-        return fail("background cua launch requires --bundle-id, --name, or --launch-path");
-    }
+nlohmann::json cua_launch_arguments(const MacCuaLaunchOptions& options, bool macos_app_paths) {
     nlohmann::json arguments = nlohmann::json::object();
     if (!options.bundle_id.empty()) {
         arguments["bundle_id"] = options.bundle_id;
     }
-    if (!options.name.empty()) {
+    auto bundle_path = options.launch_path;
+    while (bundle_path.size() > 1 && bundle_path.back() == '/') bundle_path.pop_back();
+    const bool app_bundle = macos_app_paths && options.name.empty() && bundle_path.size() > 4 &&
+        bundle_path.compare(bundle_path.size() - 4, 4, ".app") == 0;
+    if (app_bundle) {
+        arguments["name"] = bundle_path;
+    } else if (!options.name.empty()) {
         arguments["name"] = options.name;
     }
-    if (!options.launch_path.empty()) arguments["launch_path"] = options.launch_path;
+    if (!options.launch_path.empty() && !app_bundle) arguments["launch_path"] = options.launch_path;
     if (!options.urls.empty()) {
         arguments["urls"] = options.urls;
     }
@@ -373,7 +414,19 @@ OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
     if (!options.additional_arguments.empty()) {
         arguments["additional_arguments"] = options.additional_arguments;
     }
-    return begin_workflow_and_call("launch_app", arguments);
+    return arguments;
+}
+
+OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
+    if (options.bundle_id.empty() && options.name.empty() && options.launch_path.empty()) {
+        return fail("background cua launch requires --bundle-id, --name, or --launch-path");
+    }
+#ifdef __APPLE__
+    constexpr bool macos_app_paths = true;
+#else
+    constexpr bool macos_app_paths = false;
+#endif
+    return begin_workflow_and_call("launch_app", cua_launch_arguments(options, macos_app_paths));
 }
 
 OperationResult macos_cua_list_windows(const MacCuaWindowListOptions& options) {
