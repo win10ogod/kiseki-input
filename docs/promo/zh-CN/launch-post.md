@@ -83,4 +83,6 @@ ctest --test-dir build --output-on-failure
 - 想用**教学录制**把你的操作流程交给 Agent 学；
 - 想要一个**边界清楚**的本地自动化工具，而不是一个黑盒。
 
+**许可证**：MIT（只覆盖 Kiseki Input 自身的代码；CLI11、nlohmann/json、cpp-httplib 等第三方依赖和 Cua Driver 各自保留自己的许可证）。
+
 欢迎试用、提 Issue、提 PR：https://github.com/win10ogod/kiseki-input

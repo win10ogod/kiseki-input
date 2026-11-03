@@ -290,6 +290,10 @@ ctest --test-dir build --output-on-failure
 
 When building with a multi-config generator, the executable is usually under `build/Debug/kiseki.exe` on Windows.
 
+## License
+
+Kiseki Input's own source code is released under the [MIT License](LICENSE). The MIT License covers Kiseki Input only: it does not cover the third-party components it is built with or can drive, which keep their own licenses. Build-time dependencies (CLI11, nlohmann/json, cpp-httplib, Catch2) and the optional `IbInputSimulator.dll` are listed in [cmake/PackageNotices.txt](cmake/PackageNotices.txt), and their license files are installed under `share/kiseki/licenses`. Cua Driver is a separate program installed from its own official installer under its own terms; see [cua.ai](https://cua.ai).
+
 ## Credits
 
 Special thanks to [Chaoses-Ib/IbInputSimulator](https://github.com/Chaoses-Ib/IbInputSimulator). Kiseki Input's Windows driver backend is designed around `IbInputSimulator.dll` from that project.

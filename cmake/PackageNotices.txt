@@ -1,6 +1,11 @@
 Kiseki Input
 https://github.com/win10ogod/kiseki-input
 
+Kiseki Input's own source code is released under the MIT License
+(share/kiseki/licenses/Kiseki-Input-MIT.txt). The MIT License covers Kiseki Input
+only. It does not cover the third-party components below or anything Kiseki Input
+can drive, which keep their own licenses.
+
 Third-party notices are included in share/kiseki/licenses:
 
 CLI11

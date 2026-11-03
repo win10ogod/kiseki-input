@@ -119,6 +119,10 @@ ctest --test-dir build --output-on-failure
 | [kiseki-project](skills/kiseki-project/SKILL.md) | 发现目标、选对操作模式、精确输入、验证应用状态，以及开发 / 测试各平台切片 |
 | [kiseki-teach-recording](skills/kiseki-teach-recording/SKILL.md) | 录制或检查演示、控制录制生命周期、校验证据、编译成可复用的流程 |
 
+## 许可证
+
+Kiseki Input 自身的源代码以 [MIT 许可证](LICENSE) 发布。MIT 许可证**只覆盖 Kiseki Input 本身**，不包含它所依赖或可以驱动的第三方部分，这些部分各自保留自己的许可证：构建时依赖（CLI11、nlohmann/json、cpp-httplib、Catch2）和可选的 `IbInputSimulator.dll` 列在 [cmake/PackageNotices.txt](cmake/PackageNotices.txt)，安装包会把它们的许可证文件放进 `share/kiseki/licenses`；Cua Driver 是另行用它自己的官方安装程序安装的独立程序，适用它自己的条款，见 [cua.ai](https://cua.ai)。
+
 ## 致谢
 
 特别感谢 [Chaoses-Ib/IbInputSimulator](https://github.com/Chaoses-Ib/IbInputSimulator)：Kiseki Input 的 Windows 驱动后端围绕它的 `IbInputSimulator.dll` 设计。

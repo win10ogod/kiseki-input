@@ -6,7 +6,7 @@
 ## 微博 / 即刻（短）
 
 **A. 主推**
-给 AI Agent 一双手：Kiseki Input，一个原生跨平台的桌面操作 CLI。键鼠、截图、宏、教学录制、后台操作，一套命令跑 Windows / macOS / Linux。后台模式下 Agent 在后台干活，不抢你的鼠标。WebUI 只能改配置，不能触发任何操作。https://github.com/win10ogod/kiseki-input
+给 AI Agent 一双手：Kiseki Input（MIT 开源），一个原生跨平台的桌面操作 CLI。键鼠、截图、宏、教学录制、后台操作，一套命令跑 Windows / macOS / Linux。后台模式下 Agent 在后台干活，不抢你的鼠标。WebUI 只能改配置，不能触发任何操作。https://github.com/win10ogod/kiseki-input
 
 **B. 后台操作**
 Agent 一动手就抢走你的鼠标，是 Computer Use 最扫兴的地方。Kiseki Input 通过 Cua Driver 做后台操作：Safari 一直在最前面，鼠标没动，另一个应用里已经点好了、字也打好了。#AIAgent #ComputerUse
@@ -34,7 +34,7 @@ Kiseki Input 对齐 Cua Driver 0.38：browser select、guide、health、.app 路
 - WebUI 只有读 / 写配置、读能力三个接口，不能触发任何操作
 - `kiseki doctor` / `capabilities` / `modes` 告诉你这台机器能做什么、该选哪种模式
 
-诚实说明：Windows 实测最多；Linux 面向 X11；macOS 分原生和 Cua 两条路径。最近对齐了 Cua Driver 0.38。欢迎提 Issue / PR。
+诚实说明：Windows 实测最多；Linux 面向 X11；macOS 分原生和 Cua 两条路径。最近对齐了 Cua Driver 0.38。许可证 MIT（仅覆盖 Kiseki 自身代码，第三方依赖各有各的许可证）。欢迎提 Issue / PR。
 
 https://github.com/win10ogod/kiseki-input
 
@@ -60,6 +60,7 @@ GitHub 搜 win10ogod/kiseki-input
 
 **Kiseki Input vX.Y.Z**
 
+- 新增 MIT 许可证（`LICENSE`，仅覆盖 Kiseki 自身代码；第三方依赖保留各自许可证，见 `cmake/PackageNotices.txt`）
 - 集成对齐 Cua Driver 0.38.0：`browser select`、`guide`、`health`；转发 `skills` / `history` / `perception` / `cursor` / `config`；macOS 上 `.app` 路径启动
 - 文档：`docs/cua.md` 新增 0.31–0.38 变化对照；新增简体中文 README（`README.zh-CN.md`）
 - 安装包：Windows x64 / macOS arm64 与 x86_64 / Linux x64 与 arm64，附 SHA-256 校验文件

@@ -17,7 +17,7 @@ def main():
     share = prefix / "share/kiseki"
     required = [executable, share / "install.html", share / "docs/install.md",
                 share / "skills/kiseki-project/SKILL.md", share / "skills/kiseki-teach-recording/SKILL.md",
-                share / "licenses/CLI11.txt", share / "licenses/nlohmann-json.txt", share / "licenses/cpp-httplib.txt"]
+                share / "licenses/Kiseki-Input-MIT.txt", share / "licenses/CLI11.txt", share / "licenses/nlohmann-json.txt", share / "licenses/cpp-httplib.txt"]
     for path in required:
         if not path.is_file():
             raise RuntimeError(f"installed file is missing: {path}")
