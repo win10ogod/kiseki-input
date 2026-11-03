@@ -44,6 +44,8 @@ kiseki background cua click --pid 123 --window-id 456 --element-index 7 --snapsh
 kiseki background cua text --pid 123 --window-id 456 --element-token CURRENT_TOKEN --text "Example"
 ```
 
+A provider session ends after a while without use (the provider then rejects calls naming it with `session '...' has ended ... Call start_session`). Kiseki starts the session you named again and repeats the call once, unchanged; it never revives a session you did not name, and a failing `start_session` is reported together with the original error.
+
 A new state snapshot can replace the old index map. Re-observe after changes and use the new tokens. Do not silently use an old index against a newer snapshot. Coordinate actions use the provider's window screenshot frame, including the scale reported in that observation.
 
 PNG screenshots use `get_window_state` with the accessibility-tree walk disabled and screenshot enabled; they do not depend on the retired standalone `screenshot` tool. Kiseki verifies that a new nonempty file was produced before replacing an existing capture. JPEG requests retain the legacy screenshot route and return its actual availability/error, rather than writing PNG bytes under a JPEG name.

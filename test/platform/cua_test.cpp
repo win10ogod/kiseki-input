@@ -329,3 +329,45 @@ TEST_CASE("CUA 0.38 launch takes a macOS .app path as the name and keeps native 
     REQUIRE(carried["creates_new_application_instance"] == true);
     REQUIRE(carried["additional_arguments"] == json::array({"--incognito"}));
 }
+
+TEST_CASE("CUA starts a session again when the provider says it has ended, and repeats the call once") {
+    Fixture fixture;
+    fixture.config({{"ended_session", "precision session"}});
+    MacCuaWindowStateOptions state{.pid = 42, .window_id = 7};
+    const auto result = macos_cua_window_state(state);
+    REQUIRE(result.ok);
+    REQUIRE(json::parse(result.message)["session"] == "precision session");
+    const auto calls = fixture.calls();
+    std::vector<std::string> tools;
+    for (const auto& call : calls)
+        if (call["args"][0] == "call") tools.push_back(call["args"][1]);
+    REQUIRE(tools == std::vector<std::string>{"get_window_state", "start_session", "get_window_state"});
+    for (const auto& call : calls)
+        if (call["args"][0] == "call" && call["args"][1] == "start_session") REQUIRE(json::parse(call["stdin"].get<std::string>()) == json{{"session", "precision session"}});
+    // Revived: the next call goes straight through.
+    REQUIRE(macos_cua_window_state(state).ok);
+    std::size_t states = 0;
+    for (const auto& call : fixture.calls())
+        if (call["args"][0] == "call" && call["args"][1] == "get_window_state") ++states;
+    REQUIRE(states == 3);
+}
+
+TEST_CASE("CUA does not revive a session the caller did not name, and reports a start_session that fails") {
+    Fixture fixture;
+    fixture.config({{"exit_code", 1}, {"stderr", "session 'somebody-else' has ended; tool call 'get_window_state' was rejected. Call start_session with this id to revive it"}});
+    MacCuaWindowStateOptions state{.pid = 42, .window_id = 7};
+    const auto other = macos_cua_window_state(state);
+    REQUIRE_FALSE(other.ok);
+    REQUIRE(fixture.calls().size() == 1);
+
+    Fixture failing;
+    failing.config({{"ended_session", "precision session"}, {"revive_fails", true}});
+    const auto result = macos_cua_window_state(state);
+    REQUIRE_FALSE(result.ok);
+    REQUIRE(result.error.find("has ended") != std::string::npos);
+    REQUIRE(result.error.find("Kiseki tried start_session for 'precision session'") != std::string::npos);
+    std::size_t attempts = 0;
+    for (const auto& call : failing.calls())
+        if (call["args"][0] == "call") ++attempts;
+    REQUIRE(attempts == 2);
+}

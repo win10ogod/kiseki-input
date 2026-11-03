@@ -178,7 +178,7 @@ bool refused_result(const nlohmann::json& value) {
     return false;
 }
 
-OperationResult run_cua_tool(
+OperationResult run_cua_tool_once(
     const std::string& tool,
     const nlohmann::json& arguments,
     const std::filesystem::path& screenshot_output = {}) {
@@ -217,6 +217,36 @@ OperationResult run_cua_tool(
         }
         return OperationResult{.ok = true, .code = 0, .message = result.output, .error = result.error};
     } catch (const std::exception& error) { return fail(error.what()); }
+}
+
+// A provider session ends after a while without use. A call that names an ended session is rejected with
+// "session 'X' has ended; ... Call start_session with this id to revive it ...". This returns X, or "" when the text says nothing of the kind.
+std::string ended_session_id(const std::string& text) {
+    const std::string head = "session '";
+    const std::string tail = "' has ended";
+    const auto end = text.find(tail);
+    if (end == std::string::npos) return {};
+    const auto start = text.rfind(head, end);
+    if (start == std::string::npos) return {};
+    return text.substr(start + head.size(), end - (start + head.size()));
+}
+
+// Calls the provider; when it says the session the caller named has ended, starts that session again and repeats the call once, unchanged.
+// Only the caller's own session is revived (never another one the provider mentions), and a failing start_session is reported with the original error.
+OperationResult run_cua_tool(
+    const std::string& tool,
+    const nlohmann::json& arguments,
+    const std::filesystem::path& screenshot_output = {}) {
+    auto result = run_cua_tool_once(tool, arguments, screenshot_output);
+    if (result.ok || tool == "start_session") return result;
+    const auto ended = ended_session_id(result.error);
+    if (ended.empty() || !arguments.contains("session") || !arguments["session"].is_string() || arguments["session"].get<std::string>() != ended) return result;
+    const auto revived = run_cua_tool_once("start_session", nlohmann::json{{"session", ended}});
+    if (!revived.ok) {
+        result.error += "\nKiseki tried start_session for '" + ended + "': " + revived.error;
+        return result;
+    }
+    return run_cua_tool_once(tool, arguments, screenshot_output);
 }
 
 OperationResult run_cua_with_options(const std::string& tool, nlohmann::json arguments, const std::string& provider_json) {
