@@ -352,18 +352,21 @@ OperationResult macos_cua_status(bool prompt) {
     return run_cua_tool("check_permissions", arguments);
 }
 
-OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
-    if (options.bundle_id.empty() && options.name.empty() && options.launch_path.empty()) {
-        return fail("background cua launch requires --bundle-id, --name, or --launch-path");
-    }
+nlohmann::json cua_launch_arguments(const MacCuaLaunchOptions& options, bool macos_app_paths) {
     nlohmann::json arguments = nlohmann::json::object();
     if (!options.bundle_id.empty()) {
         arguments["bundle_id"] = options.bundle_id;
     }
-    if (!options.name.empty()) {
+    auto bundle_path = options.launch_path;
+    while (bundle_path.size() > 1 && bundle_path.back() == '/') bundle_path.pop_back();
+    const bool app_bundle = macos_app_paths && options.name.empty() && bundle_path.size() > 4 &&
+        bundle_path.compare(bundle_path.size() - 4, 4, ".app") == 0;
+    if (app_bundle) {
+        arguments["name"] = bundle_path;
+    } else if (!options.name.empty()) {
         arguments["name"] = options.name;
     }
-    if (!options.launch_path.empty()) arguments["launch_path"] = options.launch_path;
+    if (!options.launch_path.empty() && !app_bundle) arguments["launch_path"] = options.launch_path;
     if (!options.urls.empty()) {
         arguments["urls"] = options.urls;
     }
@@ -373,7 +376,19 @@ OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
     if (!options.additional_arguments.empty()) {
         arguments["additional_arguments"] = options.additional_arguments;
     }
-    return begin_workflow_and_call("launch_app", arguments);
+    return arguments;
+}
+
+OperationResult macos_cua_launch(const MacCuaLaunchOptions& options) {
+    if (options.bundle_id.empty() && options.name.empty() && options.launch_path.empty()) {
+        return fail("background cua launch requires --bundle-id, --name, or --launch-path");
+    }
+#ifdef __APPLE__
+    constexpr bool macos_app_paths = true;
+#else
+    constexpr bool macos_app_paths = false;
+#endif
+    return begin_workflow_and_call("launch_app", cua_launch_arguments(options, macos_app_paths));
 }
 
 OperationResult macos_cua_list_windows(const MacCuaWindowListOptions& options) {

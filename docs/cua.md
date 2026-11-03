@@ -74,9 +74,25 @@ End the task's session when finished:
 kiseki background cua call end_session --json '{"session":"kiseki-editing-example"}'
 ```
 
-## Cua Driver 0.30.1 features
+## Cua Driver 0.38 features
 
-The current integration is checked against Driver 0.30.1. Read `tools` and `describe` from the installed build: optional extensions and backend-specific tools report their own availability.
+The current integration is checked against Driver 0.38.0 (stable, 2026-10-21); it was previously checked against 0.30.1. Read `tools` and `describe` from the installed build: optional extensions and backend-specific tools report their own availability. Kiseki forwards tool calls instead of copying their schemas, so a newer Driver keeps working; this section lists what changed on the way from 0.30 to 0.38 and how Kiseki reaches it.
+
+| Driver | Change | In Kiseki |
+| --- | --- | --- |
+| 0.31, 0.33 | Element tokens resolve against a snapshot store that is invalidated on read; tool schemas constrain `element_token` | Retain the token from the latest `state`; never reuse a token or an index after the next `state` of the same window |
+| 0.34 | Six agent-cursor motion styles, chosen in `start_session` and as a saved default | `background cua cursor -- motion ...` (forwarded); `call start_session --json` for per-session choice |
+| 0.36 | The bare binary refuses to run without a WindowServer connection and asks for CuaDriver.app; `health_report` gains a `windowserver_connection` check | `background cua health`; Kiseki's macOS startup already opens the installed app bundle |
+| 0.36 | Background drag, menus and typing into LibreOffice; no focus bounce after background clicks | Reached through `drag`, `call` and `delivery_mode`; a refused background drag (Electron) is a native refusal |
+| 0.37 | `browser_select` for a native HTML `<select>`; a background web `<select>` is no longer opened (use `set_value` or `browser select`) | `background cua browser select --json ...` |
+| 0.37 | `get_guide`: the Driver's own guide for agents; recovery hints on refusals and unverifiable results | `background cua guide`; hints stay in the structured result, and a native `effect: refused` is still a nonzero exit |
+| 0.37 | An owner may let an agent approve the Driver's macOS prompts; direct-capture consent is requested during setup instead of over the user's window | `background cua status --prompt`; `driver -- permissions grant` |
+| 0.37 | Skill pack install for agents, optional foreground step for native drag-and-drop on macOS | `background cua skills -- status` (forwarded) |
+| 0.38 | `launch_app` accepts the absolute `.app` path that `list_apps` reports as `launch_path`, in `name` | `background cua launch --launch-path /Applications/Example.app` sends it as `name` on macOS and as `launch_path` on Windows/Linux |
+
+The forwarded families (`recording`, `extension`, `cursor-theme`, `cursor`, `manifest`, `doctor`, `skills`, `history`, `perception`, `config`) pass their arguments to `cua-driver` unchanged; put flags after `--`, for example `kiseki background cua skills -- status --json`.
+
+`health` and `guide` call `health_report` and `get_guide`; neither takes a session. Run `health` first when a workflow does nothing: it is the Driver's single-call end-to-end diagnostics and, on macOS, includes the WindowServer connection check (the daemon must run from CuaDriver.app). `status` reports the Accessibility and Screen Recording grants of CuaDriver.app.
 
 ### Browser semantic snapshots
 

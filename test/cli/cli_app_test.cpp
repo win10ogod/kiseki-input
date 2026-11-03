@@ -2146,6 +2146,31 @@ TEST_CASE("CUA modern feature families preserve provider requests and CLI argume
     REQUIRE(calls.back().driver_arguments == std::vector<std::string>{"extension","list","--json"});
 }
 
+TEST_CASE("CUA 0.37 and 0.38 provider tools are reachable by name and by forwarded driver commands") {
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    std::vector<kiseki::cli::CuaControlOptions> calls;
+    dependencies.cua_control = [&](const kiseki::cli::CuaControlOptions& value, kiseki::cli::Io) { calls.push_back(value); return 0; };
+    const auto run = [&](std::vector<std::string> args) { return kiseki::cli::run(args, "unused-cua.json", {out,err}, dependencies); };
+    REQUIRE(run({"background","cua","browser","select","--json",R"({"target_id":"t","tab_id":"b","ref":"r1","value":"two"})"}) == 0);
+    REQUIRE(calls.back().tool == "browser_select");
+    REQUIRE(calls.back().default_session);
+    REQUIRE(nlohmann::json::parse(calls.back().json_arguments)["value"] == "two");
+    REQUIRE(run({"background","cua","guide","--json",R"({"topic":"browsers"})"}) == 0);
+    REQUIRE(calls.back().tool == "get_guide");
+    REQUIRE_FALSE(calls.back().default_session);
+    REQUIRE(run({"background","cua","health"}) == 0);
+    REQUIRE(calls.back().tool == "health_report");
+    REQUIRE_FALSE(calls.back().default_session);
+    for (const char* family : {"skills", "history", "perception", "cursor", "config"}) {
+        REQUIRE(run({"background","cua",family,"--","status","--json"}) == 0);
+        REQUIRE(calls.back().operation == "driver");
+        REQUIRE(calls.back().driver_arguments == std::vector<std::string>{family,"status","--json"});
+    }
+    REQUIRE(run({"background","cua","cursor","--","motion","--style","comet"}) == 0);
+    REQUIRE(calls.back().driver_arguments == std::vector<std::string>{"cursor","motion","--style","comet"});
+}
+
 TEST_CASE("CUA convenience CLI retains new provider JSON without losing existing identity") {
     std::ostringstream out,err;
     kiseki::cli::Dependencies dependencies;

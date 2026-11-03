@@ -287,3 +287,45 @@ TEST_CASE("CUA named convenience calls retain explicit session and semantic snap
     REQUIRE(json::parse(cua_session_call("get_browser_state", {{"session","explicit"}}).message)["session"] == "explicit");
     REQUIRE_FALSE(json::parse(cua_call("parse_visual_regions", {{"capture_id","cap-1"}}).message).contains("session"));
 }
+
+TEST_CASE("CUA 0.38 launch takes a macOS .app path as the name and keeps native paths as launch_path") {
+    MacCuaLaunchOptions app;
+    app.launch_path = "/Applications/Calculator.app";
+    const auto macos = cua_launch_arguments(app, true);
+    REQUIRE(macos["name"] == "/Applications/Calculator.app");
+    REQUIRE_FALSE(macos.contains("launch_path"));
+
+    app.launch_path = "/Applications/Calculator.app///";
+    REQUIRE(cua_launch_arguments(app, true)["name"] == "/Applications/Calculator.app");
+
+    // Another target does not know .app paths: the provider gets the field it documents there.
+    const auto other = cua_launch_arguments(app, false);
+    REQUIRE_FALSE(other.contains("name"));
+    REQUIRE(other["launch_path"] == "/Applications/Calculator.app///");
+
+    // An explicit name wins; a path that is not a .app bundle (or a bare ".app") is never rewritten.
+    MacCuaLaunchOptions named;
+    named.name = "Calculator";
+    named.launch_path = "/Applications/Calculator.app";
+    const auto both = cua_launch_arguments(named, true);
+    REQUIRE(both["name"] == "Calculator");
+    REQUIRE(both["launch_path"] == "/Applications/Calculator.app");
+    MacCuaLaunchOptions exe;
+    exe.launch_path = "/usr/local/bin/tool";
+    REQUIRE(cua_launch_arguments(exe, true)["launch_path"] == "/usr/local/bin/tool");
+    MacCuaLaunchOptions bare;
+    bare.launch_path = ".app";
+    REQUIRE(cua_launch_arguments(bare, true)["launch_path"] == ".app");
+
+    // The other launch fields are carried unchanged.
+    MacCuaLaunchOptions rich;
+    rich.bundle_id = "com.apple.Safari";
+    rich.urls = {"https://example.com"};
+    rich.creates_new_instance = true;
+    rich.additional_arguments = {"--incognito"};
+    const auto carried = cua_launch_arguments(rich, true);
+    REQUIRE(carried["bundle_id"] == "com.apple.Safari");
+    REQUIRE(carried["urls"] == json::array({"https://example.com"}));
+    REQUIRE(carried["creates_new_application_instance"] == true);
+    REQUIRE(carried["additional_arguments"] == json::array({"--incognito"}));
+}
