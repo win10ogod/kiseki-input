@@ -14,6 +14,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -24,6 +25,7 @@
 #include "core/config/config_model.hpp"
 #include "core/config/config_store.hpp"
 #include "core/version.hpp"
+#include "platform/capture/image_writer.hpp"
 #include "platform/capture/screenshot.hpp"
 #include "platform/input/input.hpp"
 #include "platform/input/sequence_support.hpp"
@@ -94,6 +96,8 @@ int print_capture_result(const kiseki::platform::CaptureResult &result, Io io, b
         nlohmann::json value{{"ok", result.ok},       {"output", result.output_path.string()},
                              {"width", result.width}, {"height", result.height},
                              {"error", result.error}, {"coordinates", nullptr}};
+        if (const auto format = kiseki::platform::capture::image_format_for_path(result.output_path))
+            value["format"] = kiseki::platform::capture::image_format_name(*format);
         if (result.coordinates) {
             const auto &c = *result.coordinates;
             value["coordinates"] = {
@@ -110,6 +114,14 @@ int print_capture_result(const kiseki::platform::CaptureResult &result, Io io, b
                 {"bounds", c.window_id ? "full-window" : "desktop"}};
             if (c.window_id)
                 value["coordinates"]["windowId"] = *c.window_id;
+            if (!c.bounds_source.empty())
+                value["coordinates"]["boundsSource"] = c.bounds_source;
+            if (c.client_area)
+                value["coordinates"]["clientArea"] = {{"x", c.client_area->x},
+                                                      {"y", c.client_area->y},
+                                                      {"width", c.client_area->width},
+                                                      {"height", c.client_area->height},
+                                                      {"units", "image-pixels"}};
         }
         io.out << value.dump(2) << '\n';
         return result.code;
@@ -122,6 +134,53 @@ int print_capture_result(const kiseki::platform::CaptureResult &result, Io io, b
     return result.code;
 }
 
+constexpr const char* kCurrentPlatform =
+#ifdef _WIN32
+    "windows";
+#elif defined(__APPLE__)
+    "macos";
+#else
+    "linux";
+#endif
+
+// Static platform support for each mode; runtime readiness (DISPLAY, permissions,
+// installed providers) is reported by `kiseki capabilities`.
+void add_mode_availability(nlohmann::json& mode, std::initializer_list<const char*> platforms, const char* note_here = nullptr) {
+    bool available = false;
+    nlohmann::json names = nlohmann::json::array();
+    for (const char* platform : platforms) {
+        names.push_back(platform);
+        available = available || std::string_view{platform} == kCurrentPlatform;
+    }
+    mode["platforms"] = std::move(names);
+    mode["availableOnCurrentPlatform"] = available;
+    if (note_here != nullptr) {
+        mode["currentPlatformNote"] = note_here;
+    }
+}
+
+nlohmann::json operation_modes_json();
+
+nlohmann::json operation_modes_json_with_availability() {
+    auto modes = operation_modes_json();
+    modes["currentPlatform"] = kCurrentPlatform;
+    for (auto& mode : modes["modeMatrix"]) {
+        const auto id = mode.at("id").get<std::string>();
+        if (id == "current-session") {
+            add_mode_availability(mode, {"windows", "macos", "linux"},
+                                  std::string_view{kCurrentPlatform} == "linux" ? "Linux input requires an X11 session; Wayland supports portal screenshots only." : nullptr);
+        } else if (id == "selected-window-background") {
+            add_mode_availability(mode, {"windows", "linux"},
+                                  std::string_view{kCurrentPlatform} == "macos" ? "macOS supports background window screenshot only; use background cua for target-routed input." : nullptr);
+        } else if (id == "linux-isolated-display") {
+            add_mode_availability(mode, {"linux"});
+        } else if (id == "cua-target-routed") {
+            add_mode_availability(mode, {"windows", "macos", "linux"}, "Requires an installed Cua Driver; check background cua status.");
+        }
+    }
+    return modes;
+}
+
 nlohmann::json operation_modes_json() {
     return nlohmann::json{
         {"schemaVersion", 1},
@@ -131,6 +190,7 @@ nlohmann::json operation_modes_json() {
             "Commands starting with background are background, isolated-session, or target-routed commands.",
             "Verify a background action with a screenshot from the same background family, not with screenshot desktop.",
             "Use observe ui before screenshot-based verification when structured UI data can answer the task.",
+            "modeMatrix availableOnCurrentPlatform is static platform support; kiseki capabilities reports runtime readiness.",
         })},
         {"operationFamilies", {
             {"nonBackground", nlohmann::json::array({
@@ -200,7 +260,7 @@ nlohmann::json operation_modes_json() {
                 {"canMoveRealPointer", false},
                 {"dependsOnFocus", false},
                 {"commands", nlohmann::json::array({
-                    "kiseki background desktop start|launch|screenshot|text|key|mouse|stop ...",
+                    "kiseki background desktop start|status|launch|screenshot|text|key|mouse|stop ...",
                 })},
                 {"coordinateSpace", "isolated Xvfb display coordinates"},
                 {"verifyWith", "kiseki background desktop screenshot"},
@@ -241,13 +301,31 @@ void print_operation_modes(Io io) {
     io.out << "  background window ...: target client-area coordinates\n";
     io.out << "  background desktop ...: isolated DISPLAY coordinates\n";
     io.out << "  background cua ...: window-local screenshot coordinates when --window-id is used\n";
+    io.out << "Platform support on " << kCurrentPlatform << " (runtime readiness: kiseki capabilities):\n";
+    const auto modes = operation_modes_json_with_availability();
+    for (const auto& mode : modes.at("modeMatrix")) {
+        io.out << "  " << mode.at("id").get<std::string>() << ": "
+               << (mode.at("availableOnCurrentPlatform").get<bool>() ? "supported" : "not supported");
+        if (mode.contains("currentPlatformNote")) {
+            io.out << " (" << mode.at("currentPlatformNote").get<std::string>() << ")";
+        }
+        io.out << '\n';
+    }
+}
+
+// numericId is the same window id in decimal, as CUA and other providers print it.
+nlohmann::json numeric_window_id_json(const std::string& id) {
+    const auto value = kiseki::platform::target::window_id_value(id);
+    return value ? nlohmann::json(*value) : nlohmann::json(nullptr);
 }
 
 nlohmann::json target_window_to_json(const kiseki::platform::target::TargetWindow& window) {
     return nlohmann::json{
         {"id", window.id},
+        {"numericId", numeric_window_id_json(window.id)},
         {"title", window.title},
         {"pid", window.pid},
+        {"pidSource", window.pid_source},
         {"x", window.x},
         {"y", window.y},
         {"width", window.width},
@@ -258,6 +336,7 @@ nlohmann::json target_window_to_json(const kiseki::platform::target::TargetWindo
 nlohmann::json target_child_window_to_json(const kiseki::platform::target::TargetChildWindow& window) {
     return nlohmann::json{
         {"id", window.id},
+        {"numericId", numeric_window_id_json(window.id)},
         {"parentId", window.parent_id},
         {"title", window.title},
         {"className", window.class_name},
@@ -297,6 +376,65 @@ int print_target_inspect_result(const kiseki::platform::target::InspectResult& r
         {"children", std::move(children)},
     }.dump(2) << '\n';
     return 0;
+}
+
+// Exit 0 when the permission is granted; 2 when it is missing or the check is unsupported.
+int print_permission_status(const kiseki::platform::permissions::PermissionStatus& status, bool json_output, Io io) {
+    const int code = status.supported && status.granted ? 0 : 2;
+    if (json_output) {
+        io.out << nlohmann::json{
+            {"permission", status.permission},
+            {"supported", status.supported},
+            {"granted", status.granted},
+            {"prompted", status.prompted},
+            {"settingsOpened", status.settings_opened},
+            {"message", status.message},
+        }.dump(2) << '\n';
+        return code;
+    }
+    if (status.supported) {
+        io.out << status.message << '\n';
+    } else {
+        io.err << status.message << '\n';
+    }
+    return code;
+}
+
+// Exit 0 only when the Kiseki-started display is running and reachable.
+int print_background_desktop_status(const kiseki::platform::session::BackgroundDesktopStatus& status, bool json_output, Io io) {
+    const int code = status.state == "running" ? 0 : 2;
+    if (json_output) {
+        nlohmann::json value{
+            {"display", status.display},
+            {"state", status.state},
+            {"running", status.state == "running"},
+            {"supported", status.supported},
+            {"message", status.message},
+        };
+        if (status.supported && status.state != "invalid-display") {
+            value["pidFile"] = status.pid_file.string();
+            value["pid"] = status.pid == 0 ? nlohmann::json(nullptr) : nlohmann::json(status.pid);
+            value["processAlive"] = status.process_alive;
+            value["processName"] = status.process_name.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.process_name);
+            value["displayReachable"] = status.display_reachable;
+            value["screen"] = status.display_reachable
+                ? nlohmann::json{{"width", status.width}, {"height", status.height}, {"depth", status.depth}}
+                : nlohmann::json(nullptr);
+        }
+        io.out << value.dump(2) << '\n';
+        return code;
+    }
+    if (!status.supported || status.state == "invalid-display") {
+        io.err << status.message << '\n';
+        return code;
+    }
+    io.out << "background desktop " << status.display << ": " << status.state << '\n';
+    io.out << "  " << status.message << '\n';
+    if (status.display_reachable) {
+        io.out << "  screen: " << status.width << "x" << status.height << "x" << status.depth << '\n';
+    }
+    io.out << "  pid file: " << status.pid_file.string() << '\n';
+    return code;
 }
 
 int print_observe_ui_result(const kiseki::platform::observe::UiObservationResult& result, Io io) {
@@ -454,6 +592,27 @@ bool has_help_flag(const std::vector<std::string>& args) {
         }
     }
     return false;
+}
+
+// `kiseki --version --json` (either order): CLI11's version flag exits before other flags parse.
+bool is_version_json_request(const std::vector<std::string>& args) {
+    const auto command_index = first_command_index(args);
+    if (args.size() - command_index != 2) {
+        return false;
+    }
+    const auto& first = args[command_index];
+    const auto& second = args[command_index + 1];
+    return (first == "--version" && second == "--json") || (first == "--json" && second == "--version");
+}
+
+nlohmann::json version_json() {
+    const auto state = kiseki::core::build_tree_state();
+    return nlohmann::json{
+        {"version", kiseki::core::version()},
+        {"commit", kiseki::core::build_commit()},
+        {"tree", kiseki::core::build_tree_state_name(state)},
+        {"text", kiseki::core::version_text()},
+    };
 }
 
 std::vector<std::string> normalize_integrated_commands(const std::vector<std::string>& args) {
@@ -1295,7 +1454,7 @@ Dependencies default_dependencies() {
                                                     .display = options.display,
                                                     .output_path = options.output_path,
                                                 }),
-                                            io);
+                                            io, options.json);
             },
         .background_desktop_text =
             [](const BackgroundDesktopTextOptions &options, Io io) {
@@ -1325,6 +1484,15 @@ Dependencies default_dependencies() {
                                                       .click = options.click,
                                                   }),
                                               io);
+            },
+        .background_desktop_status =
+            [](const BackgroundDesktopStatusOptions &options, Io io) {
+                return print_background_desktop_status(kiseki::platform::session::background_desktop_status(
+                                                           kiseki::platform::session::BackgroundDesktopStatusOptions{
+                                                               .display = options.display,
+                                                               .state_directory = options.state_directory,
+                                                           }),
+                                                       options.json, io);
             },
         .cua_control = [](const CuaControlOptions& options, Io io) {
             using namespace kiseki::platform::session;
@@ -1605,15 +1773,15 @@ Dependencies default_dependencies() {
             },
         .macos_screen_recording_permission =
             [](const MacPermissionOptions &options, Io io) {
-                return print_operation_result(kiseki::platform::permissions::request_macos_screen_recording(
-                                                  options.prompt, options.open_settings),
-                                              io);
+                return print_permission_status(
+                    kiseki::platform::permissions::macos_screen_recording_status(options.prompt, options.open_settings),
+                    options.json, io);
             },
         .macos_accessibility_permission =
             [](const MacPermissionOptions &options, Io io) {
-                return print_operation_result(
-                    kiseki::platform::permissions::request_macos_accessibility(options.prompt, options.open_settings),
-                    io);
+                return print_permission_status(
+                    kiseki::platform::permissions::macos_accessibility_status(options.prompt, options.open_settings),
+                    options.json, io);
             },
         .run_daemon =
             [](const DaemonOptions &options, const std::filesystem::path &config_path, Io io) {
@@ -1815,6 +1983,10 @@ int run(
         .y = 0,
         .click = "none",
     };
+    BackgroundDesktopStatusOptions background_desktop_status_options{
+        .display = ":99",
+        .state_directory = {},
+    };
     MacBackgroundStatusOptions mac_background_status_options{
         .prompt = false,
     };
@@ -2008,7 +2180,7 @@ int run(
     bool modes_json = false;
 
     CLI::App app{"Kiseki Input"};
-    app.set_version_flag("--version", std::string{kiseki::core::version()});
+    app.set_version_flag("--version", kiseki::core::version_text());
     app.add_option("--config", config_path_override, "Config file path");
     app.require_subcommand(1);
 
@@ -2093,8 +2265,8 @@ int run(
 
     auto* screenshot = app.add_subcommand("screenshot", "Current-session and target screenshot commands");
     screenshot->require_subcommand(1);
-    auto* screenshot_desktop = screenshot->add_subcommand("desktop", "Capture the current visible desktop to a BMP file");
-    screenshot_desktop->add_option("-o,--output", desktop_options.output_path, "Output BMP path")->required();
+    auto* screenshot_desktop = screenshot->add_subcommand("desktop", "Capture the current visible desktop to an image file");
+    screenshot_desktop->add_option("-o,--output", desktop_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
     screenshot_desktop->add_flag("--json", desktop_options.json,
                                  "Return capture metadata and pixel-to-screen coordinates when available");
     screenshot_desktop->callback([&]() {
@@ -2139,7 +2311,7 @@ int run(
 
     auto* screenshot_window = screenshot->add_subcommand("window", "Capture a target window through the current-session screenshot path");
     add_target_options(screenshot_window, window_options.target);
-    screenshot_window->add_option("-o,--output", window_options.output_path, "Output BMP path")->required();
+    screenshot_window->add_option("-o,--output", window_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
     screenshot_window->add_flag("--json", window_options.json,
                                 "Return capture metadata and pixel-to-screen coordinates when available");
     screenshot_window->callback([&]() {
@@ -2154,7 +2326,7 @@ int run(
     auto* screenshot_background_window = screenshot->add_subcommand("background-window", "Capture a target window without activating it");
     screenshot_background_window->group("");
     add_target_options(screenshot_background_window, background_window_options.target);
-    screenshot_background_window->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
+    screenshot_background_window->add_option("-o,--output", background_window_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
     screenshot_background_window->add_flag("--json", background_window_options.json,
                                            "Return capture metadata and pixel-to-screen coordinates when available");
     screenshot_background_window->callback([&]() {
@@ -2452,9 +2624,23 @@ int run(
         exit_code = dependencies.background_desktop_launch(background_desktop_launch_options, io);
     });
 
-    auto* background_desktop_screenshot = background_desktop->add_subcommand("screenshot", "Capture the background desktop to a BMP file");
+    auto* background_desktop_status = background_desktop->add_subcommand("status", "Report whether the Kiseki-started Xvfb display is running (read-only)");
+    background_desktop_status->add_option("--display", background_desktop_status_options.display, "X11 display such as :99");
+    background_desktop_status->add_option("--state-dir", background_desktop_status_options.state_directory, "Directory for background desktop state files");
+    background_desktop_status->add_flag("--json", background_desktop_status_options.json, "Print machine-readable status");
+    background_desktop_status->callback([&]() {
+        if (!dependencies.background_desktop_status) {
+            io.err << "background desktop status backend is not configured\n";
+            exit_code = 2;
+            return;
+        }
+        exit_code = dependencies.background_desktop_status(background_desktop_status_options, io);
+    });
+
+    auto* background_desktop_screenshot = background_desktop->add_subcommand("screenshot", "Capture the background desktop to an image file");
     background_desktop_screenshot->add_option("--display", background_desktop_screenshot_options.display, "X11 display such as :99");
-    background_desktop_screenshot->add_option("-o,--output", background_desktop_screenshot_options.output_path, "Output BMP path")->required();
+    background_desktop_screenshot->add_option("-o,--output", background_desktop_screenshot_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
+    background_desktop_screenshot->add_flag("--json", background_desktop_screenshot_options.json, "Return capture metadata and pixel coordinates");
     background_desktop_screenshot->callback([&]() {
         if (!dependencies.background_desktop_screenshot) {
             io.err << "background desktop screenshot backend is not configured\n";
@@ -2523,11 +2709,11 @@ int run(
     background_window->require_subcommand(1);
     auto* background_window_screenshot_help = background_window->add_subcommand("screenshot", "Capture a target window without activating it");
     add_target_options(background_window_screenshot_help, background_window_options.target);
-    background_window_screenshot_help->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
+    background_window_screenshot_help->add_option("-o,--output", background_window_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
     background_window_screenshot_help->add_flag("--json", background_window_options.json, "Return capture metadata");
     auto* background_window_capture_help = background_window->add_subcommand("capture", "Capture a target window without activating it");
     add_target_options(background_window_capture_help, background_window_options.target);
-    background_window_capture_help->add_option("-o,--output", background_window_options.output_path, "Output BMP path")->required();
+    background_window_capture_help->add_option("-o,--output", background_window_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
     auto* background_window_text_help = background_window->add_subcommand("text", "Send text to a target window without switching foreground");
     add_target_options(background_window_text_help, background_text_options.target);
     background_window_text_help->add_option("--text", background_text_options.text, "Text to send");
@@ -2582,9 +2768,14 @@ int run(
     auto* background_desktop_launch_help = background_desktop_alias->add_subcommand("launch", "Launch a command inside the background desktop");
     background_desktop_launch_help->add_option("--display", background_desktop_launch_options.display, "X11 display such as :99");
     background_desktop_launch_help->add_option("--command", background_desktop_launch_options.command, "Shell command to launch")->required();
-    auto* background_desktop_screenshot_help = background_desktop_alias->add_subcommand("screenshot", "Capture the background desktop to a BMP file");
+    auto* background_desktop_status_help = background_desktop_alias->add_subcommand("status", "Report whether the Kiseki-started Xvfb display is running (read-only)");
+    background_desktop_status_help->add_option("--display", background_desktop_status_options.display, "X11 display such as :99");
+    background_desktop_status_help->add_option("--state-dir", background_desktop_status_options.state_directory, "Directory for background desktop state files");
+    background_desktop_status_help->add_flag("--json", background_desktop_status_options.json, "Print machine-readable status");
+    auto* background_desktop_screenshot_help = background_desktop_alias->add_subcommand("screenshot", "Capture the background desktop to an image file");
     background_desktop_screenshot_help->add_option("--display", background_desktop_screenshot_options.display, "X11 display such as :99");
-    background_desktop_screenshot_help->add_option("-o,--output", background_desktop_screenshot_options.output_path, "Output BMP path")->required();
+    background_desktop_screenshot_help->add_option("-o,--output", background_desktop_screenshot_options.output_path, "Output image path; .png writes PNG, .bmp writes BMP")->required();
+    background_desktop_screenshot_help->add_flag("--json", background_desktop_screenshot_options.json, "Return capture metadata and pixel coordinates");
     auto* background_desktop_text_help = background_desktop_alias->add_subcommand("text", "Type text into the background desktop");
     background_desktop_text_help->add_option("--display", background_desktop_text_options.display, "X11 display such as :99");
     background_desktop_text_help->add_option("--text", background_desktop_text_options.text, "Text to type");
@@ -3137,6 +3328,7 @@ int run(
     auto* mac_screen_recording = mac_permissions->add_subcommand("screen-recording", "Check or request macOS Screen Recording permission for the current CLI host");
     mac_screen_recording->add_flag("--prompt", mac_screen_recording_options.prompt, "Ask macOS to show the Screen Recording permission prompt when possible");
     mac_screen_recording->add_flag("--open-settings", mac_screen_recording_options.open_settings, "Open the Screen Recording settings pane if permission is missing");
+    mac_screen_recording->add_flag("--json", mac_screen_recording_options.json, "Print machine-readable status; exit code is 2 when not granted");
     mac_screen_recording->callback([&]() {
         if (!dependencies.macos_screen_recording_permission) {
             io.err << "macOS Screen Recording permission backend is not configured\n";
@@ -3149,6 +3341,7 @@ int run(
     auto* mac_accessibility = mac_permissions->add_subcommand("accessibility", "Check or request macOS Accessibility permission for the current CLI host");
     mac_accessibility->add_flag("--prompt", mac_accessibility_options.prompt, "Ask macOS to show the Accessibility permission prompt when possible");
     mac_accessibility->add_flag("--open-settings", mac_accessibility_options.open_settings, "Open the Accessibility settings pane if permission is missing");
+    mac_accessibility->add_flag("--json", mac_accessibility_options.json, "Print machine-readable status; exit code is 2 when not granted");
     mac_accessibility->callback([&]() {
         if (!dependencies.macos_accessibility_permission) {
             io.err << "macOS Accessibility permission backend is not configured\n";
@@ -3280,7 +3473,7 @@ int run(
     modes->add_flag("--json", modes_json, "Print machine-readable mode guide");
     modes->callback([&]() {
         if (modes_json) {
-            io.out << operation_modes_json().dump(2) << '\n';
+            io.out << operation_modes_json_with_availability().dump(2) << '\n';
             return;
         }
         print_operation_modes(io);
@@ -3324,6 +3517,11 @@ int run(
             io.out << "  - " << limitation << '\n';
         }
     });
+
+    if (is_version_json_request(args)) {
+        io.out << version_json().dump(2) << '\n';
+        return 0;
+    }
 
     if (const auto removed_message = removed_background_command_message(args); !removed_message.empty()) {
         io.err << removed_message << '\n';

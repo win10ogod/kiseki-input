@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
+# CMake 3.29+: de-duplicate repeated static libraries where the linker allows it
+# (avoids ld64 "ignoring duplicate libraries" warnings on macOS).
+if(POLICY CMP0156)
+    cmake_policy(SET CMP0156 NEW)
+endif()
 
 set(KISEKI_VERSION "0.1.0" CACHE STRING "Kiseki version (release workflow uses the version tag)")
 project(KisekiInput VERSION ${KISEKI_VERSION} LANGUAGES CXX)
@@ -49,15 +54,38 @@ set(KISEKI_CORE_SOURCES
     src/core/version.cpp
 )
 
+# Build provenance for `kiseki --version`: refreshed at every build so a stale
+# binary can be recognized by its commit and dirty state.
+find_package(Git QUIET)
+set(KISEKI_BUILD_COMMIT "" CACHE STRING "Commit to report when the source is not a git checkout")
+set(KISEKI_BUILD_INFO_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(KISEKI_BUILD_INFO_HEADER "${KISEKI_BUILD_INFO_DIR}/kiseki_build_info.hpp")
+set(KISEKI_BUILD_INFO_COMMAND "${CMAKE_COMMAND}"
+    "-DKISEKI_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DKISEKI_BUILD_INFO_OUTPUT=${KISEKI_BUILD_INFO_HEADER}"
+    "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+    "-DKISEKI_BUILD_COMMIT=${KISEKI_BUILD_COMMIT}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildInfo.cmake")
+file(MAKE_DIRECTORY "${KISEKI_BUILD_INFO_DIR}")
+execute_process(COMMAND ${KISEKI_BUILD_INFO_COMMAND})
+add_custom_target(kiseki_build_info
+    COMMAND ${KISEKI_BUILD_INFO_COMMAND}
+    BYPRODUCTS "${KISEKI_BUILD_INFO_HEADER}"
+    COMMENT "Recording Kiseki build provenance"
+    VERBATIM)
+
 add_library(kiseki_core STATIC ${KISEKI_CORE_SOURCES})
+add_dependencies(kiseki_core kiseki_build_info)
 target_compile_features(kiseki_core PUBLIC cxx_std_20)
 target_include_directories(kiseki_core PUBLIC src)
+target_include_directories(kiseki_core PRIVATE "${KISEKI_BUILD_INFO_DIR}")
 target_link_libraries(kiseki_core PUBLIC nlohmann_json::nlohmann_json)
 target_compile_definitions(kiseki_core PRIVATE KISEKI_VERSION="${PROJECT_VERSION}")
 set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 
 add_library(kiseki_platform STATIC
     src/platform/capture/bitmap_writer.cpp
+    src/platform/capture/image_writer.cpp
     src/platform/capture/screenshot.cpp
     src/platform/input/input.cpp
     src/platform/input/sequence_support.cpp
@@ -78,7 +106,7 @@ target_include_directories(kiseki_platform PUBLIC src)
 target_link_libraries(kiseki_platform PUBLIC kiseki_core)
 if(WIN32)
     target_sources(kiseki_platform PRIVATE src/platform/capture/d3d11_capture.cpp)
-    target_link_libraries(kiseki_platform PUBLIC user32 gdi32 d3d11.lib dxgi.lib uiautomationcore ole32 oleaut32)
+    target_link_libraries(kiseki_platform PUBLIC user32 gdi32 dwmapi d3d11.lib dxgi.lib uiautomationcore ole32 oleaut32 windowscodecs)
 elseif(APPLE)
     enable_language(OBJCXX)
     target_sources(kiseki_platform PRIVATE
@@ -90,12 +118,14 @@ elseif(APPLE)
     find_library(KISEKI_FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(KISEKI_SCREENCAPTUREKIT_FRAMEWORK ScreenCaptureKit REQUIRED)
     find_library(KISEKI_COREVIDEO_FRAMEWORK CoreVideo REQUIRED)
+    find_library(KISEKI_IMAGEIO_FRAMEWORK ImageIO REQUIRED)
     target_link_libraries(kiseki_platform PRIVATE
         ${KISEKI_APPLICATIONSERVICES_FRAMEWORK}
         ${KISEKI_FOUNDATION_FRAMEWORK}
         ${KISEKI_APPKIT_FRAMEWORK}
         ${KISEKI_SCREENCAPTUREKIT_FRAMEWORK}
         ${KISEKI_COREVIDEO_FRAMEWORK}
+        ${KISEKI_IMAGEIO_FRAMEWORK}
     )
     target_compile_options(kiseki_platform PRIVATE "$<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>")
 elseif(X11_FOUND)
@@ -108,7 +138,8 @@ elseif(X11_FOUND)
 endif()
 if(UNIX AND NOT APPLE AND NOT WIN32 AND KISEKI_GIO_FOUND AND KISEKI_GDK_PIXBUF_FOUND)
     target_sources(kiseki_platform PRIVATE src/platform/capture/wayland_portal_capture.cpp)
-    target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_XDG_DESKTOP_PORTAL=1)
+    # The portal slice already links gdk-pixbuf; reuse it for compressed PNG screenshots.
+    target_compile_definitions(kiseki_platform PRIVATE KISEKI_HAS_XDG_DESKTOP_PORTAL=1 KISEKI_HAS_GDK_PIXBUF=1)
     target_link_libraries(kiseki_platform PRIVATE PkgConfig::KISEKI_GIO PkgConfig::KISEKI_GDK_PIXBUF)
 endif()
 set_target_properties(kiseki_platform PROPERTIES CXX_EXTENSIONS OFF)
@@ -232,6 +263,9 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/smoke_test.cpp
         test/platform/input_sequence_test.cpp
         test/platform/cua_test.cpp
+        test/platform/image_writer_test.cpp
+        test/platform/target_selection_test.cpp
+        test/core/version_path_test.cpp
     )
     if(APPLE)
         list(APPEND KISEKI_TEST_SOURCES test/platform/mac_notification_test.cpp)

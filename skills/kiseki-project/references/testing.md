@@ -27,7 +27,7 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-Use the available native toolchain path; Homebrew tools may be absent from an SSH shell's PATH. Remote hosts, temporary checkouts, and authorization contexts must be discovered from the current environment, not copied from a previous test report.
+Use the available native toolchain path; Homebrew tools may be absent from an SSH shell's PATH. If macOS reports that the Xcode license has not been accepted, `/usr/bin/c++` and `/usr/bin/python3` fail; `DEVELOPER_DIR=/Library/Developer/CommandLineTools` selects the Command Line Tools for CMake builds and Python. A build from an exported source tree reports `commit unknown` in `--version` unless configured with `-DKISEKI_BUILD_COMMIT=<sha>`. Remote hosts, temporary checkouts, and authorization contexts must be discovered from the current environment, not copied from a previous test report.
 
 For skill validation, use the installed `skill-creator/scripts/quick_validate.py` if available. If it is not installed, inspect YAML frontmatter, resource links, and unfinished placeholders locally; do not require another plugin merely to read this project's skills.
 
