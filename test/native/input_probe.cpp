@@ -10,6 +10,89 @@
 using namespace native_probe;
 std::ofstream received;
 #ifdef _WIN32
+// Driver-backend probe. Exercises what the Windows driver-level backend can do and records
+// delivery honestly: absolute moves must land exactly (the closed loop proves it), buttons
+// must be matched and released, and the native stream must show driver-level (non-injected)
+// events. When the configured driver cannot deliver on this host, it records that fact and
+// stops without pretending to have moved anything.
+void run_driver(int x, int y, const std::string &window_id) {
+    using namespace kiseki::platform::input;
+    InputCancellationScope cancellation;
+    const auto status = driver_status();
+    nlohmann::json report{{"requestedType", status.requested_type}, {"source", status.source},
+                          {"loaded", status.loaded},               {"initialized", status.initialized}};
+    // One real driver move proves (or disproves) delivery before anything else is sent.
+    const auto probe = mouse_action({0, 0, x, y, true, "driver", "none"});
+    const auto after = driver_status();
+    report["selectedType"] = after.selected_type;
+    report["verified"] = after.verified;
+    report["state"] = after.state;
+    report["detail"] = after.detail;
+    report["firstMoveOk"] = probe.ok;
+    report["firstMoveError"] = probe.error;
+    if (!probe.ok) {
+        std::ofstream{output / "driver-status.json"} << report.dump(2);
+        std::cout << "driver_backend=undelivered selected=" << after.selected_type << " detail=\"" << after.detail
+                  << "\"" << std::endl;
+        finished = true;
+        return;
+    }
+    kiseki::platform::teach::NativeEventStream stream{std::chrono::steady_clock::now()};
+    if (const auto error = stream.initialize()) {
+        ++failures;
+        std::cerr << *error << '\n';
+    }
+    nlohmann::json moves = nlohmann::json::array();
+    const auto move_exact = [&](int px, int py) {
+        check(mouse_action({0, 0, px, py, true, "driver", "none"}));
+        POINT landed{};
+        GetCursorPos(&landed);
+        moves.push_back({{"targetX", px}, {"targetY", py}, {"landedX", landed.x}, {"landedY", landed.y}});
+        if (landed.x != px || landed.y != py) {
+            ++failures;
+            std::cerr << "driver move missed target (" << px << "," << py << ") landed (" << landed.x << ","
+                      << landed.y << ")\n";
+        }
+        wait(60);
+    };
+    for (int button = 0; button < 3; ++button) {
+        phase = 31 + button;
+        const std::string name = button == 0 ? "left" : button == 1 ? "right" : "middle";
+        move_exact(x, y + button * 20);
+        check(mouse_action({0, 0, x, y + button * 20, true, "driver", name + "-down"}));
+        move_exact(x + 100, y + button * 20);
+        check(mouse_action({0, 0, x + 100, y + button * 20, true, "driver", name + "-up"}));
+        wait(80);
+    }
+    phase = 34;
+    move_exact(x, y);
+    check(mouse_action({0, 0, x, y, true, "driver", "x1"}));
+    check(mouse_action({0, 0, x, y, true, "driver", "x2"}));
+    wait(80);
+    phase = 35;
+    // Vertical wheel always; horizontal only where the selected driver supports it.
+    check(mouse_action({.dx = 0, .dy = 0, .x = 0, .y = 0, .absolute = false, .backend = "driver", .click = "none",
+                        .wheel = 120}));
+    const auto hwheel = mouse_action({.dx = 0, .dy = 0, .x = 0, .y = 0, .absolute = false, .backend = "driver",
+                                      .click = "none", .hwheel = -120});
+    report["horizontalWheelOk"] = hwheel.ok;
+    report["horizontalWheelError"] = hwheel.error;
+    wait(80);
+    phase = 36;
+    for (const auto *key : {"a", "b", "c"})
+        check(tap_key(key, "driver"));
+    check(synchronize_input());
+    wait(120);
+    stream.stop();
+    std::ofstream events{output / "stream-events.jsonl"};
+    for (const auto &e : stream.drain())
+        events << e.dump() << '\n';
+    report["moves"] = moves;
+    std::ofstream{output / "driver-status.json"} << report.dump(2);
+    std::cout << "driver_backend=verified selected=" << after.selected_type << " operation_failures=" << failures
+              << std::endl;
+    finished = true;
+}
 void binding_cases(HWND window, HWND spare) {
     using namespace kiseki::platform::input;
     for (int scenario = 0; scenario < 3; ++scenario) {
@@ -182,7 +265,18 @@ void pump() {
     }
 }
 int main(int argc, char **argv) {
-    output = argc > 1 ? argv[1] : "native-probe";
+    const auto args = parse_probe_args(argc, argv);
+    if (args.help) {
+        print_probe_usage(std::cout, argv[0]);
+        return 0;
+    }
+    if (args.error) {
+        std::cerr << args.message << "\n\n";
+        print_probe_usage(std::cerr, argv[0]);
+        return 2;
+    }
+    output = args.output;
+    backend = args.backend;
     std::filesystem::create_directories(output);
     received.open(output / "receiver-events.jsonl");
     SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -226,6 +320,10 @@ int main(int argc, char **argv) {
     POINT point{100, 100};
     ClientToScreen(window, &point);
     std::thread sender([&] {
+        if (backend == "driver") {
+            run_driver(point.x, point.y, std::to_string(reinterpret_cast<std::uintptr_t>(window)));
+            return;
+        }
         binding_cases(window, spare);
         run(point.x, point.y, std::to_string(reinterpret_cast<std::uintptr_t>(window)), true);
     });
@@ -245,8 +343,23 @@ int main(int argc, char **argv) {
 }
 #else
 int main(int argc, char **argv) {
+    const auto args = parse_probe_args(argc, argv);
+    if (args.help) {
+        print_probe_usage(std::cout, argv[0]);
+        return 0;
+    }
+    if (args.error) {
+        std::cerr << args.message << "\n\n";
+        print_probe_usage(std::cerr, argv[0]);
+        return 2;
+    }
+    if (args.backend == "driver") {
+        std::cerr << "the driver backend is Windows-only; X11 input uses the system XTest backend\n";
+        return 2;
+    }
     XInitThreads();
-    output = argc > 1 ? argv[1] : "native-probe";
+    output = args.output;
+    backend = args.backend;
     std::filesystem::create_directories(output);
     received.open(output / "receiver-events.jsonl");
     Display *display = XOpenDisplay(nullptr);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,8 @@ struct TargetWindow {
     int y = 0;
     int width = 0;
     int height = 0;
+    // How pid was resolved: "system", "_NET_WM_PID", "x-resource", or "unknown" (pid is then 0).
+    std::string pid_source = "system";
 };
 
 struct TargetChildWindow {
@@ -56,6 +59,8 @@ struct InspectResult {
 };
 
 bool has_target_selector(const TargetQuery& query);
+// Numeric value of a window id ("0x340656" or decimal "3409494"); CUA reports the same value in decimal.
+std::optional<std::uint64_t> window_id_value(const std::string& id);
 bool target_window_available();
 ListResult list_windows(const TargetQuery& filter = {});
 ResolveResult resolve_window(const TargetQuery& query);

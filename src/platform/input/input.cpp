@@ -4,6 +4,9 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
 #include <map>
 #include <set>
 #include <limits>
@@ -17,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "platform/input/driver_model.hpp"
 #include "platform/input/sequence_support.hpp"
 
 #ifdef _WIN32
@@ -129,83 +133,88 @@ bool combo_contains_system_hotkey(const std::vector<std::string>& keys) {
            std::find(keys.begin(), keys.end(), "meta") != keys.end();
 }
 
+// Input this process is currently holding (acquired key/button tokens). Declared before the
+// Windows driver self-test so its held-input guard can see them.
+thread_local std::set<std::string> owned_keys;
+thread_local std::set<std::string> owned_buttons;
+
 #ifdef _WIN32
 
-using IbSendInitFn = unsigned long(__stdcall*)(unsigned long, unsigned long, void*);
-using IbSendDestroyFn = void(__stdcall*)();
-using IbSendKeybdDownFn = bool(__stdcall*)(unsigned short);
-using IbSendKeybdUpFn = bool(__stdcall*)(unsigned short);
-using IbSendMouseMoveFn = bool(__stdcall*)(unsigned int, unsigned int, unsigned int);
-using IbSendMouseClickFn = bool(__stdcall*)(unsigned int);
-using IbSendMouseWheelFn = bool(__stdcall *)(int);
+using IbSendInitFn = unsigned long(__stdcall *)(unsigned long, unsigned long, void *);
+using IbSendDestroyFn = void(__stdcall *)();
+using IbSendInputFn = UINT(WINAPI *)(UINT, LPINPUT, int);
 
+// Loads IbInputSimulator.dll and routes every event through API 1 (IbSendInput), which
+// accepts full INPUT arrays. This reaches the same per-driver translation the system
+// backend's INPUT construction feeds, so HWHEEL, X buttons, extended keys, and batched
+// combos go through one path instead of the narrower API-3 helpers.
 class IbInputSimulator {
 public:
     IbInputSimulator() {
         dll_ = LoadLibraryW(L"IbInputSimulator.dll");
         if (dll_ == nullptr) {
+            load_error_ = "IbInputSimulator.dll is not next to the executable";
             return;
         }
-
         init_ = reinterpret_cast<IbSendInitFn>(GetProcAddress(dll_, "IbSendInit"));
         destroy_ = reinterpret_cast<IbSendDestroyFn>(GetProcAddress(dll_, "IbSendDestroy"));
-        key_down_ = reinterpret_cast<IbSendKeybdDownFn>(GetProcAddress(dll_, "IbSendKeybdDown"));
-        key_up_ = reinterpret_cast<IbSendKeybdUpFn>(GetProcAddress(dll_, "IbSendKeybdUp"));
-        mouse_move_ = reinterpret_cast<IbSendMouseMoveFn>(GetProcAddress(dll_, "IbSendMouseMove"));
-        mouse_click_ = reinterpret_cast<IbSendMouseClickFn>(GetProcAddress(dll_, "IbSendMouseClick"));
-        mouse_wheel_ = reinterpret_cast<IbSendMouseWheelFn>(GetProcAddress(dll_, "IbSendMouseWheel"));
-        if (!(init_ && destroy_ && key_down_ && key_up_ && mouse_move_ && mouse_click_)) {
+        send_input_ = reinterpret_cast<IbSendInputFn>(GetProcAddress(dll_, "IbSendInput"));
+        if (!(init_ && destroy_ && send_input_)) {
             FreeLibrary(dll_);
             dll_ = nullptr;
-            return;
+            init_ = nullptr;
+            destroy_ = nullptr;
+            send_input_ = nullptr;
+            load_error_ = "IbInputSimulator.dll is missing expected exports";
         }
-
-        initialized_ = init_(0, 1, nullptr) == 0;
     }
 
     ~IbInputSimulator() {
-        if (initialized_ && destroy_ != nullptr) {
-            destroy_();
-        }
-        if (dll_ != nullptr) {
+        destroy();
+        if (dll_ != nullptr)
             FreeLibrary(dll_);
+    }
+
+    bool loaded() const { return dll_ != nullptr; }
+    const std::string &load_error() const { return load_error_; }
+
+    // Initializes a specific IbInputSimulator Send::SendType. DD takes a DLL path (wide
+    // string); MouClassInputInjection takes a process id passed by value.
+    int init(driver::Type type, const std::string &argument) {
+        destroy();
+        void *arg = nullptr;
+        std::wstring wide_argument;
+        if (type == driver::Type::dd && !argument.empty()) {
+            wide_argument.assign(argument.begin(), argument.end());
+            arg = wide_argument.data();
+        } else if (type == driver::Type::mouclass && !argument.empty()) {
+            arg = reinterpret_cast<void *>(static_cast<std::uintptr_t>(std::stoull(argument)));
         }
+        const int code = static_cast<int>(init_(driver::ib_send_type(type), 0, arg));
+        initialized_ = code == 0;
+        return code;
     }
 
-    bool available() const {
-        return initialized_;
+    void destroy() {
+        if (initialized_ && destroy_ != nullptr)
+            destroy_();
+        initialized_ = false;
     }
 
-    bool key_down(unsigned short vk) const {
-        return key_down_ != nullptr && key_down_(vk);
-    }
+    bool initialized() const { return initialized_; }
 
-    bool key_up(unsigned short vk) const {
-        return key_up_ != nullptr && key_up_(vk);
-    }
-
-    bool mouse_move(int x, int y, unsigned int mode) const {
-        return mouse_move_ != nullptr &&
-               mouse_move_(static_cast<unsigned int>(x), static_cast<unsigned int>(y), mode);
-    }
-
-    bool mouse_click(unsigned int button) const {
-        return mouse_click_ != nullptr && mouse_click_(button);
-    }
-    bool mouse_wheel(int delta) const {
-        return mouse_wheel_ != nullptr && mouse_wheel_(delta);
+    bool send(const INPUT *inputs, UINT count) const {
+        return initialized_ && send_input_ != nullptr &&
+               send_input_(count, const_cast<LPINPUT>(inputs), sizeof(INPUT)) == count;
     }
 
 private:
     HMODULE dll_ = nullptr;
     IbSendInitFn init_ = nullptr;
     IbSendDestroyFn destroy_ = nullptr;
-    IbSendKeybdDownFn key_down_ = nullptr;
-    IbSendKeybdUpFn key_up_ = nullptr;
-    IbSendMouseMoveFn mouse_move_ = nullptr;
-    IbSendMouseClickFn mouse_click_ = nullptr;
-    IbSendMouseWheelFn mouse_wheel_ = nullptr;
+    IbSendInputFn send_input_ = nullptr;
     bool initialized_ = false;
+    std::string load_error_;
 };
 
 unsigned short virtual_key_for_name(const std::string& key) {
@@ -1170,9 +1179,485 @@ OperationResult send_background_text_key_x11(Display* display, Window window, un
 // Native resources stay alive for the invocation so a sequence cannot change driver
 // or X11 connection between a down and its matching up.
 #ifdef _WIN32
-IbInputSimulator &driver() {
-    static thread_local IbInputSimulator value;
-    return value;
+INPUT mouse_input(DWORD flags, int dx = 0, int dy = 0, DWORD data = 0) {
+    INPUT input{};
+    input.type = INPUT_MOUSE;
+    input.mi.dx = dx;
+    input.mi.dy = dy;
+    input.mi.mouseData = data;
+    input.mi.dwFlags = flags;
+    return input;
+}
+INPUT keyboard_input(unsigned short vk, bool down, bool numpad_enter = false) {
+    INPUT input{};
+    input.type = INPUT_KEYBOARD;
+    input.ki.wVk = vk;
+    if (numpad_enter) {
+        input.ki.wScan = 0x1c;
+        input.ki.dwFlags = KEYEVENTF_EXTENDEDKEY | (down ? 0 : KEYEVENTF_KEYUP);
+        return input;
+    }
+    const DWORD thread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+    const UINT scan = MapVirtualKeyExW(vk, MAPVK_VK_TO_VSC_EX, GetKeyboardLayout(thread));
+    input.ki.wScan = static_cast<WORD>(scan & 0xff);
+    input.ki.dwFlags = (down ? 0 : KEYEVENTF_KEYUP) |
+                       (((scan & 0xff00) == 0xe000 || extended_virtual_key(vk)) ? KEYEVENTF_EXTENDEDKEY : 0);
+    return input;
+}
+
+// True while Kiseki is holding a mouse button or any key, so the self-test must not run: a
+// relative probe during a held `left-down` would turn into a drag. Checks both this process's
+// owned state and the live async button state for buttons held by an earlier invocation.
+bool managed_input_held() {
+    if (!owned_keys.empty() || !owned_buttons.empty())
+        return true;
+    for (const int vk : {VK_LBUTTON, VK_RBUTTON, VK_MBUTTON, VK_XBUTTON1, VK_XBUTTON2})
+        if (GetAsyncKeyState(vk) & 0x8000)
+            return true;
+    return false;
+}
+
+POINT read_cursor() {
+    POINT point{};
+    GetCursorPos(&point);
+    return point;
+}
+
+// Settles briefly so GetCursorPos reflects the driver's HID report, then returns the cursor.
+POINT settle_cursor(int ms = 18) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+    return read_cursor();
+}
+
+bool at_edge(const POINT &p, int cmd_dx, int cmd_dy) {
+    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN), top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int right = left + GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1;
+    const int bottom = top + GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1;
+    const int margin = 16;
+    if (cmd_dx > 0 && p.x >= right - margin)
+        return true;
+    if (cmd_dx < 0 && p.x <= left + margin)
+        return true;
+    if (cmd_dy > 0 && p.y >= bottom - margin)
+        return true;
+    if (cmd_dy < 0 && p.y <= top + margin)
+        return true;
+    return false;
+}
+
+// Verifies a driver by sending small, bounded, RELATIVE probes and measuring the observed
+// displacement. It never sends an absolute command (vendors such as Razer treat normalized
+// absolute coordinates as huge relative deltas and would fling the cursor), caps every step,
+// aborts on overshoot, and always returns the pointer to its origin. A low-level mouse hook
+// runs alongside only to note driver-level (non-injected) evidence.
+class DriverVerifier {
+public:
+    struct Result {
+        driver::Delivery delivery = driver::Delivery::untested;
+        bool driver_level = false;
+        std::string detail;
+    };
+    template <typename Send>
+    static Result run(const Send &send) {
+        Result result;
+        if (managed_input_held()) {
+            result.delivery = driver::Delivery::deferred;
+            result.detail = "a mouse button or key is held; delivery check deferred to avoid a drag";
+            return result;
+        }
+        DriverVerifier test;
+        test.start();
+        if (!test.ready_) {
+            result.detail = "low-level mouse hook failed, error " + std::to_string(test.error_);
+            test.stop();
+            return result;
+        }
+        const POINT origin = read_cursor();
+        test.arm();
+        std::vector<driver::ProbeSample> samples;
+        bool flung = false;
+        for (const auto &[cmd_dx, cmd_dy] : driver::standard_probes()) {
+            const POINT before = read_cursor();
+            driver::ProbeSample sample{cmd_dx, cmd_dy, 0, 0, !at_edge(before, cmd_dx, cmd_dy)};
+            if (sample.valid) {
+                send(mouse_input(MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, cmd_dx, cmd_dy));
+                const POINT after = settle_cursor();
+                sample.obs_dx = static_cast<int>(after.x - before.x);
+                sample.obs_dy = static_cast<int>(after.y - before.y);
+                // Hard safety net independent of the classifier: never let a probe fling.
+                if (std::abs(sample.obs_dx) > kFlingAbort || std::abs(sample.obs_dy) > kFlingAbort) {
+                    samples.push_back(sample);
+                    flung = true;
+                    break;
+                }
+            }
+            samples.push_back(sample);
+        }
+        result.driver_level = test.non_injected_ > 0;
+        // Bring the pointer back to origin with bounded relative steps, then guarantee it with
+        // SetCursorPos. Always restore: the driver may have displaced the cursor even on failure.
+        restore_to(send, origin);
+        SetCursorPos(origin.x, origin.y);
+        test.stop();
+        if (flung) {
+            result.delivery = driver::Delivery::unfaithful;
+            result.detail = "driver flung the pointer on a small relative probe";
+            return result;
+        }
+        const auto verdict = driver::classify_probes(samples);
+        result.delivery = verdict.result;
+        result.detail = verdict.detail;
+        if (driver::usable(verdict.result) && !result.driver_level)
+            result.detail += " (warning: no non-injected low-level event was observed)";
+        return result;
+    }
+
+private:
+    static constexpr int kFlingAbort = 48;
+    static thread_local DriverVerifier *active_;
+    std::thread worker_;
+    std::atomic<bool> stopping_{false};
+    std::atomic<int> non_injected_{0};
+    std::atomic<bool> ready_{false};
+    std::atomic<bool> armed_{false};
+    DWORD error_ = 0;
+    template <typename Send>
+    static void restore_to(const Send &send, const POINT &origin) {
+        for (int iteration = 0; iteration < 24; ++iteration) {
+            const POINT cur = read_cursor();
+            const int dx = static_cast<int>(origin.x - cur.x), dy = static_cast<int>(origin.y - cur.y);
+            if (dx == 0 && dy == 0)
+                return;
+            send(mouse_input(MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, std::clamp(dx, -12, 12),
+                             std::clamp(dy, -12, 12)));
+            settle_cursor(4);
+        }
+    }
+    static LRESULT CALLBACK hook(int code, WPARAM message, LPARAM data) {
+        if (code == HC_ACTION && active_ && active_->armed_ && message == WM_MOUSEMOVE) {
+            const auto &m = *reinterpret_cast<MSLLHOOKSTRUCT *>(data);
+            if (!(m.flags & LLMHF_INJECTED))
+                ++active_->non_injected_;
+        }
+        return CallNextHookEx(nullptr, code, message, data);
+    }
+    void arm() {
+        non_injected_ = 0;
+        armed_ = true;
+    }
+    void start() {
+        std::atomic<int> state{0};
+        worker_ = std::thread([this, &state] {
+            active_ = this;
+            MSG message;
+            PeekMessageW(&message, nullptr, 0, 0, PM_NOREMOVE);
+            const auto hook_handle = SetWindowsHookExW(WH_MOUSE_LL, hook, GetModuleHandleW(nullptr), 0);
+            if (!hook_handle) {
+                error_ = GetLastError();
+                state = 2;
+                active_ = nullptr;
+                return;
+            }
+            ready_ = true;
+            state = 1;
+            while (!stopping_) {
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, 15, QS_ALLINPUT);
+                while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            UnhookWindowsHookEx(hook_handle);
+            active_ = nullptr;
+        });
+        while (state == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    void stop() {
+        stopping_ = true;
+        if (worker_.joinable())
+            worker_.join();
+    }
+};
+thread_local DriverVerifier *DriverVerifier::active_ = nullptr;
+
+// Persists the delivery verdict across Kiseki invocations so the risky self-test runs once
+// per (driver type, DLL identity, logon session) rather than on every command. Hand-rolled
+// single-line records keep input.cpp free of a JSON dependency for the boundary test build.
+struct DriverCacheKey {
+    std::string type;
+    std::uintptr_t dll_size = 0;
+    std::uintptr_t dll_time = 0;
+    std::string session;
+};
+std::string current_session_id() {
+    // Changes on reboot (boot time) and per interactive logon session.
+    const std::uint64_t boot = static_cast<std::uint64_t>(std::time(nullptr)) - GetTickCount64() / 1000;
+    DWORD session = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    return std::to_string(boot / 60) + "-" + std::to_string(session);
+}
+DriverCacheKey driver_cache_key(driver::Type type) {
+    DriverCacheKey key;
+    key.type = driver::type_name(type);
+    key.session = current_session_id();
+    WIN32_FILE_ATTRIBUTE_DATA info{};
+    wchar_t path[MAX_PATH]{};
+    if (GetModuleFileNameW(GetModuleHandleW(L"IbInputSimulator.dll"), path, MAX_PATH) &&
+        GetFileAttributesExW(path, GetFileExInfoStandard, &info)) {
+        key.dll_size = (static_cast<std::uintptr_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+        key.dll_time =
+            (static_cast<std::uintptr_t>(info.ftLastWriteTime.dwHighDateTime) << 32) | info.ftLastWriteTime.dwLowDateTime;
+    }
+    return key;
+}
+constexpr std::int64_t kDriverCacheTtlSeconds = 12 * 60 * 60;
+std::optional<driver::Delivery> read_driver_cache(const std::string &path, const DriverCacheKey &key) {
+    if (path.empty())
+        return std::nullopt;
+    std::ifstream file{path};
+    std::string line;
+    while (std::getline(file, line)) {
+        std::istringstream parts{line};
+        std::string type, size, time, session, result, when;
+        if (!std::getline(parts, type, '\t') || !std::getline(parts, size, '\t') ||
+            !std::getline(parts, time, '\t') || !std::getline(parts, session, '\t') ||
+            !std::getline(parts, result, '\t') || !std::getline(parts, when, '\t'))
+            continue;
+        if (type != key.type || size != std::to_string(key.dll_size) || time != std::to_string(key.dll_time) ||
+            session != key.session)
+            continue;
+        try {
+            if (std::time(nullptr) - std::stoll(when) > kDriverCacheTtlSeconds)
+                return std::nullopt;
+        } catch (...) {
+            return std::nullopt;
+        }
+        return driver::parse_delivery(result);
+    }
+    return std::nullopt;
+}
+void write_driver_cache(const std::string &path, const DriverCacheKey &key, driver::Delivery delivery) {
+    if (path.empty() || delivery == driver::Delivery::deferred || delivery == driver::Delivery::untested)
+        return;
+    std::vector<std::string> keep;
+    {
+        std::ifstream file{path};
+        std::string line;
+        while (std::getline(file, line)) {
+            std::istringstream parts{line};
+            std::string type;
+            if (std::getline(parts, type, '\t') && type != key.type)
+                keep.push_back(line);
+        }
+    }
+    try {
+        std::filesystem::create_directories(std::filesystem::path{path}.parent_path());
+    } catch (...) {
+    }
+    std::ofstream file{path, std::ios::trunc};
+    for (const auto &line : keep)
+        file << line << '\n';
+    file << key.type << '\t' << key.dll_size << '\t' << key.dll_time << '\t' << key.session << '\t'
+         << driver::delivery_name(delivery) << '\t' << std::time(nullptr) << '\n';
+}
+
+// Owns the loaded DLL, the selected driver type, and the cached delivery verdict. The moving
+// self-test runs at most once per process and its result is cached across invocations keyed
+// by driver type, DLL identity and logon session, so repeated `auto` commands cost ~0 ms.
+class DriverSession {
+public:
+    // Loads the DLL and opens a driver type, reading the persisted verdict, but does NOT move
+    // the pointer: diagnostics (capabilities/doctor) report the selected type and cached state
+    // without disturbing the desktop. A fresh self-test runs lazily in require_ready().
+    void configure(const driver::Settings &settings) {
+        if (configured_ && settings_.same_target(settings)) {
+            settings_ = settings; // refresh cache path / reverify without re-opening the device
+            return;
+        }
+        settings_ = settings;
+        configured_ = true;
+        sim_.destroy();
+        selected_ = driver::Type::any;
+        init_code_ = -1;
+        delivery_ = driver::Delivery::untested;
+        verify_attempted_ = false;
+        detail_.clear();
+        if (!settings_.error.empty()) {
+            detail_ = settings_.error;
+            return;
+        }
+        if (!sim_.loaded()) {
+            detail_ = sim_.load_error();
+            return;
+        }
+        if (settings_.type == driver::Type::any) {
+            // Prefer a candidate whose cache already says verified; otherwise open the first
+            // available one for reporting (it will be re-probed on first use).
+            driver::Type first_open = driver::Type::any;
+            bool opened = false;
+            for (const auto candidate : driver::probe_order()) {
+                if (sim_.init(candidate, settings_.argument) != 0)
+                    continue;
+                if (!opened) {
+                    first_open = candidate;
+                    opened = true;
+                }
+                const auto cached = cached_delivery(candidate);
+                if (cached && driver::usable(*cached)) {
+                    selected_ = candidate;
+                    init_code_ = 0;
+                    delivery_ = *cached;
+                    verify_attempted_ = true;
+                    detail_ = driver::type_name(candidate) + " driver verified (cached)";
+                    return;
+                }
+                sim_.destroy();
+            }
+            if (opened) {
+                selected_ = first_open;
+                init_code_ = sim_.init(first_open, settings_.argument);
+                detail_ = driver::type_name(first_open) + " driver opened; delivery not yet verified";
+            } else {
+                detail_ = "no supported driver device is available to open";
+            }
+            return;
+        }
+        selected_ = settings_.type;
+        init_code_ = sim_.init(settings_.type, settings_.argument);
+        if (init_code_ != 0) {
+            detail_ = driver::type_name(settings_.type) + " driver init failed: " + driver::ib_error_name(init_code_);
+            return;
+        }
+        if (const auto cached = cached_delivery(settings_.type)) {
+            delivery_ = *cached;
+            verify_attempted_ = true;
+            detail_ = driver::type_name(settings_.type) + " driver " + driver::delivery_name(*cached) + " (cached)";
+        } else {
+            detail_ = driver::type_name(settings_.type) + " driver opened; delivery not yet verified";
+        }
+    }
+
+    bool loaded() const { return sim_.loaded(); }
+    bool initialized() const { return init_code_ == 0; }
+    bool verified() const { return driver::usable(delivery_); }
+    bool verify_attempted() const { return verify_attempted_; }
+    driver::Type selected() const { return selected_; }
+    driver::Delivery delivery() const { return delivery_; }
+    const driver::Settings &settings() const { return settings_; }
+    const std::string &detail() const { return detail_; }
+
+    std::string state() const {
+        if (!settings_.error.empty())
+            return "misconfigured";
+        if (!sim_.loaded())
+            return "unavailable";
+        if (init_code_ != 0)
+            return "init-failed";
+        if (!verify_attempted_)
+            return "unverified";
+        return driver::delivery_name(delivery_); // verified / silent / unfaithful / deferred
+    }
+
+    bool send(const INPUT *inputs, UINT count) const { return sim_.send(inputs, count); }
+
+    // Proves delivery on first use (or when reverify is set), honouring the cache. For `any`,
+    // it probes candidates in order and keeps the first that verifies; a cached undelivered
+    // verdict skips the probe entirely. Returns ok only when a verified driver is in place.
+    OperationResult require_ready() {
+        if (!settings_.error.empty())
+            return fail(settings_.error);
+        if (!sim_.loaded())
+            return fail(sim_.load_error());
+        if (verify_attempted_ && !settings_.reverify)
+            return verified_result();
+
+        if (settings_.type == driver::Type::any) {
+            std::string last;
+            bool opened = false;
+            for (const auto candidate : driver::probe_order()) {
+                if (sim_.init(candidate, settings_.argument) != 0)
+                    continue;
+                opened = true;
+                selected_ = candidate;
+                init_code_ = 0;
+                const auto delivery = verify(candidate);
+                if (driver::usable(delivery)) {
+                    delivery_ = delivery;
+                    verify_attempted_ = true;
+                    return ok("");
+                }
+                last = driver::type_name(candidate) + ": " + detail_;
+                if (delivery == driver::Delivery::deferred) {
+                    // Cannot prove anything now (input held). Do not cache; fall back to system.
+                    delivery_ = delivery;
+                    verify_attempted_ = true;
+                    return fail("driver delivery check deferred: " + detail_);
+                }
+                sim_.destroy();
+            }
+            init_code_ = opened ? 0 : -1;
+            delivery_ = opened ? driver::Delivery::silent : driver::Delivery::untested;
+            verify_attempted_ = true;
+            detail_ = opened ? ("no opened driver delivered input (" + last + ")")
+                             : "no supported driver device is available to open";
+            return fail("driver backend did not deliver input: " + detail_);
+        }
+        if (init_code_ != 0)
+            return fail(detail_.empty() ? "driver init failed" : detail_);
+        delivery_ = verify(settings_.type);
+        verify_attempted_ = true;
+        return verified_result();
+    }
+
+private:
+    OperationResult verified_result() const {
+        if (driver::usable(delivery_))
+            return ok("");
+        return fail("driver backend (" + driver::type_name(selected_) + ") is " + driver::delivery_name(delivery_) +
+                    ": " + detail_);
+    }
+    // Runs the moving self-test for `type`, records the detail, and caches the verdict (except
+    // a transient `deferred`).
+    driver::Delivery verify(driver::Type type) {
+        const auto result = DriverVerifier::run([this](const INPUT &input) { sim_.send(&input, 1); });
+        detail_ = result.detail;
+        if (result.delivery != driver::Delivery::deferred)
+            write_driver_cache(settings_.cache_path, driver_cache_key(type), result.delivery);
+        return result.delivery;
+    }
+    std::optional<driver::Delivery> cached_delivery(driver::Type type) const {
+        if (settings_.reverify)
+            return std::nullopt;
+        return read_driver_cache(settings_.cache_path, driver_cache_key(type));
+    }
+
+    IbInputSimulator sim_;
+    driver::Settings settings_;
+    driver::Type selected_ = driver::Type::any;
+    bool configured_ = false;
+    int init_code_ = -1;
+    driver::Delivery delivery_ = driver::Delivery::untested;
+    bool verify_attempted_ = false;
+    std::string detail_;
+};
+
+thread_local std::optional<driver::Settings> driver_settings_override;
+driver::Settings resolve_driver_settings() {
+    if (driver_settings_override)
+        return *driver_settings_override;
+    driver::SettingsLayers layers;
+    if (const char *type = std::getenv("KISEKI_DRIVER"))
+        layers.env_type = type;
+    if (const char *argument = std::getenv("KISEKI_DRIVER_ARG"))
+        layers.env_argument = argument;
+    return driver::resolve_settings(layers);
+}
+
+DriverSession &driver_session() {
+    static thread_local DriverSession session;
+    session.configure(resolve_driver_settings());
+    return session;
 }
 #elif defined(KISEKI_HAS_X11) && !defined(__APPLE__)
 struct NativeX11 {
@@ -1188,8 +1673,6 @@ NativeX11 &native_x11() {
     return value;
 }
 #endif
-thread_local std::set<std::string> owned_keys;
-thread_local std::set<std::string> owned_buttons;
 #ifdef _WIN32
 struct BackgroundMouseState {
     HWND receiver = nullptr;
@@ -1209,20 +1692,38 @@ thread_local std::map<Window, BackgroundMouseState> background_mouse_states;
 std::string choose_backend(const std::string &requested) {
     const auto name = lower_copy(requested.empty() ? "auto" : requested);
 #ifdef _WIN32
+    // auto uses the driver only once its delivery has been proven this process; otherwise
+    // it silently and correctly falls back to the always-present system backend.
     if (name == "auto")
-        return driver().available() ? "driver" : "system";
+        return driver_session().require_ready().ok ? "driver" : "system";
 #else
     if (name == "auto")
         return "system";
 #endif
     return name;
 }
+
+// For auto requests, state which backend actually ran and why, so a silent driver fallback
+// is visible in the command output rather than being mistaken for driver delivery.
+std::string backend_note(const std::string &requested, const std::string &chosen) {
+    if (lower_copy(requested.empty() ? "auto" : requested) != "auto")
+        return "";
+#ifdef _WIN32
+    auto &session = driver_session();
+    if (chosen == "driver")
+        return " (backend: driver " + driver::type_name(session.selected()) + ", verified)";
+    if (session.loaded())
+        return " (backend: system; driver " + driver::type_name(session.selected()) + " " + session.state() + ": " +
+               session.detail() + ")";
+#endif
+    return " (backend: " + chosen + ")";
+}
 OperationResult check_backend(const std::string &backend) {
     if (!supported_backend(backend))
         return fail("backend must be auto, driver, or system");
 #ifdef _WIN32
-    if (backend == "driver" && !driver().available())
-        return fail("IbInputSimulator is not available");
+    if (backend == "driver")
+        return driver_session().require_ready();
 #elif defined(__APPLE__)
     if (backend == "driver")
         return fail("macOS native input uses the system backend, not driver");
@@ -1328,10 +1829,11 @@ OperationResult send_native_key(const std::string &key, bool down, const std::st
 #ifdef _WIN32
     const auto vk = virtual_key_for_name(key);
     if (backend == "driver") {
-        if (lower_copy(key) == "numpad-enter")
-            return fail("IbInputSimulator key API cannot distinguish numpad-enter; select --backend system");
-        return (down ? driver().key_down(vk) : driver().key_up(vk)) ? ok("")
-                                                                    : fail("IbInputSimulator key event failed");
+        const auto type = driver_session().selected();
+        if (const auto limit = driver::key_limitation(type, lower_copy(key)))
+            return fail(*limit + "; select --backend system");
+        const INPUT input = keyboard_input(vk, down, lower_copy(key) == "numpad-enter");
+        return driver_session().send(&input, 1) ? ok("") : fail("driver key event failed");
     }
     if (lower_copy(key) != "numpad-enter")
         return send_key_event(vk, down) ? ok("") : fail("SendInput key event failed");
@@ -1391,14 +1893,74 @@ bool native_button_down(const std::string &button, const std::string &backend) {
     return false;
 #endif
 }
+#ifdef _WIN32
+// Positions the pointer at an exact virtual-screen pixel using ONLY bounded relative steps.
+// Vendors such as Razer mishandle the absolute flag (treating normalized coordinates as huge
+// relative deltas), so no absolute command is ever sent on the driver path. Each step is
+// clamped, overshoot and flings abort, progress is required, and the loop fails loudly (for
+// the caller to fall back to system on an idempotent move) rather than flinging the cursor.
+OperationResult driver_position_to(int target_x, int target_y) {
+    const int left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    const int tx = std::clamp(target_x, left, left + width - 1);
+    const int ty = std::clamp(target_y, top, top + height - 1);
+    // Step size is tiered to the remaining distance: large steps cover ground quickly when far,
+    // but shrink near the target so Windows pointer acceleration cannot amplify a step past the
+    // target and oscillate. Within a few pixels the step is below the acceleration threshold,
+    // so it lands exactly. The fling guard is relative to the step.
+    const auto step_cap = [](int remaining) { return remaining > 160 ? 64 : remaining > 40 ? 16 : 6; };
+    int best = std::numeric_limits<int>::max();
+    int stalled = 0;
+    for (int iteration = 0; iteration < 96; ++iteration) {
+        POINT cur{};
+        if (!GetCursorPos(&cur))
+            return fail("driver move could not read the cursor position");
+        const int dx = tx - static_cast<int>(cur.x), dy = ty - static_cast<int>(cur.y);
+        if (dx == 0 && dy == 0)
+            return ok("");
+        const int remaining = std::abs(dx) + std::abs(dy);
+        if (remaining < best) {
+            best = remaining;
+            stalled = 0;
+        } else if (++stalled >= 10) {
+            return fail("driver move stalled " + std::to_string(std::abs(dx)) + "," + std::to_string(std::abs(dy)) +
+                        " px from (" + std::to_string(tx) + "," + std::to_string(ty) + ")");
+        }
+        const int cap = step_cap(std::max(std::abs(dx), std::abs(dy)));
+        const int sx = std::clamp(dx, -cap, cap), sy = std::clamp(dy, -cap, cap);
+        const int fling_bound = std::max(std::abs(sx), std::abs(sy)) * 4 + 16;
+        const POINT before = cur;
+        const INPUT step = mouse_input(MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, sx, sy);
+        if (!driver_session().send(&step, 1))
+            return fail("driver mouse move failed");
+        // Wait for the driver's HID report to register before judging progress, so a slow
+        // update is not mistaken for a stall. A genuine no-op leaves the cursor unchanged.
+        POINT after = before;
+        const auto step_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+        while (std::chrono::steady_clock::now() < step_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            GetCursorPos(&after);
+            if (after.x != before.x || after.y != before.y)
+                break;
+        }
+        if (std::abs(after.x - before.x) > fling_bound || std::abs(after.y - before.y) > fling_bound)
+            return fail("driver flung the pointer during positioning; aborted");
+    }
+    POINT cur{};
+    GetCursorPos(&cur);
+    return fail("driver move did not reach (" + std::to_string(tx) + "," + std::to_string(ty) + "); stopped at (" +
+                std::to_string(cur.x) + "," + std::to_string(cur.y) + ")");
+}
+#endif
 OperationResult move_native_mouse(const MouseOptions &options, const std::string &backend) {
 #ifdef _WIN32
     if (backend == "driver") {
-        auto position = options.absolute ? normalized_absolute_position(options.x, options.y)
-                                         : std::pair<int, int>{options.dx, options.dy};
-        return driver().mouse_move(position.first, position.second, options.absolute ? 0 : 1)
-                   ? ok("")
-                   : fail("IbInputSimulator mouse move failed");
+        if (options.absolute)
+            return driver_position_to(options.x, options.y);
+        const INPUT input = mouse_input(MOUSEEVENTF_MOVE | MOUSEEVENTF_MOVE_NOCOALESCE, options.dx, options.dy);
+        return driver_session().send(&input, 1) ? ok("") : fail("driver mouse move failed");
     }
     INPUT input{};
     input.type = INPUT_MOUSE;
@@ -1465,8 +2027,10 @@ OperationResult send_native_button(const std::string &button, bool down, int cou
         flag = down ? MOUSEEVENTF_XDOWN : MOUSEEVENTF_XUP;
         data = button == "x1" ? XBUTTON1 : XBUTTON2;
     }
-    if (backend == "driver")
-        return driver().mouse_click(flag | data) ? ok("") : fail("IbInputSimulator mouse button failed");
+    if (backend == "driver") {
+        const INPUT input = mouse_input(flag, 0, 0, data);
+        return driver_session().send(&input, 1) ? ok("") : fail("driver mouse button failed");
+    }
     INPUT input{};
     input.type = INPUT_MOUSE;
     input.mi.dwFlags = flag;
@@ -1501,9 +2065,16 @@ OperationResult send_native_button(const std::string &button, bool down, int cou
 OperationResult send_native_wheel(int vertical, int horizontal, const std::string &backend) {
 #ifdef _WIN32
     if (backend == "driver") {
-        if (horizontal != 0)
-            return fail("IbInputSimulator has no horizontal wheel API; select --backend system");
-        return driver().mouse_wheel(vertical) ? ok("") : fail("IbInputSimulator wheel event failed");
+        const auto plan = driver::plan_wheel(driver_session().selected(), vertical, horizontal);
+        if (!plan.error.empty())
+            return fail(plan.error);
+        for (const auto &event : plan.events) {
+            const INPUT input = mouse_input(event.horizontal ? MOUSEEVENTF_HWHEEL : MOUSEEVENTF_WHEEL, 0, 0,
+                                            static_cast<DWORD>(event.data));
+            if (!driver_session().send(&input, 1))
+                return fail("driver wheel event failed");
+        }
+        return ok("");
     }
     for (const auto [delta, flag] :
          {std::pair<int, DWORD>{vertical, MOUSEEVENTF_WHEEL}, {horizontal, MOUSEEVENTF_HWHEEL}}) {
@@ -1592,10 +2163,43 @@ bool system_input_available() {
 
 bool driver_input_available() {
 #ifdef _WIN32
-    return driver().available();
+    return driver_session().initialized();
 #else
     return false;
 #endif
+}
+
+void set_driver_settings(const driver::Settings &settings) {
+#ifdef _WIN32
+    driver_settings_override = settings;
+#else
+    (void)settings;
+#endif
+}
+
+DriverStatus driver_status() {
+    DriverStatus status;
+#ifdef _WIN32
+    auto &session = driver_session();
+    const auto &settings = session.settings();
+    status.requested_type = driver::type_name(settings.type);
+    status.selected_type = driver::type_name(session.selected());
+    status.argument = settings.argument;
+    status.source = settings.source;
+    status.loaded = session.loaded();
+    status.initialized = session.initialized();
+    status.verified = session.verified();
+    status.verify_attempted = session.verify_attempted();
+    status.state = session.state();
+    status.detail = session.detail();
+#else
+    status.requested_type = "none";
+    status.selected_type = "none";
+    status.source = "unsupported";
+    status.state = "unsupported";
+    status.detail = "driver-level input backend exists only on Windows";
+#endif
+    return status;
 }
 
 bool background_window_input_available() {
@@ -1664,9 +2268,12 @@ OperationResult key_combo(const std::string &keys, const std::string &requested,
     const auto ready = check_backend(backend);
     if (!ready.ok)
         return ready;
-    return run_key_chord(
+    auto result = run_key_chord(
         list, [&](const std::string &key) { return native_key_down(key, backend); },
         [&](const std::string &key, bool down) { return key_action(key, down, backend); }, hold_ms);
+    if (result.ok)
+        result.message += backend_note(requested, backend);
+    return result;
 }
 
 OperationResult type_text(const std::string& text) {
@@ -1760,7 +2367,7 @@ OperationResult mouse_drag_absolute(const std::vector<MousePoint> &points, const
         return releases.finish(fail("input cancelled"));
     if (!wait_input_ms(end_hold_ms))
         return releases.finish(fail("input cancelled"));
-    return releases.finish(ok("mouse drag sent"));
+    return releases.finish(ok("mouse drag sent" + backend_note(requested, backend)));
 }
 
 OperationResult mouse_action(const MouseOptions& options) {
@@ -1771,12 +2378,12 @@ OperationResult mouse_action(const MouseOptions& options) {
         return fail("click count must be positive and delays non-negative");
     if ((click == "none" || click.find('-') != std::string::npos) && (options.click_count != 1 || options.hold_ms != 0))
         return fail("click count and hold duration require a complete click");
-    const auto backend = choose_backend(options.backend);
+    std::string backend = choose_backend(options.backend);
     const auto ready = check_backend(backend);
     if (!ready.ok)
         return ready;
-    if (backend == "driver" && options.hwheel)
-        return fail("IbInputSimulator has no horizontal wheel API; select --backend system");
+    const bool auto_requested = lower_copy(options.backend.empty() ? "auto" : options.backend) == "auto";
+    std::string fallback_note;
     const auto dash = click.rfind('-');
     const auto button = dash == std::string::npos ? click : click.substr(0, dash);
     if (options.cleanup_only) {
@@ -1787,19 +2394,35 @@ OperationResult mouse_action(const MouseOptions& options) {
     if (input_cancelled() && !click.ends_with("-up"))
         return fail("input cancelled");
     if (options.absolute || options.dx || options.dy) {
-        const auto result = move_native_mouse(options, backend);
-        if (!result.ok)
-            return result;
+        auto result = move_native_mouse(options, backend);
+        if (!result.ok) {
+            // An absolute move is idempotent and nothing else has been sent yet, so under
+            // `auto` a driver failure (e.g. positioning could not converge) safely falls back
+            // to the system backend for this move and the rest of the action. A relative move
+            // or an explicit `--backend driver` request does not: fail rather than double-send.
+            if (backend == "driver" && options.absolute && auto_requested) {
+                const auto system_move = move_native_mouse(options, "system");
+                if (!system_move.ok)
+                    return system_move;
+                fallback_note = "; driver move failed (" + result.error + "), used system";
+                backend = "system";
+            } else {
+                return result;
+            }
+        }
     }
     if (options.wheel || options.hwheel) {
         const auto result = send_native_wheel(options.wheel, options.hwheel, backend);
         if (!result.ok)
             return result;
     }
+    const auto note = backend_note(options.backend, backend) + fallback_note;
     if (click == "none")
-        return ok("mouse input sent");
-    if (click.ends_with("-down") || click.ends_with("-up"))
-        return button_action(button, click.ends_with("-down"), 1, backend);
+        return ok("mouse input sent" + note);
+    if (click.ends_with("-down") || click.ends_with("-up")) {
+        const auto result = button_action(button, click.ends_with("-down"), 1, backend);
+        return result.ok ? ok("mouse input sent" + note) : result;
+    }
     if (native_button_down(button, backend))
         return fail("mouse button is already held; send its explicit up before clicking");
 #ifdef __APPLE__
@@ -1835,7 +2458,7 @@ OperationResult mouse_action(const MouseOptions& options) {
     last_click[button] = {position, std::chrono::steady_clock::now()};
     last_count[button] = base + options.click_count;
 #endif
-    return ok("mouse input sent");
+    return ok("mouse input sent" + note);
 }
 
 OperationResult background_type_text(const kiseki::platform::target::TargetQuery& target, const std::string& text) {

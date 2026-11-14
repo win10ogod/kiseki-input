@@ -12,12 +12,14 @@
 #include <utility>
 #include <vector>
 
-#include "platform/capture/bitmap_writer.hpp"
+#include "platform/capture/capture_geometry.hpp"
+#include "platform/capture/image_writer.hpp"
 
 #ifdef _WIN32
 #include "platform/capture/d3d11_capture.hpp"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <dwmapi.h>
 #elif defined(__APPLE__)
 #include "platform/capture/mac_capture.hpp"
 
@@ -77,34 +79,75 @@ std::optional<HWND> hwnd_from_id(const std::string& id) {
     }
 }
 
-CaptureResult capture_hwnd_bmp(HWND hwnd, const std::filesystem::path& output_path) {
-    RECT rect{};
-    if (GetWindowRect(hwnd, &rect) == 0) {
-        return fail_capture(output_path, "GetWindowRect failed");
+geometry::Rect to_rect(const RECT& rect) {
+    return geometry::Rect{rect.left, rect.top, rect.right, rect.bottom};
+}
+
+// Makes this thread per-monitor DPI aware for the lifetime of the object, so
+// window rectangles, DWM frame bounds and PrintWindow output all use physical
+// pixels. The process's own (input) coordinate space is restored afterwards.
+class ScopedPhysicalPixels {
+public:
+    ScopedPhysicalPixels() {
+        if (HMODULE user32 = GetModuleHandleW(L"user32.dll")) {
+            set_context_ = reinterpret_cast<SetContext>(
+                reinterpret_cast<void*>(GetProcAddress(user32, "SetThreadDpiAwarenessContext")));
+        }
+        if (set_context_ != nullptr) {
+            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4), then PER_MONITOR_AWARE (-3).
+            previous_ = set_context_(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(-4)));
+            if (previous_ == nullptr) {
+                previous_ = set_context_(reinterpret_cast<HANDLE>(static_cast<std::intptr_t>(-3)));
+            }
+        }
+        active_ = previous_ != nullptr;
+    }
+    ScopedPhysicalPixels(const ScopedPhysicalPixels&) = delete;
+    ScopedPhysicalPixels& operator=(const ScopedPhysicalPixels&) = delete;
+    ~ScopedPhysicalPixels() {
+        restore();
     }
 
-    const int width = rect.right - rect.left;
-    const int height = rect.bottom - rect.top;
-    if (width <= 0 || height <= 0) {
-        return fail_capture(output_path, "target window has empty dimensions");
+    void restore() {
+        if (previous_ != nullptr) {
+            set_context_(previous_);
+            previous_ = nullptr;
+        }
     }
 
+    bool active() const {
+        return active_;
+    }
+
+private:
+    using SetContext = HANDLE(WINAPI*)(HANDLE);
+    SetContext set_context_ = nullptr;
+    HANDLE previous_ = nullptr;
+    bool active_ = false;
+};
+
+struct WindowPixels {
+    std::vector<std::uint8_t> bgra;
+    std::string error;
+};
+
+WindowPixels print_window(HWND hwnd, int width, int height) {
     HDC window_dc = GetWindowDC(hwnd);
     if (window_dc == nullptr) {
-        return fail_capture(output_path, "GetWindowDC failed");
+        return {{}, "GetWindowDC failed"};
     }
 
     HDC memory_dc = CreateCompatibleDC(window_dc);
     if (memory_dc == nullptr) {
         ReleaseDC(hwnd, window_dc);
-        return fail_capture(output_path, "CreateCompatibleDC failed");
+        return {{}, "CreateCompatibleDC failed"};
     }
 
     HBITMAP bitmap = CreateCompatibleBitmap(window_dc, width, height);
     if (bitmap == nullptr) {
         DeleteDC(memory_dc);
         ReleaseDC(hwnd, window_dc);
-        return fail_capture(output_path, "CreateCompatibleBitmap failed");
+        return {{}, "CreateCompatibleBitmap failed"};
     }
 
     const HGDIOBJ old_bitmap = SelectObject(memory_dc, bitmap);
@@ -128,13 +171,87 @@ CaptureResult capture_hwnd_bmp(HWND hwnd, const std::filesystem::path& output_pa
     ReleaseDC(hwnd, window_dc);
 
     if (!printed) {
-        return fail_capture(output_path, "PrintWindow failed; target may not support OS window capture");
+        return {{}, "PrintWindow failed; target may not support OS window capture"};
     }
     if (lines != height) {
-        return fail_capture(output_path, "GetDIBits failed");
+        return {{}, "GetDIBits failed"};
+    }
+    return {std::move(pixels), ""};
+}
+
+// Captures the visible window frame. GetWindowRect includes the invisible resize
+// borders that DWM draws outside the frame; the image is cropped to
+// DWMWA_EXTENDED_FRAME_BOUNDS, the rectangle other providers report as window bounds.
+CaptureResult capture_hwnd_image(HWND hwnd, const std::string& window_id, const std::filesystem::path& output_path) {
+    RECT input_rect{};
+    if (GetWindowRect(hwnd, &input_rect) == 0) {
+        return fail_capture(output_path, "GetWindowRect failed");
     }
 
-    return write_bgra_bmp(output_path, width, height, pixels);
+    ScopedPhysicalPixels physical_pixels;
+    RECT window_rect{};
+    if (GetWindowRect(hwnd, &window_rect) == 0) {
+        return fail_capture(output_path, "GetWindowRect failed");
+    }
+    const auto window = to_rect(window_rect);
+    if (window.empty()) {
+        return fail_capture(output_path, "target window has empty dimensions");
+    }
+
+    // DWM reports physical pixels; only compare them with a physical window rectangle.
+    geometry::Rect frame = window;
+    std::string bounds_source = "window-rect";
+    RECT dwm_rect{};
+    if (physical_pixels.active() &&
+        SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &dwm_rect, sizeof(dwm_rect)))) {
+        if (const auto visible = geometry::intersect(to_rect(dwm_rect), window)) {
+            frame = *visible;
+            bounds_source = "dwm-extended-frame-bounds";
+        }
+    }
+
+    std::optional<CapturePixelRect> client_area;
+    RECT client_rect{};
+    POINT client_origin{0, 0};
+    if (GetClientRect(hwnd, &client_rect) != 0 && ClientToScreen(hwnd, &client_origin) != 0) {
+        const geometry::Rect client{client_origin.x, client_origin.y, client_origin.x + client_rect.right,
+                                    client_origin.y + client_rect.bottom};
+        if (const auto visible = geometry::intersect(client, frame)) {
+            client_area = CapturePixelRect{
+                .x = visible->left - frame.left,
+                .y = visible->top - frame.top,
+                .width = visible->width(),
+                .height = visible->height(),
+            };
+        }
+    }
+
+    auto captured = print_window(hwnd, window.width(), window.height());
+    physical_pixels.restore();
+    if (!captured.error.empty()) {
+        return fail_capture(output_path, captured.error);
+    }
+
+    const geometry::Rect crop{frame.left - window.left, frame.top - window.top, frame.right - window.left,
+                              frame.bottom - window.top};
+    const auto pixels = geometry::crop_bgra(captured.bgra, window.width(), window.height(), crop);
+    auto result = write_bgra_image(output_path, frame.width(), frame.height(), pixels);
+    if (result.ok) {
+        const auto mapping = geometry::map_capture_to_input_space(window, to_rect(input_rect), frame);
+        result.coordinates = CaptureCoordinates{
+            .space = "windows-virtual-screen",
+            .origin_x = mapping.origin_x,
+            .origin_y = mapping.origin_y,
+            .width = mapping.width,
+            .height = mapping.height,
+            .pixels_per_unit_x = mapping.pixels_per_unit_x,
+            .pixels_per_unit_y = mapping.pixels_per_unit_y,
+            .window_id = window_id,
+            .bounds_source = bounds_source,
+            .client_area = client_area,
+        };
+    }
+    return result;
 }
 #endif
 
@@ -190,25 +307,37 @@ bool x11_get_image_supported(Display* display, Window root) {
     return last_x11_error_code == 0 && image != nullptr;
 }
 
-CaptureResult capture_desktop_bmp_x11(const std::filesystem::path& output_path) {
-    Display* display = XOpenDisplay(nullptr);
-    if (display == nullptr) {
-        return fail_capture(output_path, "XOpenDisplay failed; DISPLAY is not available");
+// Names the display that failed. `display_name` null means $DISPLAY.
+std::string x11_open_error(const char* display_name) {
+    if (display_name != nullptr) {
+        return std::string{"XOpenDisplay failed for X11 display "} + display_name +
+               "; no X server accepted the connection";
     }
+    const char* environment = std::getenv("DISPLAY");
+    if (environment == nullptr || environment[0] == '\0') {
+        return "XOpenDisplay failed: DISPLAY is not set";
+    }
+    return std::string{"XOpenDisplay failed for DISPLAY="} + environment + "; no X server accepted the connection";
+}
 
-    const int screen = DefaultScreen(display);
-    Window root = RootWindow(display, screen);
+struct X11Pixels {
+    std::vector<std::uint8_t> bgra;
+    int width = 0;
+    int height = 0;
+    std::string error;
+};
+
+X11Pixels read_x11_window_pixels(Display* display, Window window, const char* get_image_failure) {
     XWindowAttributes attributes{};
-    if (XGetWindowAttributes(display, root, &attributes) == 0) {
-        XCloseDisplay(display);
-        return fail_capture(output_path, "XGetWindowAttributes failed");
+    if (XGetWindowAttributes(display, window, &attributes) == 0) {
+        return {{}, 0, 0, "XGetWindowAttributes failed"};
     }
 
     last_x11_error_code = 0;
     auto* old_handler = XSetErrorHandler(capture_x11_error);
     XImage* image = XGetImage(
         display,
-        root,
+        window,
         0,
         0,
         static_cast<unsigned int>(attributes.width),
@@ -218,8 +347,10 @@ CaptureResult capture_desktop_bmp_x11(const std::filesystem::path& output_path) 
     XSync(display, False);
     XSetErrorHandler(old_handler);
     if (last_x11_error_code != 0 || image == nullptr) {
-        XCloseDisplay(display);
-        return fail_capture(output_path, "XGetImage failed; this X11 session does not allow root screenshot capture");
+        if (image != nullptr) {
+            XDestroyImage(image);
+        }
+        return {{}, 0, 0, get_image_failure};
     }
 
     std::vector<std::uint8_t> pixels(static_cast<std::size_t>(attributes.width) * static_cast<std::size_t>(attributes.height) * 4U);
@@ -233,11 +364,43 @@ CaptureResult capture_desktop_bmp_x11(const std::filesystem::path& output_path) 
             pixels[offset + 3] = 0;
         }
     }
-
     XDestroyImage(image);
-    XCloseDisplay(display);
+    return {std::move(pixels), attributes.width, attributes.height, ""};
+}
 
-    return write_bgra_bmp(output_path, attributes.width, attributes.height, pixels);
+CaptureCoordinates x11_coordinates(int x, int y, int width, int height, std::optional<std::string> window_id) {
+    return CaptureCoordinates{
+        .space = "x11-root-pixels",
+        .origin_x = static_cast<double>(x),
+        .origin_y = static_cast<double>(y),
+        .width = static_cast<double>(width),
+        .height = static_cast<double>(height),
+        .pixels_per_unit_x = 1.0,
+        .pixels_per_unit_y = 1.0,
+        .window_id = std::move(window_id),
+    };
+}
+
+// Captures the root window of one X11 display. `display_name` null means $DISPLAY.
+CaptureResult capture_x11_root(const char* display_name, const std::filesystem::path& output_path) {
+    Display* display = XOpenDisplay(display_name);
+    if (display == nullptr) {
+        return fail_capture(output_path, x11_open_error(display_name));
+    }
+
+    const Window root = RootWindow(display, DefaultScreen(display));
+    const auto captured = read_x11_window_pixels(
+        display, root, "XGetImage failed; this X11 session does not allow root screenshot capture");
+    XCloseDisplay(display);
+    if (!captured.error.empty()) {
+        return fail_capture(output_path, captured.error);
+    }
+
+    auto result = write_bgra_image(output_path, captured.width, captured.height, captured.bgra);
+    if (result.ok) {
+        result.coordinates = x11_coordinates(0, 0, captured.width, captured.height, std::nullopt);
+    }
+    return result;
 }
 #endif
 #endif
@@ -288,6 +451,9 @@ bool window_capture_available() {
 }
 
 CaptureResult capture_desktop_bmp(const std::filesystem::path& output_path) {
+    if (const auto error = image_output_path_error(output_path); !error.empty()) {
+        return fail_capture(output_path, error);
+    }
 #ifdef _WIN32
     return capture_desktop_bmp_d3d11(output_path);
 #elif defined(__APPLE__)
@@ -300,7 +466,7 @@ CaptureResult capture_desktop_bmp(const std::filesystem::path& output_path) {
 #ifdef KISEKI_HAS_X11
     const char* display = std::getenv("DISPLAY");
     if (display != nullptr && display[0] != '\0') {
-        const auto x11_capture = capture_desktop_bmp_x11(output_path);
+        const auto x11_capture = capture_x11_root(nullptr, output_path);
         if (x11_capture.ok) {
             return x11_capture;
         }
@@ -327,7 +493,22 @@ CaptureResult capture_desktop_bmp(const std::filesystem::path& output_path) {
 #endif
 }
 
+CaptureResult capture_x11_display_image(const std::string& display_name, const std::filesystem::path& output_path) {
+    if (const auto error = image_output_path_error(output_path); !error.empty()) {
+        return fail_capture(output_path, error);
+    }
+#if !defined(_WIN32) && defined(KISEKI_HAS_X11)
+    return capture_x11_root(display_name.c_str(), output_path);
+#else
+    (void)display_name;
+    return fail_capture(output_path, "X11 display capture support was not compiled in");
+#endif
+}
+
 CaptureResult capture_window_bmp(const kiseki::platform::target::TargetQuery& target, const std::filesystem::path& output_path) {
+    if (const auto error = image_output_path_error(output_path); !error.empty()) {
+        return fail_capture(output_path, error);
+    }
     const auto resolved = kiseki::platform::target::resolve_window(target);
     if (!resolved.ok) {
         return fail_capture(output_path, resolved.error);
@@ -338,7 +519,7 @@ CaptureResult capture_window_bmp(const kiseki::platform::target::TargetQuery& ta
     if (!hwnd || !IsWindow(*hwnd)) {
         return fail_capture(output_path, "resolved target window is no longer valid");
     }
-    return capture_hwnd_bmp(*hwnd, output_path);
+    return capture_hwnd_image(*hwnd, resolved.window.id, output_path);
 #elif defined(__APPLE__)
     if (!CGPreflightScreenCaptureAccess() && !CGRequestScreenCaptureAccess()) {
         return fail_capture(output_path, "macOS Screen Recording permission is required for window screenshots; approve the prompt in System Settings and rerun");
@@ -354,49 +535,27 @@ CaptureResult capture_window_bmp(const kiseki::platform::target::TargetQuery& ta
 #ifdef KISEKI_HAS_X11
     Display* display = XOpenDisplay(nullptr);
     if (display == nullptr) {
-        return fail_capture(output_path, "XOpenDisplay failed; DISPLAY is not available");
+        return fail_capture(output_path, x11_open_error(nullptr));
     }
 
     const Window window = static_cast<Window>(std::stoull(resolved.window.id, nullptr, 0));
-    XWindowAttributes attributes{};
-    if (XGetWindowAttributes(display, window, &attributes) == 0) {
-        XCloseDisplay(display);
-        return fail_capture(output_path, "XGetWindowAttributes failed");
-    }
-
-    last_x11_error_code = 0;
-    auto* old_handler = XSetErrorHandler(capture_x11_error);
-    XImage* image = XGetImage(
-        display,
-        window,
-        0,
-        0,
-        static_cast<unsigned int>(attributes.width),
-        static_cast<unsigned int>(attributes.height),
-        AllPlanes,
-        ZPixmap);
-    XSync(display, False);
-    XSetErrorHandler(old_handler);
-    if (last_x11_error_code != 0 || image == nullptr) {
-        XCloseDisplay(display);
-        return fail_capture(output_path, "XGetImage failed; target may not support OS window capture in this session");
-    }
-
-    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(attributes.width) * static_cast<std::size_t>(attributes.height) * 4U);
-    for (int y = 0; y < attributes.height; ++y) {
-        for (int x = 0; x < attributes.width; ++x) {
-            const unsigned long pixel = XGetPixel(image, x, y);
-            const auto offset = (static_cast<std::size_t>(y) * static_cast<std::size_t>(attributes.width) + static_cast<std::size_t>(x)) * 4U;
-            pixels[offset + 0] = component_from_mask(pixel, image->blue_mask);
-            pixels[offset + 1] = component_from_mask(pixel, image->green_mask);
-            pixels[offset + 2] = component_from_mask(pixel, image->red_mask);
-            pixels[offset + 3] = 0;
-        }
-    }
-
-    XDestroyImage(image);
+    const auto captured = read_x11_window_pixels(
+        display, window, "XGetImage failed; target may not support OS window capture in this session");
+    int root_x = 0;
+    int root_y = 0;
+    Window child = None;
+    const bool translated = captured.error.empty() &&
+        XTranslateCoordinates(display, window, DefaultRootWindow(display), 0, 0, &root_x, &root_y, &child) != 0;
     XCloseDisplay(display);
-    return write_bgra_bmp(output_path, attributes.width, attributes.height, pixels);
+    if (!captured.error.empty()) {
+        return fail_capture(output_path, captured.error);
+    }
+
+    auto result = write_bgra_image(output_path, captured.width, captured.height, captured.bgra);
+    if (result.ok && translated) {
+        result.coordinates = x11_coordinates(root_x, root_y, captured.width, captured.height, resolved.window.id);
+    }
+    return result;
 #else
     return fail_capture(output_path, "Linux X11 window capture support was not compiled in");
 #endif

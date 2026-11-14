@@ -84,9 +84,9 @@ kiseki background cua click --pid 123 --window-id 456 --element-token CURRENT_TO
 kiseki background cua text  --pid 123 --window-id 456 --element-token CURRENT_TOKEN --text "你好"
 ```
 
-`state` 返回窗口的控件树（每个控件带编号和 token）和一张截图；点击和输入对着控件 token 做，操作后重新 `state` 确认结果。浏览器有专门的语义快照与动作：`kiseki background cua browser state|prepare|navigate|click|type|dialog|upload|download|pointer|select`。
+`state` 返回窗口的控件树（每行 `[N]`，token 为 `snapshot_id:N`），加 `--output` 时另存截图；点击和输入对着控件 token 做，操作后重新 `state` 确认结果。浏览器有专门的语义快照与动作：`kiseki background cua browser state|prepare|navigate|click|type|dialog|upload|download|pointer|select`。
 
-当前集成按 **Cua Driver 0.38.0** 检查（此前是 0.30.1）；0.31–0.38 的变化以及 Kiseki 如何对应，见 [docs/cua.md](docs/cua.md)。Kiseki 对工具调用做的是转发而不是拷贝 schema，所以更新的 Driver 也能继续用；`kiseki background cua tools` / `describe` 读的是你机器上真正安装的版本。
+当前集成按 **Cua Driver 0.49.9** 检查（此前是 0.38.0）；0.39–0.49 的变化以及 Kiseki 如何对应，见 [docs/cua.md](docs/cua.md)。Kiseki 对工具调用做的是转发而不是拷贝 schema，所以更新的 Driver 也能继续用；`kiseki background cua tools` / `describe` 读的是你机器上真正安装的版本。
 
 ## 教学录制
 

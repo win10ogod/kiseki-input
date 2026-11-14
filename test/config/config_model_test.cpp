@@ -35,6 +35,7 @@ TEST_CASE("default config matches schema version one") {
     REQUIRE(config.heartbeat.message == "Kiseki Input is running");
     REQUIRE(config.input.default_backend == "background-window");
     REQUIRE(config.input.windows_driver == "AnyDriver");
+    REQUIRE(config.input.windows_driver_argument.empty());
     REQUIRE(config.input.linux_driver == "uinput");
     REQUIRE(config.input.background_input_enabled);
     REQUIRE(config.screenshot.default_output_directory == "");
@@ -50,6 +51,8 @@ TEST_CASE("config converts to and from json") {
     config.webui.port = 9000;
     config.heartbeat.message = "running";
     config.screenshot.default_output_directory = "frames";
+    config.input.windows_driver = "MouClassInputInjection";
+    config.input.windows_driver_argument = "4321";
 
     const auto json = to_json(config);
     const AppConfig parsed = config_from_json(json);
@@ -57,10 +60,13 @@ TEST_CASE("config converts to and from json") {
     REQUIRE(json.contains("schemaVersion"));
     REQUIRE(json.at("heartbeat").contains("intervalSeconds"));
     REQUIRE(json.at("input").contains("defaultBackend"));
+    REQUIRE(json.at("input").contains("windowsDriverArgument"));
     REQUIRE(json.at("screenshot").contains("defaultOutputDirectory"));
     REQUIRE(parsed.webui.port == 9000);
     REQUIRE(parsed.heartbeat.message == "running");
     REQUIRE(parsed.screenshot.default_output_directory == "frames");
+    REQUIRE(parsed.input.windows_driver == "MouClassInputInjection");
+    REQUIRE(parsed.input.windows_driver_argument == "4321");
     REQUIRE(to_json(parsed) == json);
 }
 

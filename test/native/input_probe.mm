@@ -178,9 +178,53 @@ static void capture_and_click(const std::string &window_id) {
     report << result.dump(2);
     wait(200);
 }
+// macOS 14 cooperative activation ([NSApp activate]) cannot take the foreground
+// from the Terminal that launched the probe (verified on macOS 26.6), so the
+// forcing call still follows it; its deprecation warning is silenced locally.
+static void activate_probe_app() {
+#if defined(__MAC_14_0)
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+    }
+#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
+}
+
+static void restore_previous_app(NSRunningApplication *previous) {
+#if defined(__MAC_14_0)
+    if (@available(macOS 14.0, *)) {
+        [NSApp yieldActivationToApplication:previous];
+        [previous activateWithOptions:0];
+        return;
+    }
+#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [previous activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+#pragma clang diagnostic pop
+}
+
 int main(int argc, char **argv) {
-    output = argc > 1 ? argv[1] : "native-probe";
-    const bool skip_capture = argc > 2 && std::string{argv[2]} == "--skip-capture";
+    const auto args = parse_probe_args(argc, argv);
+    if (args.help) {
+        print_probe_usage(std::cout, argv[0]);
+        return 0;
+    }
+    if (args.error) {
+        std::cerr << args.message << "\n\n";
+        print_probe_usage(std::cerr, argv[0]);
+        return 2;
+    }
+    if (args.backend == "driver") {
+        std::cerr << "the driver backend is Windows-only; macOS input uses the system backend\n";
+        return 2;
+    }
+    output = args.output;
+    backend = args.backend;
+    const bool skip_capture = args.skip_capture;
     std::filesystem::create_directories(output);
     received.open(output / "receiver-events.jsonl");
     @autoreleasepool {
@@ -204,7 +248,7 @@ int main(int argc, char **argv) {
         ProbeView *view = [[ProbeView alloc] initWithFrame:NSMakeRect(0, 0, 720, 460)];
         window.contentView = view;
         [window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
+        activate_probe_app();
         [window makeFirstResponder:view];
         const CGFloat height = CGDisplayBounds(CGMainDisplayID()).size.height;
         const NSPoint screen = [window convertPointToScreen:NSMakePoint(160, 300)];
@@ -223,7 +267,7 @@ int main(int argc, char **argv) {
             }
             CGWarpMouseCursorPosition(previous_cursor);
             dispatch_async(dispatch_get_main_queue(), ^{
-              [previous activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+              restore_previous_app(previous);
               [window orderOut:nil];
               [NSApp stop:nil];
               [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined

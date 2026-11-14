@@ -22,6 +22,7 @@ struct HeartbeatConfig {
 struct InputConfig {
     std::string default_backend;
     std::string windows_driver;
+    std::string windows_driver_argument; // dd DLL path or mouclass process id (optional)
     std::string linux_driver;
     bool background_input_enabled;
 };

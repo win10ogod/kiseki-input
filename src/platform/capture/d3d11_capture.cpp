@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-#include "platform/capture/bitmap_writer.hpp"
+#include "platform/capture/image_writer.hpp"
 
 namespace kiseki::platform::capture {
 namespace {
@@ -178,7 +178,7 @@ CaptureResult capture_desktop_bmp_gdi_fallback(const std::filesystem::path& outp
         return fail_capture(output_path, "GetDIBits failed in GDI fallback");
     }
 
-    return write_bgra_bmp(output_path, width, height, pixels);
+    return write_bgra_image(output_path, width, height, pixels);
 }
 
 bool rotated_dimensions(UINT src_width, UINT src_height, DXGI_MODE_ROTATION rotation, UINT& dst_width, UINT& dst_height, std::string& error) {
@@ -327,7 +327,7 @@ public:
             error.clear();
             if (capture_frame_locked(frame, error, reset_needed)) {
                 if (contains_visible_bgr(frame.bgra)) {
-                    return write_bgra_bmp(output_path, frame.width, frame.height, frame.bgra);
+                    return write_bgra_image(output_path, frame.width, frame.height, frame.bgra);
                 }
 
                 // Some desktop-duplication sessions can successfully return a frame whose

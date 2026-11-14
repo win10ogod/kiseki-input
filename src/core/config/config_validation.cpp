@@ -79,6 +79,21 @@ ValidationResult validate_config(const AppConfig& config) {
             "windowsDriver must be AnyDriver, SendInput, Logitech, LogitechGHubNew, Razer, DD, or MouClassInputInjection");
     }
 
+    if (!config.input.windows_driver_argument.empty()) {
+        if (config.input.windows_driver == "MouClassInputInjection") {
+            const auto &argument = config.input.windows_driver_argument;
+            const bool digits = std::all_of(argument.begin(), argument.end(),
+                                            [](unsigned char c) { return c >= '0' && c <= '9'; });
+            if (!digits || argument.size() > 10 || argument == "0") {
+                add_issue(result, "input.windowsDriverArgument",
+                          "windowsDriverArgument must be a nonzero process id for MouClassInputInjection");
+            }
+        } else if (config.input.windows_driver != "DD") {
+            add_issue(result, "input.windowsDriverArgument",
+                      "windowsDriverArgument applies only to DD (DLL path) or MouClassInputInjection (process id)");
+        }
+    }
+
     if (config.input.linux_driver != "uinput") {
         add_issue(result, "input.linuxDriver", "linuxDriver must be uinput");
     }

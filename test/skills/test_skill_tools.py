@@ -198,6 +198,38 @@ class SkillToolsTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["checks"]["modes"]["exitCode"], 2)
         self.assertEqual(result["checks"]["modes"]["stderr"], "native backend error")
+        self.assertEqual(result["checks"]["modes"]["stdout"], "not JSON")
+
+    def test_runtime_version_text_is_parsed_with_and_without_provenance(self):
+        self.assertEqual(runtime.parse_version("0.1.0 (commit 1a2b3c4d5e6f, dirty)"),
+                         {"version": "0.1.0", "commit": "1a2b3c4d5e6f", "tree": "dirty"})
+        self.assertEqual(runtime.parse_version("0.1.0 (commit 1a2b3c4d5e6f)")["tree"], "clean")
+        self.assertEqual(runtime.parse_version("0.1.0 (commit unknown)")["tree"], "unknown")
+        self.assertEqual(runtime.parse_version("0.1.0"), {"version": "0.1.0", "commit": None, "tree": "unknown"})
+
+    def test_runtime_probe_keeps_parsed_output_once_and_flags_stale_build(self):
+        executable = self.root / "kiseki.exe"
+        executable.touch()
+
+        def fake_run(arguments, **kwargs):
+            if arguments[1:] == ["--version"]:
+                return subprocess.CompletedProcess(arguments, 0, "0.1.0 (commit 1a2b3c4d5e6f)\n", "")
+            if "rev-parse" in arguments:
+                return subprocess.CompletedProcess(arguments, 0, "ffffffffffff0000000000000000000000000000\n", "")
+            return subprocess.CompletedProcess(arguments, 0, '{"schemaVersion": 1}\n', "")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run), \
+                patch.object(runtime.shutil, "which", return_value="git"):
+            result = runtime.inspect(ROOT, str(executable), probe=True)
+        self.assertTrue(result["ok"])
+        modes = result["checks"]["modes"]
+        self.assertEqual(modes["result"], {"schemaVersion": 1})
+        self.assertNotIn("stdout", modes)
+        version = result["checks"]["version"]
+        self.assertEqual(version["version"], "0.1.0")
+        self.assertFalse(version["matchesSource"])
+        self.assertEqual(version["sourceCommit"], "ffffffffffff")
+        self.assertIn("Rebuild", result["warnings"][0])
 
 
 if __name__ == "__main__":

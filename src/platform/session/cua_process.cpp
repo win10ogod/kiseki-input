@@ -1,10 +1,13 @@
 #include "platform/session/cua_process.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <cwchar>
+#include <vector>
 #include <system_error>
 
 #ifdef _WIN32
@@ -71,10 +74,47 @@ std::wstring quote_argument(const std::string& argument) {
     result.append(slashes * 2, L'\\');
     return result + L'"';
 }
+
+// The inherited environment with the overrides applied, as a sorted CREATE_UNICODE_ENVIRONMENT block.
+std::wstring environment_block(const EnvironmentOverrides& overrides) {
+    std::vector<std::wstring> entries;
+    if (auto* block = GetEnvironmentStringsW()) {
+        for (auto* entry = block; *entry; entry += std::wcslen(entry) + 1) entries.emplace_back(entry);
+        FreeEnvironmentStringsW(block);
+    }
+    // Names are case-insensitive; per-drive entries such as "=C:=C:\\" keep their leading '='.
+    const auto name_of = [](const std::wstring& entry) { return entry.substr(0, entry.find(L'=', 1)); };
+    const auto compare = [](const std::wstring& left, const std::wstring& right) {
+        return CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE);
+    };
+    for (const auto& [name, value] : overrides) {
+        const auto key = wide(name);
+        std::erase_if(entries, [&](const std::wstring& entry) { return compare(name_of(entry), key) == CSTR_EQUAL; });
+        entries.push_back(key + L"=" + wide(value));
+    }
+    std::sort(entries.begin(), entries.end(), [&](const std::wstring& left, const std::wstring& right) {
+        return compare(name_of(left), name_of(right)) == CSTR_LESS_THAN;
+    });
+    std::wstring result;
+    for (const auto& entry : entries) { result += entry; result.push_back(L'\0'); }
+    result.push_back(L'\0');
+    return result;
+}
+#else
+std::vector<std::string> environment_entries(const EnvironmentOverrides& overrides) {
+    std::vector<std::string> entries;
+    for (char** entry = environ; entry && *entry; ++entry) {
+        const std::string text{*entry};
+        const auto name = text.substr(0, text.find('='));
+        if (std::none_of(overrides.begin(), overrides.end(), [&](const auto& item) { return item.first == name; })) entries.push_back(text);
+    }
+    for (const auto& [name, value] : overrides) entries.push_back(name + "=" + value);
+    return entries;
+}
 #endif
 
 ProcessResult launch(const std::vector<std::string>& args, const std::filesystem::path& input,
-    const std::filesystem::path& output, const std::filesystem::path& error, bool wait) {
+    const std::filesystem::path& output, const std::filesystem::path& error, bool wait, const EnvironmentOverrides& environment = {}) {
     if (args.empty()) return {2, "", "empty process command"};
 #ifdef _WIN32
     SECURITY_ATTRIBUTES attributes{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
@@ -93,8 +133,9 @@ ProcessResult launch(const std::vector<std::string>& args, const std::filesystem
     std::wstring command;
     for (const auto& arg : args) { if (!command.empty()) command += L' '; command += quote_argument(arg); }
     PROCESS_INFORMATION process{};
+    auto block = environment.empty() ? std::wstring{} : environment_block(environment);
     const bool launched = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE,
-        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process) != FALSE;
+        CREATE_NO_WINDOW | (block.empty() ? 0 : CREATE_UNICODE_ENVIRONMENT), block.empty() ? nullptr : block.data(), nullptr, &startup, &process) != FALSE;
     const auto launch_error = GetLastError();
     for (const auto handle : {in, out, err}) CloseHandle(handle);
     if (!launched) return {2, "", "cannot launch " + args.front() + ": Windows error " + std::to_string(launch_error)};
@@ -115,7 +156,11 @@ ProcessResult launch(const std::vector<std::string>& args, const std::filesystem
     if (!setup) setup = posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, output.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (!setup) setup = posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, error.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     pid_t pid = 0;
-    const int launched = setup ? setup : posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), environ);
+    auto entries = environment_entries(environment);
+    std::vector<char*> envp;
+    for (auto& entry : entries) envp.push_back(entry.data());
+    envp.push_back(nullptr);
+    const int launched = setup ? setup : posix_spawnp(&pid, argv[0], &actions, nullptr, argv.data(), environment.empty() ? environ : envp.data());
     posix_spawn_file_actions_destroy(&actions);
     if (launched != 0) return {2, "", "cannot launch " + args.front() + ": " + std::strerror(launched)};
     if (!wait) return {0, "", ""};
@@ -123,7 +168,8 @@ ProcessResult launch(const std::vector<std::string>& args, const std::filesystem
     while (waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR) return {2, "", "cannot wait for " + args.front() + ": " + std::strerror(errno)};
     }
-    return {WIFEXITED(status) ? WEXITSTATUS(status) : 2, "", ""};
+    // A process ended by a signal reports 128 + signal, as shells do.
+    return {WIFEXITED(status) ? WEXITSTATUS(status) : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : 2, "", ""};
 #endif
 }
 }
@@ -152,7 +198,7 @@ std::string environment_text(const char* name) {
 #endif
 }
 
-ProcessResult run_process(const std::vector<std::string>& arguments, const std::string& input) {
+ProcessResult run_process(const std::vector<std::string>& arguments, const std::string& input, const EnvironmentOverrides& environment) {
     try {
         TemporaryDirectory temp;
         const auto stdin_path = temp.path / "stdin";
@@ -160,7 +206,7 @@ ProcessResult run_process(const std::vector<std::string>& arguments, const std::
         stream << input;
         stream.close();
         if (!stream) return {2, "", "cannot write CUA process input"};
-        auto result = launch(arguments, stdin_path, temp.path / "stdout", temp.path / "stderr", true);
+        auto result = launch(arguments, stdin_path, temp.path / "stdout", temp.path / "stderr", true, environment);
         result.output = read_file(temp.path / "stdout");
         result.error += read_file(temp.path / "stderr");
         return result;

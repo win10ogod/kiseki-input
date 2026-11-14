@@ -16,7 +16,7 @@ Use `input drag` for a continuous native path or `input sequence` when modifier/
 "$kiseki_exe" input drag --file "$run_dir/points.txt" --backend system
 ```
 
-For an established CUA workflow use `background cua draw`, retaining the requested provider. Its current `--max-segments` setting may reject a dense path. Read the error and current help; preserve the required detail and use an explicit suitable segment setting rather than silently thinning the path or changing to foreground input. Choose timing from task requirements and observed app behavior; do not use a small fixed cap as a reliability workaround.
+For an established CUA workflow use `background cua draw`, retaining the requested provider. Each segment is its own press-drag-release (batched through `run_steps`), so a polyline is not one held stroke; per-point `time_ms` sets each segment's duration. Its current `--max-segments` setting may reject a dense path. Read the error and current help; preserve the required detail and use an explicit suitable segment setting rather than silently thinning the path or changing to foreground input. Choose timing from task requirements and observed app behavior; do not use a small fixed cap as a reliability workaround.
 
 ## Verify and recover
 

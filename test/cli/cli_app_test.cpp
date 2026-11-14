@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -14,6 +15,10 @@
 
 #include "cli/app.hpp"
 #include "platform/input/sequence_support.hpp"
+
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 TEST_CASE("CUA lifecycle and raw native commands preserve their CLI arguments") {
     std::ostringstream out, err;
@@ -211,6 +216,37 @@ TEST_CASE("capabilities prints foundation capability json") {
     REQUIRE(json.at("limitations").is_array());
     REQUIRE_FALSE(json.at("limitations").empty());
     REQUIRE(result.err.empty());
+}
+
+TEST_CASE("capabilities reports the driver backend type and verification state") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    const auto result = run_cli({"capabilities"}, path);
+    const auto json = nlohmann::json::parse(result.out);
+    const auto &backend = json.at("input").at("driverBackend");
+
+    REQUIRE(result.code == 0);
+    REQUIRE(backend.at("requestedType").is_string());
+    REQUIRE(backend.at("selectedType").is_string());
+    REQUIRE(backend.at("state").is_string());
+    REQUIRE(backend.at("loaded").is_boolean());
+    REQUIRE(backend.at("verified").is_boolean());
+    // Diagnostics never claim verification without proof; printing capabilities must not run
+    // the cursor-moving self-test, so verification stays unattempted here.
+    REQUIRE(backend.at("verifyAttempted").get<bool>() == false);
+    REQUIRE(backend.at("verified").get<bool>() == false);
+}
+
+TEST_CASE("invalid driver type is rejected before any input is sent") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    const auto result =
+        run_cli({"--driver-type", "turbo", "input", "mouse", "--backend", "driver", "--dx", "0", "--dy", "0"}, path);
+
+    REQUIRE(result.code == 2);
+    REQUIRE(result.err.find("turbo") != std::string::npos);
 }
 
 TEST_CASE("doctor prints diagnostic text with foundation limitations") {
@@ -1230,6 +1266,7 @@ TEST_CASE("background cua commands call injected CUA backend") {
         REQUIRE(options.has_window_id);
         REQUIRE(options.element_index == 7);
         REQUIRE(options.has_element_index);
+        REQUIRE(options.snapshot_id == "s00000007");
         REQUIRE(options.delay_ms == 15);
         calls.push_back("text");
         return 0;
@@ -1325,7 +1362,7 @@ TEST_CASE("background cua commands call injected CUA backend") {
     REQUIRE(kiseki::cli::run({"background", "cua", "state", "--pid", "123", "--window-id", "456", "--output", screenshot_path.string(), "--query", "button"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"background", "cua", "screenshot", "--window-id", "456", "--output", screenshot_path.string(), "--format", "jpeg", "--quality", "80"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"background", "cua", "click", "--pid", "123", "--window-id", "456", "--x", "10", "--y", "20", "--button", "double", "--modifiers", "cmd+shift"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
-    REQUIRE(kiseki::cli::run({"background", "cua", "text", "--pid", "123", "--window-id", "456", "--element-index", "7", "--file", text_path.string(), "--delay-ms", "15"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"background", "cua", "text", "--pid", "123", "--window-id", "456", "--element-index", "7", "--snapshot-id", "s00000007", "--file", text_path.string(), "--delay-ms", "15"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"background", "cua", "key", "--pid", "123", "--window-id", "456", "--key", "return", "--modifiers", "cmd"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"background", "cua", "hotkey", "--pid", "123", "--window-id", "456", "--keys", "cmd+c"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
     REQUIRE(kiseki::cli::run({"background", "cua", "drag", "--pid", "123", "--window-id", "456", "--from-x", "1", "--from-y", "2", "--to-x", "3", "--to-y", "4", "--duration-ms", "250", "--steps", "12", "--button", "left", "--modifiers", "option"}, config_path, kiseki::cli::Io{out, err}, dependencies) == 0);
@@ -2182,4 +2219,225 @@ TEST_CASE("CUA convenience CLI retains new provider JSON without losing existing
     };
     REQUIRE(kiseki::cli::run({"background","cua","click","--pid","42","--x","1","--y","2","--provider-json",R"({"capture_id":"cap-1","delivery_mode":"background"})"},
         "unused-cua.json", {out,err}, dependencies) == 0);
+}
+
+TEST_CASE("CUA 0.49 CLI options reach the bridge only when given") {
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    std::vector<std::string> calls;
+    kiseki::cli::MacBackgroundStateOptions state;
+    dependencies.mac_background_state = [&](const kiseki::cli::MacBackgroundStateOptions& value, kiseki::cli::Io) { state = value; calls.push_back("state"); return 0; };
+    kiseki::cli::MacBackgroundScreenshotOptions screenshot;
+    dependencies.mac_background_screenshot = [&](const kiseki::cli::MacBackgroundScreenshotOptions& value, kiseki::cli::Io) { screenshot = value; calls.push_back("screenshot"); return 0; };
+    kiseki::cli::MacBackgroundTextOptions text;
+    dependencies.mac_background_text = [&](const kiseki::cli::MacBackgroundTextOptions& value, kiseki::cli::Io) { text = value; calls.push_back("text"); return 0; };
+    kiseki::cli::MacBackgroundHotkeyOptions hotkey;
+    dependencies.mac_background_hotkey = [&](const kiseki::cli::MacBackgroundHotkeyOptions& value, kiseki::cli::Io) { hotkey = value; calls.push_back("hotkey"); return 0; };
+    kiseki::cli::MacBackgroundClickOptions click;
+    dependencies.mac_background_click = [&](const kiseki::cli::MacBackgroundClickOptions& value, kiseki::cli::Io) { click = value; calls.push_back("click"); return 0; };
+    std::vector<bool> enabled;
+    dependencies.mac_background_feedback_enable = [&](const kiseki::cli::MacBackgroundFeedbackEnableOptions& value, kiseki::cli::Io) { enabled.push_back(value.enabled); return 0; };
+    kiseki::cli::MacBackgroundFeedbackMotionOptions motion;
+    dependencies.mac_background_feedback_motion = [&](const kiseki::cli::MacBackgroundFeedbackMotionOptions& value, kiseki::cli::Io) { motion = value; calls.push_back("motion"); return 0; };
+    kiseki::cli::MacBackgroundLaunchOptions launch;
+    dependencies.mac_background_launch = [&](const kiseki::cli::MacBackgroundLaunchOptions& value, kiseki::cli::Io) { launch = value; calls.push_back("launch"); return 0; };
+    kiseki::cli::MacBackgroundWindowsOptions windows;
+    dependencies.mac_background_windows = [&](const kiseki::cli::MacBackgroundWindowsOptions& value, kiseki::cli::Io) { windows = value; calls.push_back("windows"); return 0; };
+    std::vector<kiseki::cli::CuaControlOptions> controls;
+    dependencies.cua_control = [&](const kiseki::cli::CuaControlOptions& value, kiseki::cli::Io) { controls.push_back(value); return 0; };
+    const auto run = [&](std::vector<std::string> args) { return kiseki::cli::run(args, "unused-cua.json", {out, err}, dependencies); };
+
+    REQUIRE(run({"background","cua","state","--pid","1","--window-id","2"}) == 0);
+    REQUIRE_FALSE(state.max_elements.has_value());
+    REQUIRE_FALSE(state.max_image_dimension.has_value());
+    REQUIRE(run({"background","cua","state","--pid","1","--window-id","2","--max-elements","900","--max-depth","9","--timeout-ms","5000",
+        "--max-image-dimension","0","--tree-format","elements","--since","latest","--full-output","--verbose"}) == 0);
+    REQUIRE(state.max_elements == 900);
+    REQUIRE(state.max_depth == 9);
+    REQUIRE(state.timeout_ms == 5000);
+    REQUIRE(state.max_image_dimension == 0);
+    REQUIRE(state.tree_format == "elements");
+    REQUIRE(state.since == "latest");
+    REQUIRE(state.full_output);
+    REQUIRE(state.verbose);
+
+    REQUIRE(run({"background","cua","screenshot","--window-id","2","--pid","1","--output","w.jpg","--quality","70","--max-image-dimension","0"}) == 0);
+    REQUIRE(screenshot.pid == 1);
+    REQUIRE(screenshot.format.empty());
+    REQUIRE(screenshot.quality == 70);
+    REQUIRE(screenshot.max_image_dimension == 0);
+
+    REQUIRE(run({"background","cua","text","--pid","1","--text","x"}) == 0);
+    REQUIRE_FALSE(text.delay_ms.has_value());
+    REQUIRE(run({"background","cua","text","--pid","1","--text","x","--delivery-mode","foreground"}) == 0);
+    REQUIRE(nlohmann::json::parse(text.provider_json)["delivery_mode"] == "foreground");
+
+    REQUIRE(run({"background","cua","hotkey","--pid","1","--keys","ctrl+end","--element-index","0","--snapshot-id","s00000001"}) == 0);
+    REQUIRE(hotkey.has_element_index);
+    REQUIRE(hotkey.snapshot_id == "s00000001");
+    REQUIRE(run({"background","cua","click","--pid","1","--element-token","s00000001:4"}) == 0);
+    REQUIRE(click.element_token == "s00000001:4");
+
+    REQUIRE(run({"background","cua","feedback","enable"}) == 0);
+    REQUIRE(run({"background","cua","feedback","disable"}) == 0);
+    REQUIRE(enabled == std::vector<bool>{true, false});
+    REQUIRE(run({"background","cua","feedback","motion","--style","comet_swoop","--timing","fitts","--turn-radius","40","--effect","trail=on,glow=off","--effect","ripple=default"}) == 0);
+    REQUIRE(motion.style == "comet_swoop");
+    REQUIRE(motion.timing == "fitts");
+    REQUIRE(motion.has_turn_radius);
+    REQUIRE(motion.effects == std::vector<std::pair<std::string, std::string>>{{"trail","on"},{"glow","off"},{"ripple","default"}});
+
+    REQUIRE(run({"background","cua","launch","--aumid","Microsoft.WindowsNotepad_8wekyb3d8bbwe!App"}) == 0);
+    REQUIRE(launch.aumid == "Microsoft.WindowsNotepad_8wekyb3d8bbwe!App");
+    REQUIRE(run({"background","cua","windows","--app","Notepad"}) == 0);
+    REQUIRE(windows.app == "Notepad");
+
+    // Rejected before the bridge: an index without its snapshot, an unparsable effect, a delivery mode given twice,
+    // and the session state verb whose tool Driver 0.48 removed.
+    const auto before = calls.size();
+    REQUIRE(run({"background","cua","click","--pid","1","--element-index","3"}) != 0);
+    REQUIRE(run({"background","cua","key","--pid","1","--key","a","--element-index","3"}) != 0);
+    REQUIRE(run({"background","cua","feedback","motion","--effect","trail"}) != 0);
+    REQUIRE(run({"background","cua","click","--pid","1","--x","1","--y","2","--delivery-mode","foreground","--provider-json",R"({"delivery_mode":"background"})"}) != 0);
+    REQUIRE(calls.size() == before);
+    const auto control_count = controls.size();
+    REQUIRE(run({"background","cua","session","state"}) != 0);
+    REQUIRE(controls.size() == control_count);
+}
+
+TEST_CASE("version flag keeps the semantic version first and adds build provenance") {
+    const TempConfigDirectory temp;
+    const auto text = run_cli({"--version"}, temp.file("config.json"));
+    REQUIRE(text.code == 0);
+    REQUIRE(text.out.rfind(std::string{KISEKI_TEST_VERSION} + " (commit ", 0) == 0);
+
+    for (const auto& arguments : {std::vector<std::string>{"--version", "--json"}, std::vector<std::string>{"--json", "--version"}}) {
+        const auto result = run_cli(arguments, temp.file("config.json"));
+        REQUIRE(result.code == 0);
+        const auto json = nlohmann::json::parse(result.out);
+        REQUIRE(json.at("version") == KISEKI_TEST_VERSION);
+        REQUIRE_FALSE(json.at("commit").get<std::string>().empty());
+        REQUIRE(json.at("text").get<std::string>() + "\n" == text.out);
+    }
+}
+
+TEST_CASE("modes json reports static availability for the current platform") {
+    const TempConfigDirectory temp;
+    const auto result = run_cli({"modes", "--json"}, temp.file("config.json"));
+    REQUIRE(result.code == 0);
+    const auto json = nlohmann::json::parse(result.out);
+    const auto platform = json.at("currentPlatform").get<std::string>();
+    REQUIRE((platform == "windows" || platform == "macos" || platform == "linux"));
+    for (const auto& mode : json.at("modeMatrix")) {
+        const auto platforms = mode.at("platforms");
+        const bool listed = std::find(platforms.begin(), platforms.end(), platform) != platforms.end();
+        REQUIRE(mode.at("availableOnCurrentPlatform").get<bool>() == listed);
+        if (mode.at("id") == "linux-isolated-display") {
+            REQUIRE(listed == (platform == "linux"));
+        }
+    }
+    const auto text = run_cli({"modes"}, temp.file("config.json"));
+    REQUIRE(text.out.find("Platform support on " + platform) != std::string::npos);
+}
+
+TEST_CASE("background desktop status and screenshot route display, state directory, and json") {
+    const TempConfigDirectory temp;
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    int calls = 0;
+    dependencies.background_desktop_status = [&](const kiseki::cli::BackgroundDesktopStatusOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":42");
+        REQUIRE(options.state_directory == temp.file("state"));
+        REQUIRE(options.json);
+        ++calls;
+        return 0;
+    };
+    dependencies.background_desktop_screenshot = [&](const kiseki::cli::BackgroundDesktopScreenshotOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":42");
+        REQUIRE(options.output_path == temp.file("shot.png"));
+        REQUIRE(options.json);
+        ++calls;
+        return 0;
+    };
+    REQUIRE(kiseki::cli::run({"background", "desktop", "status", "--display", ":42", "--state-dir", temp.file("state").string(), "--json"},
+                             temp.file("config.json"), {out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"background", "desktop", "screenshot", "--display", ":42", "--output", temp.file("shot.png").string(), "--json"},
+                             temp.file("config.json"), {out, err}, dependencies) == 0);
+    REQUIRE(calls == 2);
+}
+
+TEST_CASE("background desktop status and screenshot never fall back to another display") {
+    const TempConfigDirectory temp;
+    const auto state = temp.file("state");
+    const auto status = run_cli({"background", "desktop", "status", "--display", ":987", "--state-dir", state.string(), "--json"},
+                                temp.file("config.json"));
+    REQUIRE(status.code == 2);
+    const auto json = nlohmann::json::parse(status.out);
+    REQUIRE(json.at("running") == false);
+    const auto state_name = json.at("state").get<std::string>();
+    REQUIRE((state_name == "unsupported" || state_name == "not-running"));
+
+    const auto output = temp.file("background.png");
+    const auto shot = run_cli({"background", "desktop", "screenshot", "--display", ":987", "--output", output.string()},
+                              temp.file("config.json"));
+    REQUIRE(shot.code == 2);
+    REQUIRE_FALSE(std::filesystem::exists(output));
+    if (state_name == "not-running") {
+        // The failing display is named; no current-session or portal capture is attempted.
+        REQUIRE(shot.err.find(":987") != std::string::npos);
+        REQUIRE(shot.err.find("not reachable") != std::string::npos);
+        REQUIRE(shot.err.find("portal") == std::string::npos);
+    }
+}
+
+#ifdef __linux__
+TEST_CASE("background desktop treats a pid file naming a non-Xvfb process as stale") {
+    const TempConfigDirectory temp;
+    const auto state = temp.file("state");
+    const auto probe = run_cli({"background", "desktop", "status", "--display", ":987", "--state-dir", state.string(), "--json"},
+                               temp.file("config.json"));
+    if (nlohmann::json::parse(probe.out).at("state") == "unsupported") {
+        SKIP("background desktop support was not compiled in");
+    }
+    std::filesystem::create_directories(state);
+    // This test process is alive but is not Xvfb; stop must not signal it.
+    write_text(state / "xvfb_987.pid", std::to_string(static_cast<long long>(::getpid())) + "\n");
+
+    const auto status = run_cli({"background", "desktop", "status", "--display", ":987", "--state-dir", state.string(), "--json"},
+                                temp.file("config.json"));
+    REQUIRE(status.code == 2);
+    const auto json = nlohmann::json::parse(status.out);
+    REQUIRE(json.at("state") == "stale-pid-file");
+    REQUIRE(json.at("processAlive") == true);
+
+    const auto stop = run_cli({"background", "desktop", "stop", "--display", ":987", "--state-dir", state.string()},
+                              temp.file("config.json"));
+    REQUIRE(stop.code == 0);
+    REQUIRE(stop.out.find("removed stale pid file") != std::string::npos);
+    REQUIRE_FALSE(std::filesystem::exists(state / "xvfb_987.pid"));
+}
+#endif
+
+TEST_CASE("macOS permission checks are machine-readable and fail when not granted") {
+    const TempConfigDirectory temp;
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    bool called = false;
+    dependencies.macos_accessibility_permission = [&](const kiseki::cli::MacPermissionOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.json);
+        REQUIRE_FALSE(options.prompt);
+        called = true;
+        return 2;
+    };
+    REQUIRE(kiseki::cli::run({"permissions", "macos", "accessibility", "--json"}, temp.file("config.json"), {out, err}, dependencies) == 2);
+    REQUIRE(called);
+
+    const auto result = run_cli({"permissions", "macos", "screen-recording", "--json"}, temp.file("config.json"));
+    const auto json = nlohmann::json::parse(result.out);
+    REQUIRE(json.at("permission") == "screen-recording");
+    REQUIRE(result.code == (json.at("supported").get<bool>() && json.at("granted").get<bool>() ? 0 : 2));
+#ifndef __APPLE__
+    REQUIRE(json.at("supported") == false);
+    REQUIRE(result.code == 2);
+#endif
 }

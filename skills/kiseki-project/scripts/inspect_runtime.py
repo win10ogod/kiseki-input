@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 
@@ -53,15 +54,56 @@ def inspect(repo=None, executable=None, probe=False):
         for name, arguments in (("version", ["--version"]), ("modes", ["modes", "--json"]), ("capabilities", ["capabilities"])):
             try:
                 completed = subprocess.run([str(selected), *arguments], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace")
-                check = {"exitCode": completed.returncode, "stderr": completed.stderr.strip(), "stdout": completed.stdout.strip()}
+                stdout = completed.stdout.strip()
+                # Raw stdout is kept only when it could not be parsed; parsed output is in "result".
+                check = {"exitCode": completed.returncode, "stderr": completed.stderr.strip()}
                 result["checks"][name] = check
                 if completed.returncode:
                     result["errors"].append(f"{name} exited {completed.returncode}")
-                check["result"] = completed.stdout.strip() if name == "version" else json.loads(completed.stdout)
+                if name == "version":
+                    check["result"] = stdout
+                    check.update(parse_version(stdout))
+                else:
+                    try:
+                        check["result"] = json.loads(stdout)
+                    except ValueError:
+                        check["stdout"] = stdout
+                        raise
             except (OSError, ValueError) as error:
                 result["errors"].append(f"{name}: {error}")
+        compare_build_commit(result, repo)
         result["ok"] = not result["errors"]
     return result
+
+
+def parse_version(text):
+    """`0.1.0 (commit abc123, dirty)` -> version, commit, tree; older builds print only the version."""
+    match = re.match(r"^(\S+)(?: \(commit ([0-9a-f]+|unknown)(?:, (dirty|tree state unknown))?\))?$", text)
+    if not match:
+        return {}
+    tree = {"dirty": "dirty", "tree state unknown": "unknown"}.get(match.group(3), "clean" if match.group(2) not in (None, "unknown") else "unknown")
+    return {"version": match.group(1), "commit": match.group(2), "tree": tree}
+
+
+def compare_build_commit(result, repo):
+    """Warn when the executable was built from a different commit than the checkout (read-only git query)."""
+    commit = result["checks"].get("version", {}).get("commit")
+    git = shutil.which("git")
+    if not commit or commit == "unknown" or not repo or not git:
+        return
+    try:
+        completed = subprocess.run([git, "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return
+    source = completed.stdout.strip()
+    if completed.returncode or not source:
+        return
+    check = result["checks"]["version"]
+    check["sourceCommit"] = source[:len(commit)]
+    check["matchesSource"] = source.startswith(commit)
+    if not check["matchesSource"]:
+        result.setdefault("warnings", []).append(
+            f"executable was built from commit {commit}; the checkout is at {check['sourceCommit']}. Rebuild before testing source changes.")
 
 
 def main():

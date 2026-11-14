@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "platform/capture/bitmap_writer.hpp"
+#include "platform/capture/image_writer.hpp"
 
 namespace kiseki::platform::capture {
 
@@ -38,7 +38,7 @@ std::string ns_error_string(NSError* error) {
     return text == nil ? "ScreenCaptureKit failed" : std::string{[text UTF8String]};
 }
 
-CaptureResult write_cg_image_bmp(CGImageRef image, const std::filesystem::path& output_path) {
+CaptureResult write_cg_image(CGImageRef image, const std::filesystem::path& output_path) {
     if (image == nullptr) {
         return fail_capture(output_path, "ScreenCaptureKit returned no image");
     }
@@ -68,11 +68,11 @@ CaptureResult write_cg_image_bmp(CGImageRef image, const std::filesystem::path& 
         return fail_capture(output_path, "CGBitmapContextCreate failed");
     }
 
-    // CGImage drawing already produces the row order consumed by the top-down BMP writer.
+    // CGImage drawing already produces the top-down row order consumed by the image writer.
     CGContextDrawImage(context, CGRectMake(0.0, 0.0, static_cast<CGFloat>(width), static_cast<CGFloat>(height)), image);
     CGContextRelease(context);
 
-    return write_bgra_bmp(output_path, width, height, pixels);
+    return write_bgra_image(output_path, width, height, pixels);
 }
 
 SCShareableContent* load_shareable_content(std::string& error) {
@@ -236,7 +236,7 @@ CaptureResult capture_desktop_bmp_screencapturekit(const std::filesystem::path& 
         if (image.image == nullptr) {
             return fail_capture(output_path, image.error);
         }
-        auto result = write_cg_image_bmp(image.image, output_path);
+        auto result = write_cg_image(image.image, output_path);
         if (result.ok)
             result.coordinates = CaptureCoordinates{.space = "macos-global-points",
                                                     .origin_x = rect.origin.x,
@@ -269,7 +269,7 @@ CaptureResult capture_window_bmp_screencapturekit(std::uint32_t window_id, const
         if (image.image == nullptr) {
             return fail_capture(output_path, image.error);
         }
-        auto result = write_cg_image_bmp(image.image, output_path);
+        auto result = write_cg_image(image.image, output_path);
         // Shadows are excluded. The image covers the full window including its
         // title bar; use this screen transform instead of assuming client origin.
         const CGRect rect = window.frame;
