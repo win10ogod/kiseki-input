@@ -1,4 +1,5 @@
 #include "platform/session/macos_cua.hpp"
+#include "core/utf8_path.hpp"
 #include "platform/session/cua_process.hpp"
 #include "platform/session/cua_runtime.hpp"
 
@@ -106,7 +107,7 @@ std::filesystem::path find_on_path(const std::string& name) {
         if (segment.empty()) {
             segment = ".";
         }
-        const auto candidate = std::filesystem::u8path(segment) / name;
+        const auto candidate = kiseki::core::path_from_utf8(segment) / name;
         if (executable_file(candidate)) {
             return candidate;
         }
@@ -116,7 +117,7 @@ std::filesystem::path find_on_path(const std::string& name) {
 
 std::filesystem::path cua_driver_binary() {
     if (const auto override_path = detail::environment_text("KISEKI_CUA_DRIVER"); !override_path.empty()) {
-        return executable_file(std::filesystem::u8path(override_path)) ? resolved(std::filesystem::u8path(override_path)) : std::filesystem::path{};
+        return executable_file(kiseki::core::path_from_utf8(override_path)) ? resolved(kiseki::core::path_from_utf8(override_path)) : std::filesystem::path{};
     }
 #ifdef _WIN32
     if (const auto path = find_on_path("cua-driver.exe"); !path.empty()) {
@@ -127,7 +128,7 @@ std::filesystem::path cua_driver_binary() {
     }
     if (const auto local_app_data = detail::environment_text("LOCALAPPDATA"); !local_app_data.empty()) {
         const auto visible_binary =
-            std::filesystem::u8path(local_app_data) / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe";
+            kiseki::core::path_from_utf8(local_app_data) / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe";
         if (executable_file(visible_binary)) {
             return visible_binary;
         }
@@ -143,7 +144,7 @@ std::filesystem::path cua_driver_binary() {
     }
 #else
     if (const auto home = detail::environment_text("HOME"); !home.empty()) {
-        const auto local_binary = std::filesystem::u8path(home) / ".local" / "bin" / "cua-driver";
+        const auto local_binary = kiseki::core::path_from_utf8(home) / ".local" / "bin" / "cua-driver";
         if (executable_file(local_binary)) {
             return resolved(local_binary);
         }
@@ -206,7 +207,7 @@ struct CaptureOutput {
         return text;
     }
     void fix_paths(nlohmann::json& value) const {
-        if (value.is_string() && value.get_ref<const std::string&>().ends_with(detail::path_text(staged.filename())) && normalized_path(std::filesystem::u8path(value.get<std::string>())) == normalized_path(staged)) value = detail::path_text(target);
+        if (value.is_string() && value.get_ref<const std::string&>().ends_with(detail::path_text(staged.filename())) && normalized_path(kiseki::core::path_from_utf8(value.get<std::string>())) == normalized_path(staged)) value = detail::path_text(target);
         else if (value.is_structured()) for (auto& child : value) fix_paths(child);
     }
 };
@@ -273,7 +274,7 @@ OperationResult run_cua_tool_once(
         std::vector<std::unique_ptr<CaptureOutput>> captures;
         const bool argument_capture = arguments.contains("screenshot_out_file") && arguments["screenshot_out_file"].is_string();
         if (argument_capture) {
-            captures.push_back(std::make_unique<CaptureOutput>(std::filesystem::u8path(arguments["screenshot_out_file"].get<std::string>()), image_format));
+            captures.push_back(std::make_unique<CaptureOutput>(kiseki::core::path_from_utf8(arguments["screenshot_out_file"].get<std::string>()), image_format));
             tool_arguments["screenshot_out_file"] = detail::path_text(captures.back()->staged);
         }
         std::vector<std::string> command{detail::path_text(binary), "call", tool};

@@ -1,4 +1,5 @@
 #include "platform/session/cua_runtime.hpp"
+#include "core/utf8_path.hpp"
 #include "platform/session/cua_process.hpp"
 
 #include <cctype>
@@ -32,14 +33,14 @@ std::string environment(const char* name) {
 }
 
 std::filesystem::path state_directory() {
-    if (const auto path = environment("KISEKI_CUA_STATE_DIR"); !path.empty()) return std::filesystem::u8path(path);
+    if (const auto path = environment("KISEKI_CUA_STATE_DIR"); !path.empty()) return kiseki::core::path_from_utf8(path);
 #ifdef _WIN32
-    return std::filesystem::u8path(environment("LOCALAPPDATA")) / "Kiseki" / "cua";
+    return kiseki::core::path_from_utf8(environment("LOCALAPPDATA")) / "Kiseki" / "cua";
 #elif defined(__APPLE__)
-    return std::filesystem::u8path(environment("HOME")) / "Library" / "Application Support" / "Kiseki" / "cua";
+    return kiseki::core::path_from_utf8(environment("HOME")) / "Library" / "Application Support" / "Kiseki" / "cua";
 #else
     const auto xdg = environment("XDG_STATE_HOME");
-    return (xdg.empty() ? std::filesystem::u8path(environment("HOME")) / ".local" / "state" : std::filesystem::u8path(xdg)) / "kiseki" / "cua";
+    return (xdg.empty() ? kiseki::core::path_from_utf8(environment("HOME")) / ".local" / "state" : kiseki::core::path_from_utf8(xdg)) / "kiseki" / "cua";
 #endif
 }
 
@@ -133,7 +134,7 @@ bool official_windows_layout(const std::filesystem::path& binary) {
     if (local.empty()) return false;
     std::error_code error;
     const bool same = std::filesystem::equivalent(binary,
-        std::filesystem::u8path(local) / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe", error);
+        kiseki::core::path_from_utf8(local) / "Programs" / "Cua" / "cua-driver" / "bin" / "cua-driver.exe", error);
     return same && !error;
 }
 #endif
@@ -253,7 +254,7 @@ std::filesystem::path update_record(const std::filesystem::path& directory) { re
 bool automatic_check_due(const json& record, const std::filesystem::path& binary, const std::string& version, std::int64_t now) {
     std::error_code error;
     const auto recorded = string_field(record, "binary");
-    if (recorded.empty() || !std::filesystem::equivalent(std::filesystem::u8path(recorded), binary, error) || error) return true;
+    if (recorded.empty() || !std::filesystem::equivalent(kiseki::core::path_from_utf8(recorded), binary, error) || error) return true;
     if (version_number(string_field(record, "version")) != version_number(version)) return true;
     if (!record.contains("checked_at") || !record["checked_at"].is_number_integer()) return true;
     const auto checked = record["checked_at"].get<std::int64_t>();

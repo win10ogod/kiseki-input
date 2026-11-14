@@ -1,4 +1,5 @@
 #include <filesystem>
+#include "core/utf8_path.hpp"
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -8,7 +9,7 @@
 // A process boundary fixture. It never installs software or sends desktop input.
 int main(int argc, char** argv) {
     using nlohmann::json;
-    const std::filesystem::path directory = std::filesystem::u8path(std::getenv("KISEKI_CUA_TEST_DIR"));
+    const std::filesystem::path directory = kiseki::core::path_from_utf8(std::getenv("KISEKI_CUA_TEST_DIR"));
     json config;
     std::ifstream(directory / "config.json") >> config;
     std::vector<std::string> args(argv + 1, argv + argc);
@@ -99,14 +100,14 @@ int main(int argc, char** argv) {
         }
         else std::cout << arguments;
         if (config.value("write_screenshot", false) && arguments.contains("screenshot_out_file")) {
-            std::ofstream image(std::filesystem::u8path(arguments["screenshot_out_file"].get<std::string>()), std::ios::binary);
+            std::ofstream image(kiseki::core::path_from_utf8(arguments["screenshot_out_file"].get<std::string>()), std::ios::binary);
             if (config.value("screenshot_bytes", std::string{}) == "jpeg") image << "\xFF\xD8\xFF\xE0 jpeg screenshot";
             else image << "new screenshot";
         }
         if (config.value("write_cli_screenshot", false)) {
             for (std::size_t i = 0; i + 1 < args.size(); ++i)
                 if (args[i] == "--screenshot-out-file")
-                    std::ofstream(std::filesystem::u8path(args[i + 1]), std::ios::binary) << "new CLI screenshot";
+                    std::ofstream(kiseki::core::path_from_utf8(args[i + 1]), std::ios::binary) << "new CLI screenshot";
         }
     } else std::cout << json{{"args", args}};
     std::cerr << config.value("stderr", "");

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include "core/utf8_path.hpp"
 #include <chrono>
 #include <algorithm>
 #include <cstdlib>
@@ -52,7 +53,7 @@ struct Fixture {
         binary = directory / "cua-driver";
         const std::string separator = ":";
 #endif
-        std::filesystem::copy_file(std::filesystem::u8path(KISEKI_CUA_STUB), binary);
+        std::filesystem::copy_file(kiseki::core::path_from_utf8(KISEKI_CUA_STUB), binary);
         env("KISEKI_CUA_TEST_DIR", detail::path_text(directory));
         env("KISEKI_CUA_STATE_DIR", detail::path_text(directory / "state"));
         env("KISEKI_CUA_DRIVER", "");
@@ -320,7 +321,7 @@ TEST_CASE("CUA screenshot rejects stale files and atomically replaces a new capt
     REQUIRE(result.ok);
     { std::ifstream stream(path); std::getline(stream, contents); }
     REQUIRE(contents == "new screenshot");
-    REQUIRE(std::filesystem::equivalent(std::filesystem::u8path(json::parse(result.message)["screenshot_out_file"].get<std::string>()), path));
+    REQUIRE(std::filesystem::equivalent(kiseki::core::path_from_utf8(json::parse(result.message)["screenshot_out_file"].get<std::string>()), path));
 }
 
 TEST_CASE("CUA structured refusal is a failure even when provider process exits zero") {
