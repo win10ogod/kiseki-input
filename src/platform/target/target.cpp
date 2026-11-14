@@ -21,7 +21,11 @@
 #ifdef KISEKI_HAS_X11
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <dlfcn.h>
+#include <sys/types.h>
 #include <cstdlib>
+
+#include "platform/target/x11_client_windows.hpp"
 #endif
 #endif
 
@@ -96,17 +100,20 @@ bool title_matches(const std::string& title, const std::string& needle) {
     return needle.empty() || lower_copy(title).find(lower_copy(needle)) != std::string::npos;
 }
 
+// "0x..." is hexadecimal; anything else is decimal (CUA and other providers print decimal ids).
 std::optional<unsigned long long> parse_window_id(const std::string& id) {
     if (id.empty()) {
         return std::nullopt;
     }
+    const bool hex = id.size() > 2 && id[0] == '0' && (id[1] == 'x' || id[1] == 'X');
+    const std::string digits = hex ? id.substr(2) : id;
+    if (digits.empty() || !std::all_of(digits.begin(), digits.end(), [hex](unsigned char c) {
+            return hex ? std::isxdigit(c) != 0 : std::isdigit(c) != 0;
+        })) {
+        return std::nullopt;
+    }
     try {
-        std::size_t consumed = 0;
-        const unsigned long long value = std::stoull(id, &consumed, 0);
-        if (consumed != id.size()) {
-            return std::nullopt;
-        }
-        return value;
+        return std::stoull(digits, nullptr, hex ? 16 : 10);
     } catch (...) {
         return std::nullopt;
     }
@@ -452,6 +459,14 @@ std::vector<TargetWindow> enumerate_windows(const TargetQuery& filter) {
 #else
 #ifdef KISEKI_HAS_X11
 
+std::string x11_open_error() {
+    const char* name = std::getenv("DISPLAY");
+    if (name == nullptr || name[0] == '\0') {
+        return "XOpenDisplay failed: DISPLAY is not set";
+    }
+    return std::string{"XOpenDisplay failed for DISPLAY="} + name + "; no X server accepted the connection";
+}
+
 std::optional<unsigned long> parse_x11_window_id(const std::string& id) {
     const auto value = parse_window_id(id);
     if (!value) {
@@ -486,26 +501,169 @@ std::string get_window_title(Display* display, Window window) {
     return title;
 }
 
-std::uint32_t get_window_pid(Display* display, Window window) {
-    Atom pid_atom = XInternAtom(display, "_NET_WM_PID", True);
-    if (pid_atom == None) {
-        return 0;
+int ignore_x11_error(Display*, XErrorEvent*) {
+    return 0;
+}
+
+// Windows can disappear between XQueryTree and later requests; Xlib's default
+// handler would terminate the process on the resulting BadWindow error.
+class ScopedX11ErrorTrap {
+public:
+    explicit ScopedX11ErrorTrap(Display* display)
+        : display_{display}, previous_{XSetErrorHandler(ignore_x11_error)} {
+    }
+    ScopedX11ErrorTrap(const ScopedX11ErrorTrap&) = delete;
+    ScopedX11ErrorTrap& operator=(const ScopedX11ErrorTrap&) = delete;
+    ~ScopedX11ErrorTrap() {
+        XSync(display_, False);
+        XSetErrorHandler(previous_);
     }
 
+private:
+    Display* display_;
+    XErrorHandler previous_;
+};
+
+std::optional<std::vector<unsigned long>> read_cardinal_property(Display* display, Window window, Atom property, Atom type) {
+    if (property == None) {
+        return std::nullopt;
+    }
     Atom actual_type = None;
     int actual_format = 0;
     unsigned long items = 0;
     unsigned long bytes_after = 0;
     unsigned char* data = nullptr;
-    std::uint32_t pid = 0;
-    if (XGetWindowProperty(display, window, pid_atom, 0, 1, False, XA_CARDINAL, &actual_type, &actual_format, &items, &bytes_after, &data) == Success && data != nullptr) {
-        if (items > 0 && actual_format == 32) {
-            pid = static_cast<std::uint32_t>(*reinterpret_cast<unsigned long*>(data));
-        }
+    if (XGetWindowProperty(display, window, property, 0, 1L << 20, False, type, &actual_type, &actual_format, &items,
+                           &bytes_after, &data) != Success) {
+        return std::nullopt;
+    }
+    std::optional<std::vector<unsigned long>> values;
+    if (actual_type == type && actual_format == 32) {
+        // Xlib returns 32-bit properties as an array of long.
+        const auto* longs = reinterpret_cast<const unsigned long*>(data);
+        values.emplace(longs, longs + items);
+    }
+    if (data != nullptr) {
         XFree(data);
     }
-    return pid;
+    return values;
 }
+
+// libXRes is loaded at runtime so builds do not need its headers; these mirror
+// the stable XResClientIdSpec/XResClientIdValue ABI from <X11/extensions/XRes.h>.
+struct XResClientIdSpecAbi {
+    XID client;
+    unsigned int mask;
+};
+
+struct XResClientIdValueAbi {
+    XResClientIdSpecAbi spec;
+    long length;
+    void* value;
+};
+
+struct XResLibrary {
+    using QueryExtension = Bool (*)(Display*, int*, int*);
+    using QueryVersion = Status (*)(Display*, int*, int*);
+    using QueryClientIds = Status (*)(Display*, long, XResClientIdSpecAbi*, long*, XResClientIdValueAbi**);
+    using GetClientPid = pid_t (*)(XResClientIdValueAbi*);
+    using ClientIdsDestroy = void (*)(long, XResClientIdValueAbi*);
+
+    QueryExtension query_extension = nullptr;
+    QueryVersion query_version = nullptr;
+    QueryClientIds query_client_ids = nullptr;
+    GetClientPid get_client_pid = nullptr;
+    ClientIdsDestroy client_ids_destroy = nullptr;
+
+    bool loaded() const {
+        return query_extension != nullptr && query_version != nullptr && query_client_ids != nullptr &&
+               get_client_pid != nullptr && client_ids_destroy != nullptr;
+    }
+};
+
+const XResLibrary& xres_library() {
+    static const XResLibrary library = [] {
+        XResLibrary result;
+        void* handle = dlopen("libXRes.so.1", RTLD_LAZY | RTLD_LOCAL);
+        if (handle == nullptr) {
+            handle = dlopen("libXRes.so", RTLD_LAZY | RTLD_LOCAL);
+        }
+        if (handle == nullptr) {
+            return result;
+        }
+        result.query_extension = reinterpret_cast<XResLibrary::QueryExtension>(dlsym(handle, "XResQueryExtension"));
+        result.query_version = reinterpret_cast<XResLibrary::QueryVersion>(dlsym(handle, "XResQueryVersion"));
+        result.query_client_ids = reinterpret_cast<XResLibrary::QueryClientIds>(dlsym(handle, "XResQueryClientIds"));
+        result.get_client_pid = reinterpret_cast<XResLibrary::GetClientPid>(dlsym(handle, "XResGetClientPid"));
+        result.client_ids_destroy = reinterpret_cast<XResLibrary::ClientIdsDestroy>(dlsym(handle, "XResClientIdsDestroy"));
+        return result;
+    }();
+    return library;
+}
+
+// Resolves window owners: _NET_WM_PID when the client sets it, otherwise the
+// X server's own record of the owning client's pid (X-Resource 1.2), else unknown.
+class X11PidResolver {
+public:
+    explicit X11PidResolver(Display* display)
+        : display_{display}, pid_atom_{XInternAtom(display, "_NET_WM_PID", True)} {
+    }
+
+    std::pair<std::uint32_t, std::string> resolve(Window window) {
+        if (const auto values = read_cardinal_property(display_, window, pid_atom_, XA_CARDINAL);
+            values && !values->empty() && values->front() > 0 &&
+            values->front() <= std::numeric_limits<std::uint32_t>::max()) {
+            return {static_cast<std::uint32_t>(values->front()), "_NET_WM_PID"};
+        }
+        if (const auto pid = query_xres(window)) {
+            return {*pid, "x-resource"};
+        }
+        return {0U, "unknown"};
+    }
+
+private:
+    bool xres_usable() {
+        if (!checked_) {
+            checked_ = true;
+            const auto& library = xres_library();
+            int event_base = 0;
+            int error_base = 0;
+            int major = 0;
+            int minor = 0;
+            usable_ = library.loaded() && library.query_extension(display_, &event_base, &error_base) &&
+                      library.query_version(display_, &major, &minor) != 0 && (major > 1 || (major == 1 && minor >= 2));
+        }
+        return usable_;
+    }
+
+    std::optional<std::uint32_t> query_xres(Window window) {
+        if (!xres_usable()) {
+            return std::nullopt;
+        }
+        const auto& library = xres_library();
+        constexpr unsigned int pid_mask = 1U << 1; // XRES_CLIENT_ID_PID_MASK
+        XResClientIdSpecAbi spec{window, pid_mask};
+        long count = 0;
+        XResClientIdValueAbi* values = nullptr;
+        if (library.query_client_ids(display_, 1, &spec, &count, &values) != Success || values == nullptr) {
+            return std::nullopt;
+        }
+        std::optional<std::uint32_t> pid;
+        for (long index = 0; index < count && !pid; ++index) {
+            const pid_t value = library.get_client_pid(&values[index]);
+            if (value > 0) {
+                pid = static_cast<std::uint32_t>(value);
+            }
+        }
+        library.client_ids_destroy(count, values);
+        return pid;
+    }
+
+    Display* display_;
+    Atom pid_atom_;
+    bool checked_ = false;
+    bool usable_ = false;
+};
 
 std::string get_window_class(Display* display, Window window) {
     Atom wm_class = XInternAtom(display, "WM_CLASS", True);
@@ -566,7 +724,7 @@ std::optional<TargetChildWindow> describe_child_window(Display* display, Window 
     };
 }
 
-std::optional<TargetWindow> describe_window(Display* display, Window window) {
+std::optional<TargetWindow> describe_window(Display* display, Window window, X11PidResolver& pids) {
     XWindowAttributes attributes{};
     if (XGetWindowAttributes(display, window, &attributes) == 0) {
         return std::nullopt;
@@ -581,36 +739,104 @@ std::optional<TargetWindow> describe_window(Display* display, Window window) {
     int root_y = 0;
     XTranslateCoordinates(display, window, root, 0, 0, &root_x, &root_y, &child);
 
+    auto [pid, pid_source] = pids.resolve(window);
     return TargetWindow{
         .id = x11_window_id(window),
         .title = get_window_title(display, window),
-        .pid = get_window_pid(display, window),
+        .pid = pid,
         .x = root_x,
         .y = root_y,
         .width = attributes.width,
         .height = attributes.height,
+        .pid_source = std::move(pid_source),
     };
 }
 
-void collect_windows(Display* display, Window root, std::vector<Window>& windows) {
+std::vector<Window> query_children(Display* display, Window window) {
+    Window root = None;
     Window parent = None;
     Window* children = nullptr;
     unsigned int child_count = 0;
-    if (XQueryTree(display, root, &root, &parent, &children, &child_count) == 0) {
-        return;
+    std::vector<Window> result;
+    if (XQueryTree(display, window, &root, &parent, &children, &child_count) == 0) {
+        return result;
     }
-
-    for (unsigned int index = 0; index < child_count; ++index) {
-        windows.push_back(children[index]);
-        collect_windows(display, children[index], windows);
-    }
-
+    result.assign(children, children + child_count);
     if (children != nullptr) {
         XFree(children);
+    }
+    return result;
+}
+
+// _NET_CLIENT_LIST is only trusted while the EWMH check window that the window
+// manager advertises still points to itself; a stale list survives a WM exit.
+std::optional<std::vector<detail::X11WindowId>> verified_net_client_list(Display* display, Window root) {
+    const Atom check = XInternAtom(display, "_NET_SUPPORTING_WM_CHECK", True);
+    const Atom client_list = XInternAtom(display, "_NET_CLIENT_LIST", True);
+    if (check == None || client_list == None) {
+        return std::nullopt;
+    }
+    const auto root_check = read_cardinal_property(display, root, check, XA_WINDOW);
+    if (!root_check || root_check->empty()) {
+        return std::nullopt;
+    }
+    const auto self_check = read_cardinal_property(display, static_cast<Window>(root_check->front()), check, XA_WINDOW);
+    if (!self_check || self_check->empty() || self_check->front() != root_check->front()) {
+        return std::nullopt;
+    }
+    const auto clients = read_cardinal_property(display, root, client_list, XA_WINDOW);
+    if (!clients) {
+        return std::nullopt;
+    }
+    return std::vector<detail::X11WindowId>(clients->begin(), clients->end());
+}
+
+std::vector<Window> list_target_windows(Display* display) {
+    const Window root = DefaultRootWindow(display);
+    const Atom wm_state = XInternAtom(display, "WM_STATE", True);
+    const detail::X11TreeAccess access{
+        .children = [display](detail::X11WindowId window) {
+            const auto children = query_children(display, static_cast<Window>(window));
+            return std::vector<detail::X11WindowId>(children.begin(), children.end());
+        },
+        .has_wm_state = [display, wm_state](detail::X11WindowId window) {
+            if (wm_state == None) {
+                return false;
+            }
+            Atom actual_type = None;
+            int actual_format = 0;
+            unsigned long items = 0;
+            unsigned long bytes_after = 0;
+            unsigned char* data = nullptr;
+            const bool found = XGetWindowProperty(display, static_cast<Window>(window), wm_state, 0, 0, False,
+                                                  AnyPropertyType, &actual_type, &actual_format, &items, &bytes_after,
+                                                  &data) == Success &&
+                               actual_type != None;
+            if (data != nullptr) {
+                XFree(data);
+            }
+            return found;
+        },
+        .is_unmanaged_top_level = [display](detail::X11WindowId window) {
+            XWindowAttributes attributes{};
+            return XGetWindowAttributes(display, static_cast<Window>(window), &attributes) != 0 &&
+                   attributes.map_state == IsViewable && attributes.c_class == InputOutput &&
+                   !attributes.override_redirect;
+        },
+    };
+    const auto selection = detail::select_x11_target_windows(root, verified_net_client_list(display, root), access);
+    return std::vector<Window>(selection.windows.begin(), selection.windows.end());
+}
+
+void collect_windows(Display* display, Window root, std::vector<Window>& windows) {
+    for (const Window child : query_children(display, root)) {
+        windows.push_back(child);
+        collect_windows(display, child, windows);
     }
 }
 
 std::vector<TargetChildWindow> enumerate_child_windows(Display* display, Window parent) {
+    const ScopedX11ErrorTrap trap{display};
     std::vector<Window> windows;
     collect_windows(display, parent, windows);
 
@@ -625,23 +851,24 @@ std::vector<TargetChildWindow> enumerate_child_windows(Display* display, Window 
 }
 
 std::vector<TargetWindow> enumerate_windows(Display* display, const TargetQuery& filter) {
+    const ScopedX11ErrorTrap trap{display};
+    X11PidResolver pids{display};
     std::vector<TargetWindow> matches;
     if (!filter.window_id.empty()) {
+        // An explicit id may name any window, including a child receiver.
         const auto window_id = parse_x11_window_id(filter.window_id);
         if (!window_id) {
             return matches;
         }
-        const auto window = describe_window(display, static_cast<Window>(*window_id));
+        const auto window = describe_window(display, static_cast<Window>(*window_id), pids);
         if (window && query_matches(filter, *window)) {
             matches.push_back(*window);
         }
         return matches;
     }
 
-    std::vector<Window> windows;
-    collect_windows(display, DefaultRootWindow(display), windows);
-    for (const Window window : windows) {
-        const auto description = describe_window(display, window);
+    for (const Window window : list_target_windows(display)) {
+        const auto description = describe_window(display, window, pids);
         if (description && query_matches(filter, *description)) {
             matches.push_back(*description);
         }
@@ -656,6 +883,14 @@ std::vector<TargetWindow> enumerate_windows(Display* display, const TargetQuery&
 
 bool has_target_selector(const TargetQuery& query) {
     return !query.title.empty() || query.pid != 0 || !query.window_id.empty();
+}
+
+std::optional<std::uint64_t> window_id_value(const std::string& id) {
+    const auto value = parse_window_id(id);
+    if (!value) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(*value);
 }
 
 bool target_window_available() {
@@ -695,7 +930,7 @@ ListResult list_windows(const TargetQuery& filter) {
 #ifdef KISEKI_HAS_X11
     Display* display = XOpenDisplay(nullptr);
     if (display == nullptr) {
-        return fail_list("XOpenDisplay failed; DISPLAY is not available");
+        return fail_list(x11_open_error());
     }
 
     if (!filter.window_id.empty() && !parse_x11_window_id(filter.window_id)) {
@@ -750,7 +985,7 @@ InspectResult inspect_window(const TargetQuery& query) {
 #ifdef KISEKI_HAS_X11
     Display* display = XOpenDisplay(nullptr);
     if (display == nullptr) {
-        return fail_inspect("XOpenDisplay failed; DISPLAY is not available");
+        return fail_inspect(x11_open_error());
     }
     const auto value = parse_x11_window_id(resolved.window.id);
     if (!value) {

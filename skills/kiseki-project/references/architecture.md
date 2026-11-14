@@ -5,7 +5,7 @@
 - `src/cli/`: CLI parsing, dependency injection seams, user-facing command behavior.
 - `src/core/config/`: config model, JSON conversion, validation, persistence, default paths.
 - `src/core/capabilities/`: foundation capability data and JSON conversion.
-- `src/platform/capture/`: desktop and burst screenshot backends plus BMP writing.
+- `src/platform/capture/`: desktop and burst screenshot backends plus BMP/PNG image writing.
 - `src/platform/input/`: keyboard, text, mouse, and drag backends.
 - `src/platform/notification/`: heartbeat notification and daemon loop.
 - `src/platform/runtime_capabilities.*`: runtime platform probing and limitation messages.

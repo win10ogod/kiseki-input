@@ -129,6 +129,26 @@ std::optional<pid_t> read_pid_file(const std::filesystem::path& path) {
     return static_cast<pid_t>(value);
 }
 
+// The executable name of a live process, when the platform exposes it (/proc on Linux).
+std::optional<std::string> process_name(pid_t pid) {
+    std::ifstream file{"/proc/" + std::to_string(pid) + "/comm"};
+    std::string name;
+    if (!file || !std::getline(file, name)) {
+        return std::nullopt;
+    }
+    return name;
+}
+
+// A pid file can outlive its Xvfb; the pid may since belong to another process.
+// Unknown identity (no /proc) keeps the previous behavior of trusting the pid file.
+bool pid_is_owned_xvfb(pid_t pid) {
+    if (!process_alive(pid)) {
+        return false;
+    }
+    const auto name = process_name(pid);
+    return !name || *name == "Xvfb";
+}
+
 void redirect_stdio_to_null() {
     const int null_fd = open("/dev/null", O_RDWR);
     if (null_fd < 0) {
@@ -225,6 +245,74 @@ std::filesystem::path default_state_directory() {
 #endif
 }
 
+BackgroundDesktopStatus background_desktop_status(const BackgroundDesktopStatusOptions& options) {
+    BackgroundDesktopStatus status;
+    status.display = options.display;
+    const auto unsupported = unsupported_message();
+    if (!unsupported.empty()) {
+        status.state = "unsupported";
+        status.message = unsupported;
+        return status;
+    }
+    status.supported = true;
+    if (!valid_display(options.display)) {
+        status.state = "invalid-display";
+        status.message = "background desktop display must look like :99";
+        return status;
+    }
+
+#ifndef _WIN32
+    status.pid_file = pid_file_for(state_directory_or_default(options.state_directory), options.display);
+    const auto pid = read_pid_file(status.pid_file);
+    if (pid) {
+        status.pid = static_cast<long long>(*pid);
+        status.process_alive = process_alive(*pid);
+        if (status.process_alive) {
+            status.process_name = process_name(*pid).value_or("");
+        }
+    }
+
+#ifdef KISEKI_HAS_X11
+    if (Display* xdisplay = XOpenDisplay(options.display.c_str())) {
+        const int screen = DefaultScreen(xdisplay);
+        status.display_reachable = true;
+        status.width = DisplayWidth(xdisplay, screen);
+        status.height = DisplayHeight(xdisplay, screen);
+        status.depth = DefaultDepth(xdisplay, screen);
+        XCloseDisplay(xdisplay);
+    }
+#endif
+
+    const bool owned = pid && pid_is_owned_xvfb(*pid);
+    if (owned && status.display_reachable) {
+        status.state = "running";
+        status.message = "background desktop " + options.display + " is running (Xvfb pid " +
+                         std::to_string(status.pid) + ")";
+    } else if (owned) {
+        status.state = "unresponsive";
+        status.message = "Xvfb pid " + std::to_string(status.pid) + " is alive but display " + options.display +
+                         " does not accept connections";
+    } else if (pid) {
+        status.state = "stale-pid-file";
+        status.message = "pid file " + status.pid_file.string() + " names pid " + std::to_string(status.pid) +
+                         (status.process_alive ? ", which is now '" + status.process_name + "', not Xvfb"
+                                               : ", which is not running");
+    } else if (status.display_reachable) {
+        status.state = "foreign-server";
+        status.message = "an X server answers on " + options.display +
+                         " but it was not started by kiseki background desktop start with this state directory";
+    } else {
+        status.state = "not-running";
+        status.message = "background desktop " + options.display + " is not running";
+    }
+    return status;
+#else
+    status.state = "unsupported";
+    status.message = unsupported;
+    return status;
+#endif
+}
+
 OperationResult start_background_desktop(const BackgroundDesktopStartOptions& options) {
     if (!valid_display(options.display)) {
         return fail("background desktop display must look like :99");
@@ -251,7 +339,7 @@ OperationResult start_background_desktop(const BackgroundDesktopStartOptions& op
     }
 
     const auto pid_file = pid_file_for(state_directory, options.display);
-    if (const auto pid = read_pid_file(pid_file); pid && process_alive(*pid)) {
+    if (const auto pid = read_pid_file(pid_file); pid && pid_is_owned_xvfb(*pid)) {
         return ok("background desktop already running on " + options.display);
     }
 
@@ -307,6 +395,12 @@ OperationResult stop_background_desktop(const BackgroundDesktopStopOptions& opti
     const auto pid = read_pid_file(pid_file);
     if (!pid) {
         return ok("background desktop was not running on " + options.display);
+    }
+    if (!pid_is_owned_xvfb(*pid)) {
+        std::error_code ignored;
+        std::filesystem::remove(pid_file, ignored);
+        return ok("background desktop was not running on " + options.display + "; removed stale pid file " +
+                  pid_file.string() + " (pid " + std::to_string(*pid) + " is not a running Xvfb)");
     }
     if (process_alive(*pid) && kill(*pid, SIGTERM) != 0 && errno != ESRCH) {
         return fail(std::string{"failed to stop Xvfb: "} + std::strerror(errno));
@@ -369,11 +463,15 @@ CaptureResult screenshot_background_desktop(const BackgroundDesktopScreenshotOpt
     }
 
 #ifndef _WIN32
-    ScopedDisplay display{options.display};
-    if (!display.active()) {
-        return fail_capture(options.output_path, "failed to select background DISPLAY");
+    // Capture only the isolated display: never $DISPLAY or the Wayland portal,
+    // which would return the user's real desktop.
+    auto result = kiseki::platform::capture::capture_x11_display_image(options.display, options.output_path);
+    if (!result.ok && result.error.rfind("XOpenDisplay failed", 0) == 0) {
+        result.error = "background desktop " + options.display + " is not reachable: " + result.error +
+                       "; check `kiseki background desktop status --display " + options.display +
+                       "` or start it with `kiseki background desktop start --display " + options.display + "`";
     }
-    return kiseki::platform::capture::capture_desktop_bmp(options.output_path);
+    return result;
 #else
     return fail_capture(options.output_path, unsupported);
 #endif

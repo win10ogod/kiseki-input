@@ -27,7 +27,7 @@ From the repository root:
 python3 skills/kiseki-project/scripts/inspect_runtime.py --probe
 ```
 
-The helper reports the repository, executable, execution platform, version, mode matrix, and runtime capability JSON. It runs only `--version`, `modes --json`, and `capabilities`. `--exe <path>` selects an exact build without silently falling back. Without `--probe`, it only inspects paths/environment.
+The helper reports the repository, executable, execution platform, version, mode matrix, and runtime capability JSON. It runs only `--version`, `modes --json`, and `capabilities`, plus a read-only `git rev-parse HEAD` that warns when the executable was built from a different commit than the checkout. `--exe <path>` selects an exact build without silently falling back. Without `--probe`, it only inspects paths/environment.
 
 Use the returned executable for subsequent commands. In Bash examples below and in references, `kiseki_exe` means that path, and `run_dir` means a fresh task artifact directory. Quote both. PowerShell users can invoke the same executable directly with PowerShell path syntax.
 

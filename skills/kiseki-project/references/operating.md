@@ -15,10 +15,10 @@ Set `target_id` from current discovery output. Prefer IDs over broad title subst
 `observe ui` is structural data, not OCR. Read its `source` and any `fallbackReason`. Explicit `uia` or `ax` requests must not be silently replaced. If a limited observation omits the relevant control, expand the requested depth/elements or inspect the appropriate subtree rather than treating the control as absent. For canvas or rendered visual state, take a screenshot.
 
 ```bash
-"$kiseki_exe" screenshot window --target-window-id "$target_id" --output "$run_dir/before.bmp" --json
+"$kiseki_exe" screenshot window --target-window-id "$target_id" --output "$run_dir/before.png" --json
 ```
 
-For background actions replace this with the matching capture in the mode table. Inspect the image and metadata before deriving click coordinates. BMP-to-PNG conversion is format conversion; keep the original dimensions/metadata available.
+For background actions replace this with the matching capture in the mode table. Inspect the image and metadata before deriving click coordinates. The output extension selects PNG or BMP; both keep the captured dimensions.
 
 ## Keyboard, text, and precision
 
@@ -35,7 +35,7 @@ Create a sequence JSON or path file with the actual target coordinates and reque
 
 The sequence's referenced file paths are resolved from the process working directory, not the JSON file's directory. The [native input guide](../../../docs/native-input.md) is the schema source: `action`, `holdMs`, `atMs`, click count/interval, button/modifiers, wheel axes, and timed `x y time_ms` path points. Do not replace a precise path with a sparse sample or add blanket sleeps to hide delivery failures.
 
-macOS screenshot metadata supplies origin and pixels-per-unit. Convert pixels with `screen = origin + pixel / scale`; a Retina image may be twice the point dimensions. Windows selected-window actions use client coordinates, while a capture may include window decoration. Establish the client origin/transform; do not use a title-bar pixel as a client coordinate.
+macOS screenshot metadata supplies origin and pixels-per-unit. Convert pixels with `screen = origin + pixel / scale`; a Retina image may be twice the point dimensions. Windows window captures cover the visible frame and report `coordinates.clientArea` in image pixels; selected-window actions use client coordinates. Convert through the reported client origin; do not use a title-bar pixel as a client coordinate.
 
 ## Selected-window and CUA actions
 

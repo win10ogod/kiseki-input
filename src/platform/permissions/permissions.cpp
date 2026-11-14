@@ -13,24 +13,6 @@ namespace kiseki::platform::permissions {
 
 namespace {
 
-OperationResult ok(std::string message) {
-    return OperationResult{
-        .ok = true,
-        .code = 0,
-        .message = std::move(message),
-        .error = "",
-    };
-}
-
-OperationResult fail(std::string error) {
-    return OperationResult{
-        .ok = false,
-        .code = 2,
-        .message = "",
-        .error = std::move(error),
-    };
-}
-
 #ifdef __APPLE__
 void open_settings_url(const char* url) {
     std::string command = "open '";
@@ -57,29 +39,50 @@ std::string permission_message(const char* name, bool granted, bool prompt, bool
 }
 #endif
 
+PermissionStatus unsupported(const char* permission, const char* name) {
+    return PermissionStatus{
+        .supported = false,
+        .permission = permission,
+        .granted = false,
+        .prompted = false,
+        .settings_opened = false,
+        .message = std::string{"macOS "} + name + " permission helper is only available on macOS",
+    };
+}
+
 } // namespace
 
-OperationResult request_macos_screen_recording(bool prompt, bool open_settings) {
+PermissionStatus macos_screen_recording_status(bool prompt, bool open_settings) {
 #ifdef __APPLE__
     bool granted = CGPreflightScreenCaptureAccess();
-    if (!granted && prompt) {
+    const bool prompted = !granted && prompt;
+    if (prompted) {
         granted = CGRequestScreenCaptureAccess();
     }
-    if (!granted && open_settings) {
+    const bool opened = !granted && open_settings;
+    if (opened) {
         open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
     }
-    return ok(permission_message("Screen Recording", granted, prompt, open_settings));
+    return PermissionStatus{
+        .supported = true,
+        .permission = "screen-recording",
+        .granted = granted,
+        .prompted = prompted,
+        .settings_opened = opened,
+        .message = permission_message("Screen Recording", granted, prompt, open_settings),
+    };
 #else
     (void)prompt;
     (void)open_settings;
-    return fail("macOS Screen Recording permission helper is only available on macOS");
+    return unsupported("screen-recording", "Screen Recording");
 #endif
 }
 
-OperationResult request_macos_accessibility(bool prompt, bool open_settings) {
+PermissionStatus macos_accessibility_status(bool prompt, bool open_settings) {
 #ifdef __APPLE__
     bool granted = AXIsProcessTrusted();
-    if (!granted && prompt) {
+    const bool prompted = !granted && prompt;
+    if (prompted) {
         const void* keys[] = {kAXTrustedCheckOptionPrompt};
         const void* values[] = {kCFBooleanTrue};
         CFDictionaryRef options = CFDictionaryCreate(
@@ -94,14 +97,22 @@ OperationResult request_macos_accessibility(bool prompt, bool open_settings) {
             CFRelease(options);
         }
     }
-    if (!granted && open_settings) {
+    const bool opened = !granted && open_settings;
+    if (opened) {
         open_settings_url("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
     }
-    return ok(permission_message("Accessibility", granted, prompt, open_settings));
+    return PermissionStatus{
+        .supported = true,
+        .permission = "accessibility",
+        .granted = granted,
+        .prompted = prompted,
+        .settings_opened = opened,
+        .message = permission_message("Accessibility", granted, prompt, open_settings),
+    };
 #else
     (void)prompt;
     (void)open_settings;
-    return fail("macOS Accessibility permission helper is only available on macOS");
+    return unsupported("accessibility", "Accessibility");
 #endif
 }
 

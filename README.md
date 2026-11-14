@@ -76,7 +76,7 @@ This build includes:
 - JSON configuration defaults, validation, and persistence
 - Local WebUI for configuration and teaching-bundle inspection: `kiseki config-ui`
 - CLI desktop screenshots and burst screenshots
-- CLI target listing for window id, PID, title, and geometry
+- CLI target listing for window id (`id`, plus decimal `numericId` as CUA reports it), PID, title, and geometry
 - CLI target inspection for selected windows and child receiver handles
 - CLI non-visual UI observation from platform/app structure, including Windows UI Automation and macOS Accessibility/AX when available
 - CLI target-window screenshots, explicit background window screenshots, and target-window burst screenshots
@@ -94,7 +94,7 @@ This build includes:
 - Human-readable diagnostics: `kiseki doctor`
 - Operation and screenshot mode guide: `kiseki modes --json`
 
-Windows input first attempts to load `IbInputSimulator.dll` next to the executable. If that DLL is absent or cannot initialize, Windows falls back to `SendInput` and reports driver input unavailable. Target-window input on Windows uses normal window messages such as `WM_CHAR`, `WM_KEYDOWN/UP`, and mouse messages when a target accepts them. Linux input uses native X11/XTest for global input and X11 events for target-window background input when available. Linux Wayland sessions use XDG Desktop Portal for current-session desktop screenshots when the portal build slice and compositor permission are available; this is screenshot support, not Wayland global input. Screenshots are system-level BMP captures: D3D11/GDI/`PrintWindow` on Windows, X11 `XGetImage` or XDG Desktop Portal on Linux, and ScreenCaptureKit on macOS. `background window screenshot` is the selected-window capture entry intended for non-activating background verification.
+Windows input first attempts to load `IbInputSimulator.dll` next to the executable. If that DLL is absent or cannot initialize, Windows falls back to `SendInput` and reports driver input unavailable. Target-window input on Windows uses normal window messages such as `WM_CHAR`, `WM_KEYDOWN/UP`, and mouse messages when a target accepts them. Linux input uses native X11/XTest for global input and X11 events for target-window background input when available. Linux Wayland sessions use XDG Desktop Portal for current-session desktop screenshots when the portal build slice and compositor permission are available; this is screenshot support, not Wayland global input. Screenshots are system-level captures written as PNG or BMP according to the output extension: D3D11/GDI/`PrintWindow` on Windows, X11 `XGetImage` or XDG Desktop Portal on Linux, and ScreenCaptureKit on macOS. See [screenshot files and coordinates](docs/native-input.md#screenshot-files-and-coordinates). `background window screenshot` is the selected-window capture entry intended for non-activating background verification.
 
 ## Operation Modes
 
@@ -134,8 +134,8 @@ kiseki config-ui
 kiseki capabilities
 kiseki doctor
 kiseki modes [--json]
-kiseki permissions macos screen-recording [--prompt] [--open-settings]
-kiseki permissions macos accessibility [--prompt] [--open-settings]
+kiseki permissions macos screen-recording [--prompt] [--open-settings] [--json]
+kiseki permissions macos accessibility [--prompt] [--open-settings] [--json]
 
 # Discover and observe targets
 kiseki target list [--target-title <text>|--target-pid <pid>|--target-window-id <id>]
@@ -147,9 +147,9 @@ kiseki screenshot desktop|window|burst|window-burst ...
 kiseki input key|combo|text|mouse|drag ...
 
 # Integrated background operation
-kiseki background window screenshot [target selector] --output window.bmp
+kiseki background window screenshot [target selector] --output window.png
 kiseki background window text|key|mouse|drag [target selector] ...
-kiseki background desktop start|launch|screenshot|text|key|mouse|stop ...
+kiseki background desktop start|status|launch|screenshot|text|key|mouse|stop ...
 kiseki background cua setup|status|update|tools|describe|call|driver ...
 kiseki background cua launch|windows|state|screenshot|click|text|key|hotkey|drag|draw ...
 kiseki background cua feedback status|enable|motion|style|preset ...
@@ -265,9 +265,9 @@ Windows screenshots, target listing, target-window screenshots, system input, an
 
 Windows background screenshot uses selected-window capture through `background window screenshot`. It is the Windows native background observation path for this project; it does not require a VM, Docker, or separate session backend. Windows selected-window input remains a message/API helper for ordinary Win32 controls and apps that accept public window messages. Optional `background cua` support is separate and requires an installed Cua Driver in the interactive desktop session.
 
-Linux support is split by session type. X11/XTest provides current-session input, target-window helpers, selected-window capture, and Xvfb isolated background desktops. Wayland current-session desktop screenshots use XDG Desktop Portal when Kiseki is built with `gio-2.0` and `gdk-pixbuf-2.0`; the compositor may still require permission or return a denial. Wayland global input is not exposed by this native backend. `kiseki target list` is the recommended first step before using target-window screenshots or background input, especially when a desktop environment exposes both a window-manager frame and a client window. Linux true background desktop support uses `Xvfb` to create an isolated X11 `DISPLAY`; commands launched there can be clicked, typed into, and captured without using the physical desktop session. Optional `background cua` uses the native Linux Cua Driver; its actual session/compositor readiness is reported by the provider.
+Linux support is split by session type. X11/XTest provides current-session input, target-window helpers, selected-window capture, and Xvfb isolated background desktops. Wayland current-session desktop screenshots use XDG Desktop Portal when Kiseki is built with `gio-2.0` and `gdk-pixbuf-2.0`; the compositor may still require permission or return a denial. Wayland global input is not exposed by this native backend. `kiseki target list` is the recommended first step before using target-window screenshots or background input. On X11 it lists application client windows (from `_NET_CLIENT_LIST` or `WM_STATE`, or mapped top-level windows when no window manager runs), not window-manager frames or widget subwindows; `target inspect` shows child windows. The PID comes from `_NET_WM_PID` or the X server's X-Resource client record; `pidSource` names the source and is `unknown`, with PID 0, when neither is available. Linux true background desktop support uses `Xvfb` to create an isolated X11 `DISPLAY`; commands launched there can be clicked, typed into, and captured without using the physical desktop session. `background desktop screenshot` reads only that display and fails when it does not answer. `background desktop status [--json]` reports the Kiseki-started display without changing it and exits 0 only while it is running; `start` and `stop` treat a recorded PID that is no longer Xvfb as a stale state file. Optional `background cua` uses the native Linux Cua Driver; its actual session/compositor readiness is reported by the provider.
 
-macOS has two deliberately separate paths. Native macOS commands use Apple desktop APIs in the active GUI session: target listing uses Window Services, `observe ui --provider ax` reads the same Accessibility API surface used by Accessibility Inspector, screenshots use ScreenCaptureKit with Screen Recording permission, and global keyboard/mouse input uses Quartz CGEvent with Accessibility permission. Use `kiseki permissions macos screen-recording --prompt --open-settings` and `kiseki permissions macos accessibility --prompt --open-settings` from the same GUI Terminal/app that will run Kiseki when macOS does not show a prompt automatically. CUA background app operation is exposed through the optional Cua Driver provider under `background cua`. It requires `cua-driver`, Accessibility permission, and Screen Recording permission. For drawing, use `input drag --file` when foreground control is acceptable, and use `background cua draw` when the target-routed CUA path is required. Professional drawing apps also need normal app state prepared first: select the intended tool, set a visible foreground color, then verify with before/after screenshots. Dense drawing paths belong on `input drag`; `background cua draw` expects sparse window-local control points and rejects overly dense paths unless `--max-segments` is raised intentionally. See [docs/roadmap.md](docs/roadmap.md).
+macOS has two deliberately separate paths. Native macOS commands use Apple desktop APIs in the active GUI session: target listing uses Window Services, `observe ui --provider ax` reads the same Accessibility API surface used by Accessibility Inspector, screenshots use ScreenCaptureKit with Screen Recording permission, and global keyboard/mouse input uses Quartz CGEvent with Accessibility permission. Use `kiseki permissions macos screen-recording --prompt --open-settings` and `kiseki permissions macos accessibility --prompt --open-settings` from the same GUI Terminal/app that will run Kiseki when macOS does not show a prompt automatically. These checks exit 2 when the permission is not granted; `--json` reports `granted`, `prompted`, and `settingsOpened`. CUA background app operation is exposed through the optional Cua Driver provider under `background cua`. It requires `cua-driver`, Accessibility permission, and Screen Recording permission. For drawing, use `input drag --file` when foreground control is acceptable, and use `background cua draw` when the target-routed CUA path is required. Professional drawing apps also need normal app state prepared first: select the intended tool, set a visible foreground color, then verify with before/after screenshots. Dense drawing paths belong on `input drag`; `background cua draw` expects sparse window-local control points and rejects overly dense paths unless `--max-segments` is raised intentionally. See [docs/roadmap.md](docs/roadmap.md).
 
 ## Roadmap
 

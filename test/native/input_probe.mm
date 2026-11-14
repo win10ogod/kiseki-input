@@ -178,6 +178,35 @@ static void capture_and_click(const std::string &window_id) {
     report << result.dump(2);
     wait(200);
 }
+// macOS 14 replaced forced activation with cooperative activation; keep the
+// pre-14 call for older systems without a deprecation warning on new SDKs.
+static void activate_probe_app() {
+#if defined(__MAC_14_0)
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+        return;
+    }
+#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
+}
+
+static void restore_previous_app(NSRunningApplication *previous) {
+#if defined(__MAC_14_0)
+    if (@available(macOS 14.0, *)) {
+        [NSApp yieldActivationToApplication:previous];
+        [previous activateWithOptions:0];
+        return;
+    }
+#endif
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    [previous activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+#pragma clang diagnostic pop
+}
+
 int main(int argc, char **argv) {
     output = argc > 1 ? argv[1] : "native-probe";
     const bool skip_capture = argc > 2 && std::string{argv[2]} == "--skip-capture";
@@ -204,7 +233,7 @@ int main(int argc, char **argv) {
         ProbeView *view = [[ProbeView alloc] initWithFrame:NSMakeRect(0, 0, 720, 460)];
         window.contentView = view;
         [window makeKeyAndOrderFront:nil];
-        [NSApp activateIgnoringOtherApps:YES];
+        activate_probe_app();
         [window makeFirstResponder:view];
         const CGFloat height = CGDisplayBounds(CGMainDisplayID()).size.height;
         const NSPoint screen = [window convertPointToScreen:NSMakePoint(160, 300)];
@@ -223,7 +252,7 @@ int main(int argc, char **argv) {
             }
             CGWarpMouseCursorPosition(previous_cursor);
             dispatch_async(dispatch_get_main_queue(), ^{
-              [previous activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+              restore_previous_app(previous);
               [window orderOut:nil];
               [NSApp stop:nil];
               [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined

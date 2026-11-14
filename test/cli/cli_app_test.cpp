@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -14,6 +15,10 @@
 
 #include "cli/app.hpp"
 #include "platform/input/sequence_support.hpp"
+
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 TEST_CASE("CUA lifecycle and raw native commands preserve their CLI arguments") {
     std::ostringstream out, err;
@@ -2121,4 +2126,141 @@ TEST_CASE("macro rejects unknown fields invalid values and malformed path timing
         write_text(path, R"({"steps":[{"type":"drag","file":")" + points.generic_string() + R"("}]})");
         REQUIRE(run_cli({"macro", "validate", "--file", path.string()}, temp.file("config.json")).code == 2);
     }
+}
+
+TEST_CASE("version flag keeps the semantic version first and adds build provenance") {
+    const TempConfigDirectory temp;
+    const auto text = run_cli({"--version"}, temp.file("config.json"));
+    REQUIRE(text.code == 0);
+    REQUIRE(text.out.rfind(std::string{KISEKI_TEST_VERSION} + " (commit ", 0) == 0);
+
+    for (const auto& arguments : {std::vector<std::string>{"--version", "--json"}, std::vector<std::string>{"--json", "--version"}}) {
+        const auto result = run_cli(arguments, temp.file("config.json"));
+        REQUIRE(result.code == 0);
+        const auto json = nlohmann::json::parse(result.out);
+        REQUIRE(json.at("version") == KISEKI_TEST_VERSION);
+        REQUIRE_FALSE(json.at("commit").get<std::string>().empty());
+        REQUIRE(json.at("text").get<std::string>() + "\n" == text.out);
+    }
+}
+
+TEST_CASE("modes json reports static availability for the current platform") {
+    const TempConfigDirectory temp;
+    const auto result = run_cli({"modes", "--json"}, temp.file("config.json"));
+    REQUIRE(result.code == 0);
+    const auto json = nlohmann::json::parse(result.out);
+    const auto platform = json.at("currentPlatform").get<std::string>();
+    REQUIRE((platform == "windows" || platform == "macos" || platform == "linux"));
+    for (const auto& mode : json.at("modeMatrix")) {
+        const auto platforms = mode.at("platforms");
+        const bool listed = std::find(platforms.begin(), platforms.end(), platform) != platforms.end();
+        REQUIRE(mode.at("availableOnCurrentPlatform").get<bool>() == listed);
+        if (mode.at("id") == "linux-isolated-display") {
+            REQUIRE(listed == (platform == "linux"));
+        }
+    }
+    const auto text = run_cli({"modes"}, temp.file("config.json"));
+    REQUIRE(text.out.find("Platform support on " + platform) != std::string::npos);
+}
+
+TEST_CASE("background desktop status and screenshot route display, state directory, and json") {
+    const TempConfigDirectory temp;
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    int calls = 0;
+    dependencies.background_desktop_status = [&](const kiseki::cli::BackgroundDesktopStatusOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":42");
+        REQUIRE(options.state_directory == temp.file("state"));
+        REQUIRE(options.json);
+        ++calls;
+        return 0;
+    };
+    dependencies.background_desktop_screenshot = [&](const kiseki::cli::BackgroundDesktopScreenshotOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.display == ":42");
+        REQUIRE(options.output_path == temp.file("shot.png"));
+        REQUIRE(options.json);
+        ++calls;
+        return 0;
+    };
+    REQUIRE(kiseki::cli::run({"background", "desktop", "status", "--display", ":42", "--state-dir", temp.file("state").string(), "--json"},
+                             temp.file("config.json"), {out, err}, dependencies) == 0);
+    REQUIRE(kiseki::cli::run({"background", "desktop", "screenshot", "--display", ":42", "--output", temp.file("shot.png").string(), "--json"},
+                             temp.file("config.json"), {out, err}, dependencies) == 0);
+    REQUIRE(calls == 2);
+}
+
+TEST_CASE("background desktop status and screenshot never fall back to another display") {
+    const TempConfigDirectory temp;
+    const auto state = temp.file("state");
+    const auto status = run_cli({"background", "desktop", "status", "--display", ":987", "--state-dir", state.string(), "--json"},
+                                temp.file("config.json"));
+    REQUIRE(status.code == 2);
+    const auto json = nlohmann::json::parse(status.out);
+    REQUIRE(json.at("running") == false);
+    const auto state_name = json.at("state").get<std::string>();
+    REQUIRE((state_name == "unsupported" || state_name == "not-running"));
+
+    const auto output = temp.file("background.png");
+    const auto shot = run_cli({"background", "desktop", "screenshot", "--display", ":987", "--output", output.string()},
+                              temp.file("config.json"));
+    REQUIRE(shot.code == 2);
+    REQUIRE_FALSE(std::filesystem::exists(output));
+    if (state_name == "not-running") {
+        // The failing display is named; no current-session or portal capture is attempted.
+        REQUIRE(shot.err.find(":987") != std::string::npos);
+        REQUIRE(shot.err.find("not reachable") != std::string::npos);
+        REQUIRE(shot.err.find("portal") == std::string::npos);
+    }
+}
+
+#ifdef __linux__
+TEST_CASE("background desktop treats a pid file naming a non-Xvfb process as stale") {
+    const TempConfigDirectory temp;
+    const auto state = temp.file("state");
+    const auto probe = run_cli({"background", "desktop", "status", "--display", ":987", "--state-dir", state.string(), "--json"},
+                               temp.file("config.json"));
+    if (nlohmann::json::parse(probe.out).at("state") == "unsupported") {
+        SKIP("background desktop support was not compiled in");
+    }
+    std::filesystem::create_directories(state);
+    // This test process is alive but is not Xvfb; stop must not signal it.
+    write_text(state / "xvfb_987.pid", std::to_string(static_cast<long long>(::getpid())) + "\n");
+
+    const auto status = run_cli({"background", "desktop", "status", "--display", ":987", "--state-dir", state.string(), "--json"},
+                                temp.file("config.json"));
+    REQUIRE(status.code == 2);
+    const auto json = nlohmann::json::parse(status.out);
+    REQUIRE(json.at("state") == "stale-pid-file");
+    REQUIRE(json.at("processAlive") == true);
+
+    const auto stop = run_cli({"background", "desktop", "stop", "--display", ":987", "--state-dir", state.string()},
+                              temp.file("config.json"));
+    REQUIRE(stop.code == 0);
+    REQUIRE(stop.out.find("removed stale pid file") != std::string::npos);
+    REQUIRE_FALSE(std::filesystem::exists(state / "xvfb_987.pid"));
+}
+#endif
+
+TEST_CASE("macOS permission checks are machine-readable and fail when not granted") {
+    const TempConfigDirectory temp;
+    std::ostringstream out, err;
+    kiseki::cli::Dependencies dependencies;
+    bool called = false;
+    dependencies.macos_accessibility_permission = [&](const kiseki::cli::MacPermissionOptions& options, kiseki::cli::Io) {
+        REQUIRE(options.json);
+        REQUIRE_FALSE(options.prompt);
+        called = true;
+        return 2;
+    };
+    REQUIRE(kiseki::cli::run({"permissions", "macos", "accessibility", "--json"}, temp.file("config.json"), {out, err}, dependencies) == 2);
+    REQUIRE(called);
+
+    const auto result = run_cli({"permissions", "macos", "screen-recording", "--json"}, temp.file("config.json"));
+    const auto json = nlohmann::json::parse(result.out);
+    REQUIRE(json.at("permission") == "screen-recording");
+    REQUIRE(result.code == (json.at("supported").get<bool>() && json.at("granted").get<bool>() ? 0 : 2));
+#ifndef __APPLE__
+    REQUIRE(json.at("supported") == false);
+    REQUIRE(result.code == 2);
+#endif
 }

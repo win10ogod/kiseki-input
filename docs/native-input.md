@@ -72,22 +72,31 @@ Windows selected-window mouse sequences retain the down event's child receiver a
 
 Within a sequence, a selected-window down binds its resolved window and receiver for subsequent mouse steps using the same selector and for cleanup. Windows title changes, another matching title, or hiding the window do not redirect its up. A destroyed recipient or changed owning process produces a cleanup error. An explicit up releases the binding once its acquired buttons are all up; a later down resolves the selector again. C++ callers can share `BackgroundMouseOptions::binding` across split actions for the same behavior.
 
-## macOS screenshot coordinates
+## Screenshot files and coordinates
 
 ```bash
-kiseki screenshot window --target-window-id <id> --output window.bmp --json
-kiseki screenshot desktop --output desktop.bmp --json
-kiseki background window screenshot --target-window-id <id> --output window.bmp --json
+kiseki screenshot window --target-window-id <id> --output window.png --json
+kiseki screenshot desktop --output desktop.png --json
+kiseki background window screenshot --target-window-id <id> --output window.png --json
+kiseki background desktop screenshot --display :99 --output display.png --json
 ```
 
-The default text output remains available. JSON includes pixel dimensions and optional `coordinates`. macOS images retain native resolution and use top-left image origin. `coordinates.space` is `macos-global-points`; the origin and bounds cover the desktop or full window, including the title bar and excluding its shadow. Convert a pixel target using:
+The output extension selects the file format: `.png` writes an opaque 8-bit RGB PNG (Windows Imaging Component, macOS ImageIO, Linux gdk-pixbuf when the portal slice is built; other X11 builds write an uncompressed PNG), and `.bmp` or no extension writes a 32-bit BMP. Other extensions fail before capture. `screenshot burst`, `window-burst`, and teaching keyframes write BMP frames.
+
+The default text output remains available. JSON includes `format`, pixel dimensions, and optional `coordinates`. Images use a top-left origin. Convert a pixel target into the coordinate space named by `coordinates.space` using:
 
 ```text
 screenX = originX + pixelX / pixelsPerUnitX
 screenY = originY + pixelY / pixelsPerUnitY
 ```
 
-Do not treat the full-window image as a client-only capture. A 720×492-point Retina window can produce a 1440×984-pixel image with both scales equal to 2. Providers that do not supply a verified transform return `coordinates: null`. Teaching frames preserve available transforms, screen-space `mouse`, image-space `mousePixels`, and corrected `mouseNorm` values.
+| Platform | `space` | Image bounds |
+| --- | --- | --- |
+| macOS | `macos-global-points` | Native resolution. The desktop, or the full window including the title bar and excluding its shadow. |
+| Windows | `windows-virtual-screen` (coordinates accepted by `input mouse --absolute`) | Window captures cover the visible frame (`boundsSource: dwm-extended-frame-bounds`), without the invisible resize borders included in `GetWindowRect`. `clientArea` gives the client rectangle in image pixels. Scales are 1 unless the process is DPI-virtualized. |
+| X11 | `x11-root-pixels` of the captured display | Desktop captures start at 0,0. Window captures cover the client window at its root position. |
+
+Do not treat a full-window image as a client-only capture. A 720×492-point Retina window can produce a 1440×984-pixel image with both scales equal to 2. On Windows, subtracting `clientArea.x`/`y` from an image pixel gives the client-area offset used by `background window` input when both scales are 1. Providers that do not supply a verified transform return `coordinates: null`. Teaching frames preserve available transforms, screen-space `mouse`, image-space `mousePixels`, and corrected `mouseNorm` values.
 
 ## Teaching events and verification
 

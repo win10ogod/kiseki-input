@@ -177,6 +177,13 @@ struct BackgroundDesktopLaunchOptions {
 struct BackgroundDesktopScreenshotOptions {
     std::string display;
     std::filesystem::path output_path;
+    bool json = false;
+};
+
+struct BackgroundDesktopStatusOptions {
+    std::string display;
+    std::filesystem::path state_directory;
+    bool json = false;
 };
 
 struct BackgroundDesktopTextOptions {
@@ -357,6 +364,7 @@ struct MacBackgroundFeedbackPresetOptions {
 struct MacPermissionOptions {
     bool prompt;
     bool open_settings;
+    bool json = false;
 };
 
 struct DaemonOptions {
@@ -434,6 +442,7 @@ struct Dependencies {
     std::function<int(const BackgroundDesktopTextOptions&, Io)> background_desktop_text;
     std::function<int(const BackgroundDesktopKeyOptions&, Io)> background_desktop_key;
     std::function<int(const BackgroundDesktopMouseOptions&, Io)> background_desktop_mouse;
+    std::function<int(const BackgroundDesktopStatusOptions&, Io)> background_desktop_status;
     std::function<int(const CuaControlOptions&, Io)> cua_control;
     std::function<int(const MacBackgroundStatusOptions&, Io)> mac_background_status;
     std::function<int(const MacBackgroundLaunchOptions&, Io)> mac_background_launch;

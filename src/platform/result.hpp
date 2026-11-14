@@ -13,6 +13,13 @@ struct OperationResult {
     std::string error;
 };
 
+struct CapturePixelRect {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
 struct CaptureCoordinates {
     std::string space; // Screen coordinates accepted by native absolute input.
     double origin_x = 0;
@@ -22,6 +29,11 @@ struct CaptureCoordinates {
     double pixels_per_unit_x = 1;
     double pixels_per_unit_y = 1;
     std::optional<std::string> window_id;
+    // Which rectangle the image covers when a platform distinguishes several,
+    // e.g. "dwm-extended-frame-bounds" (Windows visible frame without invisible resize borders).
+    std::string bounds_source;
+    // The window's client area inside the image, in image pixels, when reported.
+    std::optional<CapturePixelRect> client_area;
 };
 
 struct CaptureResult {

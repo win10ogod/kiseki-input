@@ -14,7 +14,7 @@
 #include <glib.h>
 #include <unistd.h>
 
-#include "platform/capture/bitmap_writer.hpp"
+#include "platform/capture/image_writer.hpp"
 
 namespace kiseki::platform::capture {
 
@@ -130,7 +130,7 @@ bool portal_name_has_owner(GDBusConnection* connection) {
     return has_owner == TRUE;
 }
 
-CaptureResult write_pixbuf_as_bmp(const std::filesystem::path& output_path, GdkPixbuf* pixbuf) {
+CaptureResult write_pixbuf_image(const std::filesystem::path& output_path, GdkPixbuf* pixbuf) {
     const int width = gdk_pixbuf_get_width(pixbuf);
     const int height = gdk_pixbuf_get_height(pixbuf);
     const int channels = gdk_pixbuf_get_n_channels(pixbuf);
@@ -153,7 +153,7 @@ CaptureResult write_pixbuf_as_bmp(const std::filesystem::path& output_path, GdkP
         }
     }
 
-    return write_bgra_bmp(output_path, width, height, pixels);
+    return write_bgra_image(output_path, width, height, pixels);
 }
 
 } // namespace
@@ -269,7 +269,7 @@ CaptureResult capture_desktop_bmp_wayland_portal(const std::filesystem::path& ou
         return fail_capture(output_path, "failed to decode Wayland portal screenshot image: " + take_glib_error(error));
     }
 
-    const auto capture = write_pixbuf_as_bmp(output_path, pixbuf);
+    const auto capture = write_pixbuf_image(output_path, pixbuf);
     g_object_unref(pixbuf);
     return capture;
 }
