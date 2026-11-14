@@ -1,5 +1,13 @@
 # Native input repair verification
 
+## Driver-level input backend delivery
+
+The Windows `driver` (IbInputSimulator) backend was reworked so it cannot report success it did not deliver, and checked on 2026-11-14 on a Windows host whose only supported driver is Razer (RzCommon/RzDev_0306 loaded, Razer Synapse service stopped, no Razer hardware attached; a leftover Logitech G HUB bus device also opens). The build passed 126 CTest cases, including a portable `driver_model` suite (type/argument resolution precedence, per-vendor wheel and key limits, absolute-axis fitting) and the Windows boundary check that diagnostics never report verification without the self-test.
+
+On this host `kiseki capabilities`/`doctor` open a driver device for reporting but run no self-test, so they state `unverified` without moving the pointer. `kiseki input mouse --backend driver` ran the one-time self-test (drive to an exact target pixel, confirm arrival and a non-injected low-level event), which no opened driver passed — `any` fell through Logitech G HUB new, legacy Logitech, and Razer, each opening its device but moving the pointer zero pixels. The command failed with exit 2 and a precise message; `--backend auto` reported `backend: system` and used the system path; `--driver-type turbo` and an invalid `--driver-arg` were rejected before any input. The self-test restored the cursor exactly when it had displaced it and left it untouched when the driver delivered nothing.
+
+The opt-in probe gained a `--backend driver` mode and `--help`/unknown-flag guards (it no longer treats `--help` as an output directory). The driver probe recorded `driver-status.json` as undelivered and sent no further input; `verify_events.py --driver` reported it honestly as not delivered on this host. Delivering Logitech, DD, and MouClassInputInjection paths, and a host with attached Razer hardware, were not reachable here and remain unverified on real devices.
+
 ## Follow-up: pending input state and stable recipients
 
 The five issues reviewed against `e431c0c` were repaired and checked on 2026-09-06, after that change was merged. The Windows, macOS, and native Linux builds passed 97, 97, and 96 CTest cases respectively. The new macOS boundary executable compiles the actual input implementation against delayed system-state reads without posting desktop events; it covers stale key/button state, accumulated movement, external pointer reconciliation, borrowed Ctrl, and partial chord failure. Windows boundary checks now include both overlapping Enter directions and noncoalesced moves. CLI tests cover bound recipients through movement, failure cleanup, explicit up, and later reacquisition.

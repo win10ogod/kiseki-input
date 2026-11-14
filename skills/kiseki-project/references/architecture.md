@@ -57,7 +57,9 @@ Keep platform-specific code inside `#ifdef _WIN32` or `#ifdef KISEKI_HAS_X11` bl
 Windows:
 
 - Link new Win32 dependencies in `CMakeLists.txt`.
-- Keep IbInputSimulator optional and runtime-loaded.
+- Keep IbInputSimulator optional and runtime-loaded, routed through `IbSendInput` (full `INPUT` arrays) so the driver and system paths share event construction.
+- The `driver` backend must prove delivery before reporting success: a one-time per-process self-test (low-level mouse hook plus exact-pixel arrival) and closed-loop absolute positioning. `auto` uses the driver only when verified and otherwise states its fallback to `system`; explicit `driver` fails with a precise error. Where a driver type cannot represent an event faithfully, fail explicitly instead of sending a wrong one.
+- Driver type/argument resolve through flag (`--driver-type`/`--driver-arg`), then `KISEKI_DRIVER`/`KISEKI_DRIVER_ARG`, then config (`input.windowsDriver`/`input.windowsDriverArgument`); keep that logic in `src/platform/input/driver_model.*` and report the selected type and verification state in `capabilities`/`doctor`.
 - Preserve `SendInput` fallback when possible.
 - Do not assume elevated privileges or foreground focus unless the command explicitly requires it.
 

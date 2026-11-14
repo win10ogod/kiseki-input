@@ -59,6 +59,7 @@ set_target_properties(kiseki_core PROPERTIES CXX_EXTENSIONS OFF)
 add_library(kiseki_platform STATIC
     src/platform/capture/bitmap_writer.cpp
     src/platform/capture/screenshot.cpp
+    src/platform/input/driver_model.cpp
     src/platform/input/input.cpp
     src/platform/input/sequence_support.cpp
     src/platform/notification/notification.cpp
@@ -227,6 +228,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/webui/config_api_test.cpp
         test/webui/static_assets_test.cpp
         test/smoke_test.cpp
+        test/platform/driver_model_test.cpp
         test/platform/input_sequence_test.cpp
         test/platform/cua_test.cpp
     )
@@ -274,6 +276,7 @@ endif()
 if(WIN32 AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
     add_executable(kiseki_windows_input_fault_test
         test/platform/windows_input_fault_test.cpp
+        src/platform/input/driver_model.cpp
         src/platform/input/sequence_support.cpp
         src/platform/target/target.cpp)
     target_compile_features(kiseki_windows_input_fault_test PRIVATE cxx_std_20)
@@ -285,6 +288,7 @@ endif()
 if(APPLE AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
     add_executable(kiseki_macos_input_fault_test
         test/platform/macos_input_fault_test.cpp
+        src/platform/input/driver_model.cpp
         src/platform/input/sequence_support.cpp
         src/platform/input/mac_input.mm
         src/platform/target/target.cpp)

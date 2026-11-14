@@ -17,9 +17,19 @@ kiseki input sequence --file sequence.json
 
 `key --action` accepts `tap` (default), `down`, or `up`. `--hold-ms` applies to a tap or chord. Separate down/up commands leave input held between invocations; use a sequence when the operation needs automatic cleanup across steps.
 
+## Backend selection
+
+`--backend` accepts `auto` (default), `system`, or `driver`. `system` is the OS input path (`SendInput` on Windows, Quartz CGEvent on macOS, XTest on X11). `driver` is the Windows-only IbInputSimulator kernel-driver path. `auto` uses the driver only after its delivery is verified in the current process, and otherwise falls back to `system`; the command output then states the backend it used and why.
+
+A Windows driver cannot report success it did not deliver. On first driver use Kiseki runs a one-time self-test: it drives the pointer to an exact target pixel through a low-level mouse hook (driver events arrive without `LLMHF_INJECTED`; `SendInput` sets it) and requires `GetCursorPos` to reach that pixel. A driver whose device opens but injects nothing (for example the Razer device with no Razer hardware attached, or a leftover Logitech bus device) fails this test. Absolute driver moves are then closed-loop: each move reads `GetCursorPos` and corrects with bounded relative deltas until the exact target is reached, or fails with the stopping position. Explicit `--backend driver` fails with a precise error when delivery cannot be proven; `auto` silently uses `system` instead.
+
+Select the driver type with `--driver-type` (`any`, `logitech-ghub-new`, `logitech`, `razer`, `dd`, `mouclass`, or `sendinput`), the config field `input.windowsDriver`, or the `KISEKI_DRIVER` environment variable; precedence is flag, then environment, then config. `any` probes Logitech G HUB (new), legacy Logitech, Razer, DD, then MouClassInputInjection, and keeps the first that verifies delivery. `--driver-arg` (config `input.windowsDriverArgument`, env `KISEKI_DRIVER_ARG`) supplies the DD DLL path or the MouClassInputInjection target process id. `kiseki capabilities` reports the selected type and verification state under `input.driverBackend`, and `kiseki doctor` prints it on the `Input driver backend` line.
+
 Mouse buttons are `left`, `right`, `middle`, `x1`, and `x2`. Each also accepts `-down` and `-up`. `none` only moves or scrolls. A complete click accepts a positive `--click-count`, a nonnegative hold duration, and a gap after each up before the next down. macOS receives matching click states for both halves of each click; an explicit double click delivers states `1,1,2,2`.
 
-Wheel values preserve backend units. Windows uses 120 units per conventional detent and passes smaller deltas through. macOS uses pixel deltas. Positive vertical means up; positive horizontal means right. X11 core wheel input uses button detents: fractional 120-unit contributions accumulate in the sequence process until a detent is available. A standalone X11 invocation cannot preserve a fractional remainder after it exits. IbInputSimulator exposes vertical wheel input; horizontal wheel and distinct numpad Enter require the Windows `system` backend.
+Wheel values preserve backend units. Windows uses 120 units per conventional detent and passes smaller deltas through. macOS uses pixel deltas. Positive vertical means up; positive horizontal means right. X11 core wheel input uses button detents: fractional 120-unit contributions accumulate in the sequence process until a detent is available. A standalone X11 invocation cannot preserve a fractional remainder after it exits.
+
+The Windows `driver` backend routes mouse, wheel, X buttons, and keys through IbSendInput (full `INPUT` arrays), so capability depends on the driver type. Razer delivers horizontal wheel and X1/X2; Logitech and DD have no horizontal wheel and send whole 120-unit detents only; MouClassInputInjection injects mouse only, no wheel and no keyboard. Where a driver cannot represent a requested event faithfully it fails explicitly rather than sending a wrong one: on the `driver` backend, numpad Enter and the keys a vendor remaps (for example Razer's `rctrl`, `ralt`, `numpad-divide`) are refused with a message to use `--backend system`.
 
 Physical key names include letters, digits, navigation/editing keys (`delete`, `home`, `end`, `pageup`, `pagedown`), punctuation names (`minus`, `equal`, `leftbracket`, `rightbracket`, `semicolon`, `quote`, `backslash`, `comma`, `period`, `slash`, `grave`), left/right modifiers (`lshift`, `rshift`, `lctrl`, `rctrl`, `lalt`, `ralt`, `rwin`), and `numpad0`–`numpad9`, `numpad-enter`, `numpad-add`, `numpad-subtract`, `numpad-multiply`, `numpad-divide`, `numpad-decimal`. Function keys follow the platform mapping (Windows/X11 F1–F24; macOS F1–F20). Unsupported platform keys fail explicitly. `input text` continues to use the platform's text path; key commands do not substitute Unicode text for physical events.
 
@@ -95,7 +105,7 @@ Windows uses a dedicated low-level hook thread; macOS uses a passive session eve
 
 Native records include `timestampMs`, `timestampUs`, source timestamp/unit, keycode/scan, repeat information, button state, and wheel axes where exposed by the source. macOS button records include click count. The manifest names `eventSource` and `eventCaptureMode`. If a native event source cannot start, independent state polling remains available with an explicit warning that short taps, repeat, and wheel events can be missing. macOS event-tap permission is Input Monitoring for the recording process or its terminal host. A disabled macOS tap produces a gap warning and is re-enabled.
 
-The opt-in native probe opens its own window and moves the current pointer/focus, restoring them when it finishes. It is not part of unattended CTest:
+The opt-in native probe opens its own window and moves the current pointer/focus, restoring them when it finishes. It is not part of unattended CTest. The output directory is a required argument; `--help` prints usage and sends no input, and an unknown flag is rejected:
 
 ```bash
 cmake -S . -B build -DKISEKI_BUILD_NATIVE_INPUT_PROBE=ON
@@ -103,11 +113,16 @@ cmake --build build --config Debug
 # Windows:
 build/Debug/kiseki_native_input_probe.exe artifacts/live-test/native
 python test/native/verify_events.py windows artifacts/live-test/native
+# Windows driver backend (records delivery honestly; see Backend selection):
+build/Debug/kiseki_native_input_probe.exe artifacts/live-test/native-driver --backend driver
+python test/native/verify_events.py windows artifacts/live-test/native-driver --driver
 # macOS / X11:
 ./build/kiseki_native_input_probe artifacts/live-test/native
 python3 test/native/verify_events.py macos artifacts/live-test/native
 # Use "linux" for X11 verification. On macOS, run in an authorized GUI Terminal.
 ```
+
+The default `--backend system` run is unchanged. `--backend driver` exercises the Windows driver path: when the configured driver verifies delivery it checks that absolute moves land exactly and that buttons/keys are matched and released; when the driver does not deliver on the host it records `driver-status.json` and sends no further input, and the verifier reports it as undelivered rather than failing.
 
 When comparing with `teach record`, start the recorder before the probe, stop it afterward, and pass `--teaching <bundle>` to the verifier. On macOS, pass `--skip-capture` as the probe's second argument during that comparison to avoid two simultaneous ScreenCaptureKit capture clients. Run the probe separately without that flag for the four-corner screenshot/coordinate test. Validate finalized bundles with `skills/kiseki-teach-recording/scripts/validate_bundle.py`.
 

@@ -66,6 +66,7 @@ AppConfig default_config() {
         .input = InputConfig{
             .default_backend = "background-window",
             .windows_driver = "AnyDriver",
+            .windows_driver_argument = "",
             .linux_driver = "uinput",
             .background_input_enabled = true,
         },
@@ -98,6 +99,7 @@ nlohmann::json to_json(const AppConfig& config) {
         {"input", {
             {"defaultBackend", config.input.default_backend},
             {"windowsDriver", config.input.windows_driver},
+            {"windowsDriverArgument", config.input.windows_driver_argument},
             {"linuxDriver", config.input.linux_driver},
             {"backgroundInputEnabled", config.input.background_input_enabled},
         }},
@@ -136,6 +138,8 @@ AppConfig config_from_json(const nlohmann::json& json) {
     const auto input = json.value("input", nlohmann::json::object());
     config.input.default_backend = input.value("defaultBackend", config.input.default_backend);
     config.input.windows_driver = input.value("windowsDriver", config.input.windows_driver);
+    config.input.windows_driver_argument =
+        input.value("windowsDriverArgument", config.input.windows_driver_argument);
     config.input.linux_driver = input.value("linuxDriver", config.input.linux_driver);
     config.input.background_input_enabled = input.value("backgroundInputEnabled", config.input.background_input_enabled);
 

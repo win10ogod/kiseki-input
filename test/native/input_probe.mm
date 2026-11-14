@@ -179,8 +179,23 @@ static void capture_and_click(const std::string &window_id) {
     wait(200);
 }
 int main(int argc, char **argv) {
-    output = argc > 1 ? argv[1] : "native-probe";
-    const bool skip_capture = argc > 2 && std::string{argv[2]} == "--skip-capture";
+    const auto args = parse_probe_args(argc, argv);
+    if (args.help) {
+        print_probe_usage(std::cout, argv[0]);
+        return 0;
+    }
+    if (args.error) {
+        std::cerr << args.message << "\n\n";
+        print_probe_usage(std::cerr, argv[0]);
+        return 2;
+    }
+    if (args.backend == "driver") {
+        std::cerr << "the driver backend is Windows-only; macOS input uses the system backend\n";
+        return 2;
+    }
+    output = args.output;
+    backend = args.backend;
+    const bool skip_capture = args.skip_capture;
     std::filesystem::create_directories(output);
     received.open(output / "receiver-events.jsonl");
     @autoreleasepool {
