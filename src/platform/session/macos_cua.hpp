@@ -2,7 +2,9 @@
 
 #include <filesystem>
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -18,7 +20,18 @@ struct MacCuaLaunchOptions {
     bool creates_new_instance = false;
     std::vector<std::string> additional_arguments;
     std::string launch_path;
+    std::string aumid; // Windows packaged-app id (launch_app `aumid`)
+    std::string path;  // Windows executable path (launch_app `path`)
 };
+
+// Driver 0.39+ addresses an element only by element_token, whose value is `<snapshot_id>:<index>` (Driver 0.49.9 schema). An index is
+// therefore sent as the token of its own snapshot; an index without its snapshot, or an index that disagrees with an explicit token, is
+// rejected before dispatch (std::invalid_argument). Returns "" when no element was named.
+std::string cua_element_token(bool has_element_index, int element_index, const std::string& snapshot_id, const std::string& element_token);
+
+// Notes for stderr about a get_window_state answer that an agent must not miss: a truncated tree, and a screenshot whose pixel frame
+// is reduced relative to the window (the provider's max_image_dimension cap). Empty when there is nothing to say.
+std::string cua_observation_notes(const nlohmann::json& response);
 
 // The arguments for the provider's launch_app. Driver 0.38 accepts an absolute .app path in `name` on macOS (list_apps reports it as
 // `launch_path`), so a --launch-path that names a .app bundle goes there when MACOS_APP_PATHS is set and no --name was given; any other path
@@ -29,21 +42,34 @@ struct MacCuaWindowListOptions {
     int pid = 0;
     bool has_pid = false;
     bool on_screen_only = false;
+    std::string app;
 };
 
+// get_window_state controls (Driver 0.39+). Unset fields are omitted so the provider's defaults apply.
 struct MacCuaWindowStateOptions {
     int pid = 0;
     std::uint64_t window_id = 0;
     std::filesystem::path output_path;
     std::string query;
     std::string provider_json = "{}";
+    std::optional<int> max_elements;
+    std::optional<int> max_depth;
+    std::optional<int> timeout_ms;
+    std::optional<int> max_image_dimension;
+    std::string tree_format;
+    std::string since;
+    bool full_output = false;
+    bool no_tree = false;
+    bool verbose = false;
 };
 
 struct MacCuaScreenshotOptions {
     std::uint64_t window_id = 0;
+    int pid = 0; // optional; avoids an unfiltered list_windows lookup
     std::filesystem::path output_path;
-    std::string format = "png";
-    int quality = 95;
+    std::string format; // png or jpeg; empty follows the output extension (png otherwise)
+    std::optional<int> quality;
+    std::optional<int> max_image_dimension;
 };
 
 struct MacCuaClickOptions {
@@ -71,7 +97,7 @@ struct MacCuaTextOptions {
     bool has_element_index = false;
     std::string snapshot_id;
     std::string element_token;
-    int delay_ms = 30;
+    std::optional<int> delay_ms; // omitted unless requested: the provider's own pacing applies
     std::string provider_json = "{}";
 };
 
@@ -93,6 +119,10 @@ struct MacCuaHotkeyOptions {
     std::vector<std::string> keys;
     std::uint64_t window_id = 0;
     bool has_window_id = false;
+    int element_index = 0;
+    bool has_element_index = false;
+    std::string snapshot_id;
+    std::string element_token;
     std::string provider_json = "{}";
 };
 
@@ -120,6 +150,8 @@ struct MacCuaDrawOptions {
     int pid = 0;
     std::uint64_t window_id = 0;
     std::vector<MacCuaPoint> points;
+    // One duration per segment from the point file's time_ms offsets; empty uses duration_ms for every segment.
+    std::vector<int> segment_durations_ms;
     int duration_ms = 120;
     int steps = 6;
     int stroke_gap_ms = 0;
@@ -150,6 +182,11 @@ struct MacCuaFeedbackMotionOptions {
     double dwell_after_click_ms = 0.0;
     bool has_idle_hide_ms = false;
     double idle_hide_ms = 0.0;
+    std::string style;  // Driver 0.34+, e.g. signature_arc, spring_settle, magnetic, comet_swoop, adaptive, classic
+    std::string timing; // Driver 0.34+, e.g. native, fitts, fixed, relaxed, steady, calm, deliberate
+    bool has_turn_radius = false;
+    double turn_radius = 0.0;
+    std::vector<std::pair<std::string, std::string>> effects; // effect name -> on, off or default
 };
 
 struct MacCuaFeedbackStyleOptions {

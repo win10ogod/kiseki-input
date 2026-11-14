@@ -13,7 +13,7 @@ Use the selected executable with `<family> --help` and the concrete subcommand's
 | Selected-window messages/capture | `background window text`, `key`, `mouse`, `drag`, `screenshot` |
 | Linux isolated Xvfb display | `background desktop start`, `launch`, `text`, `key`, `mouse`, `screenshot`, `stop` |
 | Optional CUA provider | `background cua status`, `windows`, `state`; requested action via `launch`, `click`, `text`, `key`, `hotkey`, `drag`, `draw`, `screenshot` |
-| CUA overlay feedback | `background cua feedback status`, `enable`, `motion`, `style`, `preset` |
+| CUA overlay feedback | `background cua feedback status`, `enable`, `disable`, `motion`, `preset`; cursor looks via `theme` (`feedback style` only for Drivers before 0.25) |
 | Configuration | `config path`, `show`, `validate`; global `--config <path>` |
 | Configuration/local bundle viewing | `config-ui` |
 | Human demonstrations | `teach record`, `annotate`, `transcribe`; use [teaching skill](../../kiseki-teach-recording/SKILL.md) |

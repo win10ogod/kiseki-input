@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <functional>
 #include <iosfwd>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/input/input.hpp"
@@ -221,27 +223,42 @@ struct MacBackgroundLaunchOptions {
     bool new_instance;
     std::vector<std::string> arguments;
     std::string launch_path;
+    std::string aumid;
+    std::string path;
 };
 
 struct MacBackgroundWindowsOptions {
     int pid;
     bool has_pid;
     bool on_screen_only;
+    std::string app;
 };
 
+// get_window_state controls; unset optionals keep the provider's defaults.
 struct MacBackgroundStateOptions {
     int pid;
     std::uint64_t window_id;
     std::filesystem::path output_path;
     std::string query;
     std::string provider_json = "{}";
+    std::optional<int> max_elements;
+    std::optional<int> max_depth;
+    std::optional<int> timeout_ms;
+    std::optional<int> max_image_dimension;
+    std::string tree_format;
+    std::string since;
+    bool full_output = false;
+    bool no_tree = false;
+    bool verbose = false;
 };
 
 struct MacBackgroundScreenshotOptions {
     std::uint64_t window_id;
     std::filesystem::path output_path;
     std::string format;
-    int quality;
+    std::optional<int> quality;
+    int pid = 0;
+    std::optional<int> max_image_dimension;
 };
 
 struct MacBackgroundClickOptions {
@@ -270,7 +287,7 @@ struct MacBackgroundTextOptions {
     bool has_element_index;
     std::string snapshot_id;
     std::string element_token;
-    int delay_ms;
+    std::optional<int> delay_ms;
     std::string provider_json = "{}";
 };
 
@@ -293,6 +310,10 @@ struct MacBackgroundHotkeyOptions {
     std::uint64_t window_id;
     bool has_window_id;
     std::string provider_json = "{}";
+    int element_index = 0;
+    bool has_element_index = false;
+    std::string snapshot_id;
+    std::string element_token;
 };
 
 struct MacBackgroundDragOptions {
@@ -321,6 +342,7 @@ struct MacBackgroundDrawOptions {
     std::string button;
     std::vector<std::string> modifiers;
     std::string provider_json = "{}";
+    bool has_duration_ms = false;
 };
 
 struct MacBackgroundFeedbackStatusOptions {};
@@ -346,6 +368,11 @@ struct MacBackgroundFeedbackMotionOptions {
     double dwell_after_click_ms;
     bool has_idle_hide_ms;
     double idle_hide_ms;
+    std::string style;
+    std::string timing;
+    bool has_turn_radius = false;
+    double turn_radius = 0.0;
+    std::vector<std::pair<std::string, std::string>> effects;
 };
 
 struct MacBackgroundFeedbackStyleOptions {
