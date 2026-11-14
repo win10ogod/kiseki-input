@@ -178,13 +178,13 @@ static void capture_and_click(const std::string &window_id) {
     report << result.dump(2);
     wait(200);
 }
-// macOS 14 replaced forced activation with cooperative activation; keep the
-// pre-14 call for older systems without a deprecation warning on new SDKs.
+// macOS 14 cooperative activation ([NSApp activate]) cannot take the foreground
+// from the Terminal that launched the probe (verified on macOS 26.6), so the
+// forcing call still follows it; its deprecation warning is silenced locally.
 static void activate_probe_app() {
 #if defined(__MAC_14_0)
     if (@available(macOS 14.0, *)) {
         [NSApp activate];
-        return;
     }
 #endif
 #pragma clang diagnostic push
