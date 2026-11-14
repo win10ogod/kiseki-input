@@ -4,6 +4,8 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <utility>
 
 namespace kiseki::platform::input::driver {
 namespace {
@@ -107,6 +109,105 @@ std::string ib_error_name(int code) {
     if (code >= 0 && code < static_cast<int>(std::size(names)))
         return names[code];
     return "error " + std::to_string(code);
+}
+
+std::string delivery_name(Delivery delivery) {
+    switch (delivery) {
+    case Delivery::untested:
+        return "untested";
+    case Delivery::verified:
+        return "verified";
+    case Delivery::silent:
+        return "silent";
+    case Delivery::unfaithful:
+        return "unfaithful";
+    case Delivery::deferred:
+        return "deferred";
+    }
+    return "untested";
+}
+
+std::optional<Delivery> parse_delivery(std::string_view name) {
+    const auto value = lower(name);
+    if (value == "untested")
+        return Delivery::untested;
+    if (value == "verified")
+        return Delivery::verified;
+    if (value == "silent")
+        return Delivery::silent;
+    if (value == "unfaithful")
+        return Delivery::unfaithful;
+    if (value == "deferred")
+        return Delivery::deferred;
+    return std::nullopt;
+}
+
+bool usable(Delivery delivery) {
+    return delivery == Delivery::verified;
+}
+
+const std::vector<std::pair<int, int>> &standard_probes() {
+    // Small, bounded, duplicated single-axis commands. Magnitude 6 stays above a driver's
+    // sub-pixel scaling (so a faithful axis never rounds to zero) and far below any fling.
+    static const std::vector<std::pair<int, int>> probes{{6, 0}, {6, 0},  {-6, 0}, {-6, 0},
+                                                         {0, 6}, {0, 6},  {0, -6}, {0, -6}};
+    return probes;
+}
+
+ProbeVerdict classify_probes(const std::vector<ProbeSample> &samples, const ProbeLimits &limits) {
+    std::vector<ProbeSample> valid;
+    for (const auto &sample : samples)
+        if (sample.valid)
+            valid.push_back(sample);
+    if (static_cast<int>(valid.size()) < limits.min_valid)
+        return {Delivery::deferred,
+                "only " + std::to_string(valid.size()) + " valid probes (cursor near a screen edge or input held)"};
+
+    int delivered = 0;
+    for (const auto &s : valid) {
+        const bool x_axis = s.cmd_dx != 0;
+        const int cmd = x_axis ? s.cmd_dx : s.cmd_dy;
+        const int obs = x_axis ? s.obs_dx : s.obs_dy;
+        const int cross = x_axis ? s.obs_dy : s.obs_dx;
+        if (std::abs(obs) > limits.fling_bound || std::abs(cross) > limits.cross_bound)
+            return {Delivery::unfaithful, "driver flung the pointer or coupled axes: commanded (" +
+                                              std::to_string(s.cmd_dx) + "," + std::to_string(s.cmd_dy) +
+                                              ") observed (" + std::to_string(s.obs_dx) + "," +
+                                              std::to_string(s.obs_dy) + ")"};
+        if (obs != 0 && (obs > 0) != (cmd > 0))
+            return {Delivery::unfaithful, "driver moved the pointer opposite to the command"};
+        if (obs != 0)
+            ++delivered;
+    }
+    if (delivered == 0)
+        return {Delivery::silent, "driver opened but moved the pointer zero pixels"};
+
+    // Every commanded direction that had valid probes must have actually moved; a dead
+    // direction cannot be positioned and is treated as unfaithful.
+    std::map<std::pair<int, int>, std::pair<int, int>> ranges; // command -> {min|obs|, max|obs|}
+    for (const auto &s : valid) {
+        const bool x_axis = s.cmd_dx != 0;
+        const int obs = std::abs(x_axis ? s.obs_dx : s.obs_dy);
+        const std::pair<int, int> key{s.cmd_dx, s.cmd_dy};
+        auto it = ranges.find(key);
+        if (it == ranges.end())
+            ranges[key] = {obs, obs};
+        else {
+            it->second.first = std::min(it->second.first, obs);
+            it->second.second = std::max(it->second.second, obs);
+        }
+    }
+    for (const auto &[command, range] : ranges) {
+        if (range.second == 0)
+            return {Delivery::unfaithful, "driver cannot move for command (" + std::to_string(command.first) + "," +
+                                              std::to_string(command.second) + ")"};
+        if (range.second - range.first > limits.repeat_tolerance)
+            return {Delivery::unfaithful, "driver movement was not repeatable for command (" +
+                                              std::to_string(command.first) + "," + std::to_string(command.second) +
+                                              "): " + std::to_string(range.first) + ".." + std::to_string(range.second)};
+    }
+    return {Delivery::verified, "driver delivered bounded, direction-correct, repeatable motion on " +
+                                    std::to_string(delivered) + " probes"};
 }
 
 const std::vector<Type> &probe_order() {

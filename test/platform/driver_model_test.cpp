@@ -1,8 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "platform/input/driver_model.hpp"
@@ -158,6 +160,86 @@ TEST_CASE("axis fit detects an identity mapping and a scaled mapping") {
 
     const auto nonlinear = fit_axis({{0, 0}, {10000, 2000}, {20000, 15000}, {30000, 9000}}, 4.0);
     REQUIRE_FALSE(nonlinear.has_value());
+}
+
+namespace {
+// Models a vendor's response to a relative command. Returns observed (dx, dy). Used to build
+// probe samples the way the live self-test would, so the classifier is proven against good,
+// silent, scaled, dead-axis, erratic, and fling behaviours without any live input.
+std::vector<ProbeSample> probe_with(const std::function<std::pair<int, int>(int, int)> &vendor) {
+    std::vector<ProbeSample> samples;
+    for (const auto &[cdx, cdy] : standard_probes()) {
+        const auto [odx, ody] = vendor(cdx, cdy);
+        samples.push_back({cdx, cdy, odx, ody, true});
+    }
+    return samples;
+}
+int round_half(double v) { return static_cast<int>(v < 0 ? v - 0.5 : v + 0.5); }
+}
+
+TEST_CASE("classify_probes accepts a faithful driver") {
+    const auto good = probe_with([](int dx, int dy) { return std::pair{dx, dy}; });
+    REQUIRE(classify_probes(good).result == Delivery::verified);
+}
+
+TEST_CASE("classify_probes accepts a scaled driver (Razer-like y/1.2 plus mild acceleration)") {
+    // x roughly 1:1, y scaled by ~0.83 and rounded; always nonzero for a 6px command.
+    const auto scaled = probe_with([](int dx, int dy) {
+        return std::pair{dx, round_half(dy / 1.2)};
+    });
+    REQUIRE(classify_probes(scaled).result == Delivery::verified);
+}
+
+TEST_CASE("classify_probes rejects a silent driver") {
+    const auto silent = probe_with([](int, int) { return std::pair{0, 0}; });
+    REQUIRE(classify_probes(silent).result == Delivery::silent);
+}
+
+TEST_CASE("classify_probes rejects an unfaithful driver that flings (absolute-as-relative)") {
+    // A driver that amplifies a small relative command into a huge jump.
+    const auto fling = probe_with([](int dx, int dy) { return std::pair{dx * 20, dy * 20}; });
+    REQUIRE(classify_probes(fling).result == Delivery::unfaithful);
+}
+
+TEST_CASE("classify_probes rejects reversed direction and axis coupling") {
+    const auto reversed = probe_with([](int dx, int dy) { return std::pair{-dx, -dy}; });
+    REQUIRE(classify_probes(reversed).result == Delivery::unfaithful);
+
+    const auto coupled = probe_with([](int dx, int dy) { return std::pair{dx ? dx : 9, dy ? dy : 9}; });
+    REQUIRE(classify_probes(coupled).result == Delivery::unfaithful);
+}
+
+TEST_CASE("classify_probes rejects a dead axis") {
+    // x works, y never moves: cannot be positioned vertically.
+    const auto dead_y = probe_with([](int dx, int dy) { return std::pair{dx, 0}; });
+    REQUIRE(classify_probes(dead_y).result == Delivery::unfaithful);
+}
+
+TEST_CASE("classify_probes rejects non-repeatable motion") {
+    int calls = 0;
+    std::vector<ProbeSample> samples;
+    for (const auto &[cdx, cdy] : standard_probes()) {
+        // The second +x probe jumps far more than the first.
+        const int scale = (cdx > 0 && ++calls == 2) ? 5 : 1;
+        samples.push_back({cdx, cdy, cdx * scale, cdy, true});
+    }
+    REQUIRE(classify_probes(samples).result == Delivery::unfaithful);
+}
+
+TEST_CASE("classify_probes defers when too few probes are valid (edges/held input)") {
+    auto samples = probe_with([](int dx, int dy) { return std::pair{dx, dy}; });
+    for (std::size_t i = 2; i < samples.size(); ++i)
+        samples[i].valid = false; // only two usable probes remain
+    REQUIRE(classify_probes(samples).result == Delivery::deferred);
+}
+
+TEST_CASE("delivery names round-trip") {
+    for (auto d : {Delivery::untested, Delivery::verified, Delivery::silent, Delivery::unfaithful, Delivery::deferred})
+        REQUIRE(parse_delivery(delivery_name(d)) == d);
+    REQUIRE(usable(Delivery::verified));
+    REQUIRE_FALSE(usable(Delivery::silent));
+    REQUIRE_FALSE(usable(Delivery::unfaithful));
+    REQUIRE_FALSE(usable(Delivery::deferred));
 }
 
 TEST_CASE("normalize_coordinate matches the virtual-desktop 0..65535 mapping") {

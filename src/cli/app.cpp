@@ -1945,6 +1945,9 @@ int run(
         "Windows driver-level backend type: " + kiseki::platform::input::driver::type_choices());
     auto *driver_arg_option =
         app.add_option("--driver-arg", driver_arg_flag, "DD DLL path or MouClassInputInjection process id");
+    bool driver_reverify_flag = false;
+    app.add_flag("--driver-reverify", driver_reverify_flag,
+                 "Re-run the driver delivery self-test and refresh the cached result");
     // Resolve driver settings from flags > KISEKI_DRIVER[_ARG] env > config, then hand the
     // result to the input layer. Called before any command that selects an input backend.
     // Records a resolution error (bad type name or argument) in driver_settings_error.
@@ -1969,7 +1972,13 @@ int run(
             layers.config_type = loaded.config.input.windows_driver;
             layers.config_argument = loaded.config.input.windows_driver_argument;
         }
-        const auto settings = driver::resolve_settings(layers);
+        auto settings = driver::resolve_settings(layers);
+        settings.reverify = driver_reverify_flag;
+        // Persist the delivery verdict next to the config so the moving self-test runs once
+        // per driver type / DLL / logon session instead of on every (single-shot) invocation.
+        const auto directory = active_config_path().parent_path();
+        const auto cache_file = (directory.empty() ? std::filesystem::path{"."} : directory) / "driver-verify.txt";
+        settings.cache_path = cache_file.string();
         driver_settings_error = settings.error;
         kiseki::platform::input::set_driver_settings(settings);
     };

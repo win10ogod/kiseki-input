@@ -135,12 +135,24 @@ target_link_libraries(kiseki PRIVATE kiseki_cli)
 set_target_properties(kiseki PROPERTIES CXX_EXTENSIONS OFF)
 
 if(WIN32 AND KISEKI_BUILD_IBINPUTSIMULATOR)
+    # The IbInputSimulator source and vcpkg tree live next to the main checkout. A git
+    # worktree lives under <main>/.claude/worktrees/<name>, so resolve those defaults against
+    # the main checkout, not the worktree, by collapsing that suffix when present. The main
+    # checkout has no such suffix, so its defaults are unchanged.
+    set(KISEKI_PROJECT_ROOT "${CMAKE_SOURCE_DIR}")
+    get_filename_component(KISEKI_WORKTREE_PARENT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
+    get_filename_component(KISEKI_WORKTREE_GRANDPARENT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
+    get_filename_component(KISEKI_WORKTREE_PARENT_NAME "${KISEKI_WORKTREE_PARENT}" NAME)
+    get_filename_component(KISEKI_WORKTREE_GRANDPARENT_NAME "${KISEKI_WORKTREE_GRANDPARENT}" NAME)
+    if(KISEKI_WORKTREE_PARENT_NAME STREQUAL "worktrees" AND KISEKI_WORKTREE_GRANDPARENT_NAME STREQUAL ".claude")
+        get_filename_component(KISEKI_PROJECT_ROOT "${CMAKE_SOURCE_DIR}/../../.." ABSOLUTE)
+    endif()
     get_filename_component(KISEKI_DEFAULT_IBINPUTSIMULATOR_SOURCE
-        "${CMAKE_SOURCE_DIR}/../原始參考/IbInputSimulator"
+        "${KISEKI_PROJECT_ROOT}/../原始參考/IbInputSimulator"
         ABSOLUTE
     )
     get_filename_component(KISEKI_DEFAULT_VCPKG_ROOT
-        "${CMAKE_SOURCE_DIR}/../../kiseki-vcpkg"
+        "${KISEKI_PROJECT_ROOT}/../../kiseki-vcpkg"
         ABSOLUTE
     )
 
