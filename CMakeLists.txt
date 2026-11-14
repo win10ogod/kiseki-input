@@ -87,6 +87,7 @@ add_library(kiseki_platform STATIC
     src/platform/capture/bitmap_writer.cpp
     src/platform/capture/image_writer.cpp
     src/platform/capture/screenshot.cpp
+    src/platform/input/driver_model.cpp
     src/platform/input/input.cpp
     src/platform/input/sequence_support.cpp
     src/platform/notification/notification.cpp
@@ -168,12 +169,24 @@ target_link_libraries(kiseki PRIVATE kiseki_cli)
 set_target_properties(kiseki PROPERTIES CXX_EXTENSIONS OFF)
 
 if(WIN32 AND KISEKI_BUILD_IBINPUTSIMULATOR)
+    # The IbInputSimulator source and vcpkg tree live next to the main checkout. A git
+    # worktree lives under <main>/.claude/worktrees/<name>, so resolve those defaults against
+    # the main checkout, not the worktree, by collapsing that suffix when present. The main
+    # checkout has no such suffix, so its defaults are unchanged.
+    set(KISEKI_PROJECT_ROOT "${CMAKE_SOURCE_DIR}")
+    get_filename_component(KISEKI_WORKTREE_PARENT "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
+    get_filename_component(KISEKI_WORKTREE_GRANDPARENT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
+    get_filename_component(KISEKI_WORKTREE_PARENT_NAME "${KISEKI_WORKTREE_PARENT}" NAME)
+    get_filename_component(KISEKI_WORKTREE_GRANDPARENT_NAME "${KISEKI_WORKTREE_GRANDPARENT}" NAME)
+    if(KISEKI_WORKTREE_PARENT_NAME STREQUAL "worktrees" AND KISEKI_WORKTREE_GRANDPARENT_NAME STREQUAL ".claude")
+        get_filename_component(KISEKI_PROJECT_ROOT "${CMAKE_SOURCE_DIR}/../../.." ABSOLUTE)
+    endif()
     get_filename_component(KISEKI_DEFAULT_IBINPUTSIMULATOR_SOURCE
-        "${CMAKE_SOURCE_DIR}/../原始參考/IbInputSimulator"
+        "${KISEKI_PROJECT_ROOT}/../原始參考/IbInputSimulator"
         ABSOLUTE
     )
     get_filename_component(KISEKI_DEFAULT_VCPKG_ROOT
-        "${CMAKE_SOURCE_DIR}/../../kiseki-vcpkg"
+        "${KISEKI_PROJECT_ROOT}/../../kiseki-vcpkg"
         ABSOLUTE
     )
 
@@ -261,6 +274,7 @@ if(BUILD_TESTING AND KISEKI_BUILD_TESTING)
         test/webui/config_api_test.cpp
         test/webui/static_assets_test.cpp
         test/smoke_test.cpp
+        test/platform/driver_model_test.cpp
         test/platform/input_sequence_test.cpp
         test/platform/cua_test.cpp
         test/platform/image_writer_test.cpp
@@ -315,6 +329,7 @@ endif()
 if(WIN32 AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
     add_executable(kiseki_windows_input_fault_test
         test/platform/windows_input_fault_test.cpp
+        src/platform/input/driver_model.cpp
         src/platform/input/sequence_support.cpp
         src/platform/target/target.cpp)
     target_compile_features(kiseki_windows_input_fault_test PRIVATE cxx_std_20)
@@ -326,6 +341,7 @@ endif()
 if(APPLE AND BUILD_TESTING AND KISEKI_BUILD_TESTING)
     add_executable(kiseki_macos_input_fault_test
         test/platform/macos_input_fault_test.cpp
+        src/platform/input/driver_model.cpp
         src/platform/input/sequence_support.cpp
         src/platform/input/mac_input.mm
         src/platform/target/target.cpp)

@@ -17,6 +17,76 @@ inline std::atomic<bool> finished{false};
 inline std::atomic<int> failures{0};
 inline std::atomic<bool> dense_drag_released{false};
 inline std::filesystem::path output;
+inline std::string backend = "system";
+
+// Parsed command line. The probe moves the real pointer and sends real keystrokes, so it
+// never runs on a bare or mistaken argument: --help prints usage and sends nothing, the
+// output directory is explicit, and unknown flags are rejected.
+struct ProbeArgs {
+    std::filesystem::path output;
+    bool skip_capture = false;
+    std::string backend = "system";
+    bool help = false;
+    bool error = false;
+    std::string message;
+};
+inline void print_probe_usage(std::ostream &out, const char *exe) {
+    out << "Usage: " << (exe ? exe : "kiseki_native_input_probe")
+        << " <output-dir> [--backend system|driver] [--skip-capture]\n"
+        << "       " << (exe ? exe : "kiseki_native_input_probe") << " --help\n\n"
+        << "Opens its own receiver window and exercises real input, restoring the cursor\n"
+        << "and focus afterward. The output directory is required. --backend driver runs the\n"
+        << "Windows driver-level backend and records its delivery honestly (system default).\n";
+}
+inline ProbeArgs parse_probe_args(int argc, char **argv) {
+    ProbeArgs args;
+    bool has_output = false;
+    for (int index = 1; index < argc; ++index) {
+        const std::string value = argv[index];
+        if (value == "--help" || value == "-h") {
+            args.help = true;
+            return args;
+        }
+        if (value == "--skip-capture") {
+            args.skip_capture = true;
+        } else if (value == "--backend") {
+            if (index + 1 >= argc) {
+                args.error = true;
+                args.message = "--backend requires a value (system or driver)";
+                return args;
+            }
+            args.backend = argv[++index];
+            if (args.backend != "system" && args.backend != "driver") {
+                args.error = true;
+                args.message = "unknown backend '" + args.backend + "'; use system or driver";
+                return args;
+            }
+        } else if (value.rfind("--backend=", 0) == 0) {
+            args.backend = value.substr(10);
+            if (args.backend != "system" && args.backend != "driver") {
+                args.error = true;
+                args.message = "unknown backend '" + args.backend + "'; use system or driver";
+                return args;
+            }
+        } else if (!value.empty() && value[0] == '-') {
+            args.error = true;
+            args.message = "unknown option '" + value + "'";
+            return args;
+        } else if (!has_output) {
+            args.output = value;
+            has_output = true;
+        } else {
+            args.error = true;
+            args.message = "unexpected extra argument '" + value + "'";
+            return args;
+        }
+    }
+    if (!has_output) {
+        args.error = true;
+        args.message = "an explicit output directory is required";
+    }
+    return args;
+}
 inline void wait(int ms) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }

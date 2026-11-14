@@ -98,6 +98,24 @@ TEST_CASE("invalid linux input driver is rejected") {
     REQUIRE(result.has_issue("input.linuxDriver"));
 }
 
+TEST_CASE("windows driver argument is only valid for DD or MouClassInputInjection") {
+    auto config = default_config();
+    config.input.windows_driver = "Razer";
+    config.input.windows_driver_argument = "4321";
+    REQUIRE(validate_config(config).has_issue("input.windowsDriverArgument"));
+
+    config.input.windows_driver = "DD";
+    config.input.windows_driver_argument = "C:/tools/DD64.dll";
+    REQUIRE_FALSE(validate_config(config).has_issue("input.windowsDriverArgument"));
+
+    config.input.windows_driver = "MouClassInputInjection";
+    config.input.windows_driver_argument = "4321";
+    REQUIRE_FALSE(validate_config(config).has_issue("input.windowsDriverArgument"));
+
+    config.input.windows_driver_argument = "not-a-pid";
+    REQUIRE(validate_config(config).has_issue("input.windowsDriverArgument"));
+}
+
 TEST_CASE("windows input driver validation message lists accepted values") {
     auto config = default_config();
     config.input.windows_driver = "Unknown";

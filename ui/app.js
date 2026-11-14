@@ -69,6 +69,7 @@ function populate(nextConfig) {
   setField("heartbeat.message", config.heartbeat.message);
   setField("input.defaultBackend", config.input.defaultBackend);
   setField("input.windowsDriver", config.input.windowsDriver);
+  setField("input.windowsDriverArgument", config.input.windowsDriverArgument);
   setField("input.linuxDriver", config.input.linuxDriver);
   setField("input.backgroundInputEnabled", config.input.backgroundInputEnabled);
   setField("screenshot.defaultOutputDirectory", config.screenshot.defaultOutputDirectory);
@@ -94,6 +95,7 @@ function collect() {
     input: {
       defaultBackend: readField("input.defaultBackend"),
       windowsDriver: readField("input.windowsDriver"),
+      windowsDriverArgument: readField("input.windowsDriverArgument"),
       linuxDriver: readField("input.linuxDriver"),
       backgroundInputEnabled: readField("input.backgroundInputEnabled")
     },

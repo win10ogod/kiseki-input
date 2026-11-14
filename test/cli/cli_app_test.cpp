@@ -218,6 +218,37 @@ TEST_CASE("capabilities prints foundation capability json") {
     REQUIRE(result.err.empty());
 }
 
+TEST_CASE("capabilities reports the driver backend type and verification state") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    const auto result = run_cli({"capabilities"}, path);
+    const auto json = nlohmann::json::parse(result.out);
+    const auto &backend = json.at("input").at("driverBackend");
+
+    REQUIRE(result.code == 0);
+    REQUIRE(backend.at("requestedType").is_string());
+    REQUIRE(backend.at("selectedType").is_string());
+    REQUIRE(backend.at("state").is_string());
+    REQUIRE(backend.at("loaded").is_boolean());
+    REQUIRE(backend.at("verified").is_boolean());
+    // Diagnostics never claim verification without proof; printing capabilities must not run
+    // the cursor-moving self-test, so verification stays unattempted here.
+    REQUIRE(backend.at("verifyAttempted").get<bool>() == false);
+    REQUIRE(backend.at("verified").get<bool>() == false);
+}
+
+TEST_CASE("invalid driver type is rejected before any input is sent") {
+    const TempConfigDirectory temp;
+    const auto path = temp.file("config.json");
+
+    const auto result =
+        run_cli({"--driver-type", "turbo", "input", "mouse", "--backend", "driver", "--dx", "0", "--dy", "0"}, path);
+
+    REQUIRE(result.code == 2);
+    REQUIRE(result.err.find("turbo") != std::string::npos);
+}
+
 TEST_CASE("doctor prints diagnostic text with foundation limitations") {
     const TempConfigDirectory temp;
     const auto path = temp.file("config.json");

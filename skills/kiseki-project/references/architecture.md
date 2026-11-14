@@ -57,7 +57,9 @@ Keep platform-specific code inside `#ifdef _WIN32` or `#ifdef KISEKI_HAS_X11` bl
 Windows:
 
 - Link new Win32 dependencies in `CMakeLists.txt`.
-- Keep IbInputSimulator optional and runtime-loaded.
+- Keep IbInputSimulator optional and runtime-loaded, routed through `IbSendInput` (full `INPUT` arrays) so the driver and system paths share event construction.
+- The `driver` backend must prove delivery before reporting success and must never fling the cursor: the self-test sends small bounded *relative* probes (never an absolute command) and requires bounded, direction-correct, repeatable motion; a driver is `silent`/`unfaithful`/`deferred` otherwise. Absolute positioning uses bounded relative steps only (tiered so acceleration cannot overshoot), reading `GetCursorPos` to the exact pixel. The verdict is cached across invocations (type, DLL identity, logon session) so only the first use probes; `--driver-reverify` re-runs it. `auto` uses the driver only when verified, falls back to `system` for an idempotent absolute move that cannot converge, and states the backend used; explicit `driver` fails with a precise error. Skip the probe while a button or key is held. Where a driver type cannot represent an event faithfully, fail explicitly instead of sending a wrong one.
+- Driver type/argument resolve through flag (`--driver-type`/`--driver-arg`), then `KISEKI_DRIVER`/`KISEKI_DRIVER_ARG`, then config (`input.windowsDriver`/`input.windowsDriverArgument`); keep that logic in `src/platform/input/driver_model.*` and report the selected type and verification state in `capabilities`/`doctor`.
 - Preserve `SendInput` fallback when possible.
 - Do not assume elevated privileges or foreground focus unless the command explicitly requires it.
 

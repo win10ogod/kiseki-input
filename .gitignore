@@ -1,6 +1,7 @@
 .worktrees/
 build/
 build-wsl/
+build-ib/
 artifacts/
 __pycache__/
 *.pyc

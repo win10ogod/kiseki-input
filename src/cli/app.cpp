@@ -5,7 +5,9 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <initializer_list>
 #include <limits>
@@ -2182,6 +2184,61 @@ int run(
     CLI::App app{"Kiseki Input"};
     app.set_version_flag("--version", kiseki::core::version_text());
     app.add_option("--config", config_path_override, "Config file path");
+    std::string driver_type_flag;
+    std::string driver_arg_flag;
+    auto *driver_type_option = app.add_option(
+        "--driver-type", driver_type_flag,
+        "Windows driver-level backend type: " + kiseki::platform::input::driver::type_choices());
+    auto *driver_arg_option =
+        app.add_option("--driver-arg", driver_arg_flag, "DD DLL path or MouClassInputInjection process id");
+    bool driver_reverify_flag = false;
+    app.add_flag("--driver-reverify", driver_reverify_flag,
+                 "Re-run the driver delivery self-test and refresh the cached result");
+    // Resolve driver settings from flags > KISEKI_DRIVER[_ARG] env > config, then hand the
+    // result to the input layer. Called before any command that selects an input backend.
+    // Records a resolution error (bad type name or argument) in driver_settings_error.
+    std::string driver_settings_error;
+    const auto apply_driver_settings = [&]() {
+        namespace driver = kiseki::platform::input::driver;
+        driver::SettingsLayers layers;
+        if (driver_type_option->count() > 0)
+            layers.cli_type = driver_type_flag;
+        if (driver_arg_option->count() > 0)
+            layers.cli_argument = driver_arg_flag;
+        if (const char *env_type = std::getenv("KISEKI_DRIVER"))
+            layers.env_type = env_type;
+        if (const char *env_argument = std::getenv("KISEKI_DRIVER_ARG"))
+            layers.env_argument = env_argument;
+        const bool config_exists = std::filesystem::exists(active_config_path());
+        const auto loaded = make_store().load_or_default();
+        if (!loaded.ok)
+            layers.config_error = loaded.error;
+        else {
+            layers.config_present = config_exists;
+            layers.config_type = loaded.config.input.windows_driver;
+            layers.config_argument = loaded.config.input.windows_driver_argument;
+        }
+        auto settings = driver::resolve_settings(layers);
+        settings.reverify = driver_reverify_flag;
+        // Persist the delivery verdict next to the config so the moving self-test runs once
+        // per driver type / DLL / logon session instead of on every (single-shot) invocation.
+        const auto directory = active_config_path().parent_path();
+        const auto cache_file = (directory.empty() ? std::filesystem::path{"."} : directory) / "driver-verify.txt";
+        settings.cache_path = cache_file.string();
+        driver_settings_error = settings.error;
+        kiseki::platform::input::set_driver_settings(settings);
+    };
+    // A bad --driver-type/--driver-arg is a usage error on every platform: reject it before
+    // any input is sent, not only once the Windows driver backend is reached.
+    const auto prepare_input_driver = [&]() {
+        apply_driver_settings();
+        if (!driver_settings_error.empty()) {
+            io.err << driver_settings_error << '\n';
+            exit_code = 2;
+            return false;
+        }
+        return true;
+    };
     app.require_subcommand(1);
 
     CLI::App* config = app.add_subcommand("config", "Configuration commands");
@@ -2380,6 +2437,8 @@ int run(
     input_key->add_option("--hold-ms", key_options.hold_ms, "Key tap hold duration")->check(CLI::NonNegativeNumber);
     input_key->callback([&]() {
         kiseki::platform::input::InputCancellationScope cancellation;
+        if (!prepare_input_driver())
+            return;
         if (!dependencies.input_key) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -2394,6 +2453,8 @@ int run(
     input_combo->add_option("--hold-ms", combo_options.hold_ms, "Chord hold duration")->check(CLI::NonNegativeNumber);
     input_combo->callback([&]() {
         kiseki::platform::input::InputCancellationScope cancellation;
+        if (!prepare_input_driver())
+            return;
         if (!dependencies.input_combo) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -2445,6 +2506,8 @@ int run(
     input_mouse->add_option("--hwheel", mouse_options.hwheel, "Horizontal wheel delta (positive right)");
     input_mouse->callback([&]() {
         kiseki::platform::input::InputCancellationScope cancellation;
+        if (!prepare_input_driver())
+            return;
         if (!dependencies.input_mouse) {
             io.err << "input backend is not configured\n";
             exit_code = 2;
@@ -2479,6 +2542,8 @@ int run(
     input_drag->add_option("--modifiers", drag_options.modifiers, "Keys held during the drag, joined by +");
     input_drag->callback([&]() {
         kiseki::platform::input::InputCancellationScope cancellation;
+        if (!prepare_input_driver())
+            return;
         if (!dependencies.input_drag) {
             io.err << "input drag backend is not configured\n";
             exit_code = 2;
@@ -3368,7 +3433,11 @@ int run(
     auto *input_sequence =
         input->add_subcommand("sequence", "Run a JSON sequence of keyboard, mouse, and timed steps in one process");
     input_sequence->add_option("--file", macro_options.path, "Sequence JSON file")->required();
-    input_sequence->callback([&]() { exit_code = run_macro_command(macro_options, dependencies, io); });
+    input_sequence->callback([&]() {
+        if (!prepare_input_driver())
+            return;
+        exit_code = run_macro_command(macro_options, dependencies, io);
+    });
 
     auto* macro = app.add_subcommand("macro", "Macro commands");
     macro->require_subcommand(1);
@@ -3381,6 +3450,8 @@ int run(
     auto* macro_run = macro->add_subcommand("run", "Run a JSON macro file");
     macro_run->add_option("--file", macro_options.path, "Macro JSON file")->required();
     macro_run->callback([&]() {
+        if (!prepare_input_driver())
+            return;
         exit_code = run_macro_command(macro_options, dependencies, io);
     });
 
@@ -3480,10 +3551,26 @@ int run(
     });
 
     app.add_subcommand("capabilities", "Print foundation capabilities")->callback([&]() {
-        io.out << to_json(kiseki::platform::runtime_capabilities()).dump(2) << '\n';
+        apply_driver_settings();
+        auto json = to_json(kiseki::platform::runtime_capabilities());
+        const auto status = kiseki::platform::input::driver_status();
+        json["input"]["driverBackend"] = {
+            {"requestedType", status.requested_type},
+            {"selectedType", status.selected_type},
+            {"argument", status.argument},
+            {"source", status.source},
+            {"loaded", status.loaded},
+            {"initialized", status.initialized},
+            {"verified", status.verified},
+            {"verifyAttempted", status.verify_attempted},
+            {"state", status.state},
+            {"detail", status.detail},
+        };
+        io.out << json.dump(2) << '\n';
     });
 
     app.add_subcommand("doctor", "Print diagnostics")->callback([&]() {
+        apply_driver_settings();
         io.out << "Kiseki Input doctor\n";
         io.out << "Version: " << kiseki::core::version() << '\n';
         io.out << "Config path: " << active_config_path().string() << '\n';
@@ -3496,8 +3583,19 @@ int run(
         }
 
         const auto capabilities = kiseki::platform::runtime_capabilities();
+        const auto driver = kiseki::platform::input::driver_status();
         io.out << "Capabilities:\n";
-        io.out << "  Input driver backend: " << availability(capabilities.input.driver) << '\n';
+        io.out << "  Input driver backend: " << availability(capabilities.input.driver);
+        if (driver.loaded) {
+            io.out << " (requested " << driver.requested_type << ", selected " << driver.selected_type << ", "
+                   << driver.state;
+            if (driver.source != "default")
+                io.out << ", from " << driver.source;
+            io.out << ")";
+        }
+        io.out << '\n';
+        if (driver.loaded && !driver.detail.empty())
+            io.out << "    Driver detail: " << driver.detail << '\n';
         io.out << "  System input backend: " << availability(capabilities.input.system) << '\n';
         io.out << "  Background-window input: " << availability(capabilities.input.background_window) << '\n';
         io.out << "  Desktop screenshot: " << availability(capabilities.capture.desktop) << '\n';

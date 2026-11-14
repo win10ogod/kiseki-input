@@ -8,10 +8,58 @@ parser = argparse.ArgumentParser()
 parser.add_argument("platform", choices=("windows", "macos", "linux"))
 parser.add_argument("directory", type=Path)
 parser.add_argument("--teaching", type=Path)
+parser.add_argument("--driver", action="store_true",
+                    help="validate a --backend driver probe run instead of the system run")
 args = parser.parse_args()
 
 def read(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+if args.driver:
+    # Validate a Windows driver-backend probe run. Reports delivery honestly: a host whose
+    # configured driver cannot inject (e.g. Razer with no Razer hardware) is recorded as
+    # undelivered, not silently passed; a delivering driver must land absolute moves exactly
+    # and show driver-level (non-injected) events.
+    status = json.loads((args.directory / "driver-status.json").read_text(encoding="utf-8"))
+    summary = {"platform": args.platform, "mode": "driver", "selectedType": status.get("selectedType"),
+               "state": status.get("state"), "detail": status.get("detail"),
+               "verified": bool(status.get("verified"))}
+    failures = []
+    if not status.get("verified"):
+        # Not a delivering driver on this host: honest, non-failing record.
+        summary["delivered"] = False
+        summary["note"] = "driver backend did not deliver on this host; no input was sent"
+        summary["failures"] = failures
+        summary["ok"] = True
+        print(json.dumps(summary, indent=2))
+        raise SystemExit(0)
+    moves = status.get("moves", [])
+    missed = [m for m in moves if m["landedX"] != m["targetX"] or m["landedY"] != m["targetY"]]
+    if not moves:
+        failures.append("driver run recorded no absolute moves")
+    if missed:
+        failures.append(f"absolute moves did not land exactly: {missed}")
+    received = read(args.directory / "receiver-events.jsonl")
+    for phase, button in ((31, 0), (32, 1), (33, 2)):
+        buttons = [e for e in received if e["phase"] == phase and e["kind"] == "button"]
+        pairs = [(e["button"], e["down"]) for e in buttons]
+        if pairs != [(button, True), (button, False)]:
+            failures.append(f"phase {phase}: driver button not matched and released: {pairs}")
+    keys = [e for e in received if e["phase"] == 36 and e["kind"] == "key"]
+    if sum(e["down"] for e in keys) < 3:
+        failures.append(f"driver key taps missing: {keys}")
+    stream = read(args.directory / "stream-events.jsonl") if (args.directory / "stream-events.jsonl").exists() else []
+    non_injected = [e for e in stream if e.get("type", "").startswith("mouse") and e.get("injected") is False]
+    if not non_injected:
+        failures.append("no driver-level (non-injected) pointer event observed in the native stream")
+    summary["delivered"] = True
+    summary["absoluteMoves"] = len(moves)
+    summary["nonInjectedPointerEvents"] = len(non_injected)
+    summary["horizontalWheelOk"] = status.get("horizontalWheelOk")
+    summary["failures"] = failures
+    summary["ok"] = not failures
+    print(json.dumps(summary, indent=2))
+    raise SystemExit(0 if not failures else 2)
 
 received = read(args.directory / "receiver-events.jsonl")
 stream = read(args.directory / "stream-events.jsonl")

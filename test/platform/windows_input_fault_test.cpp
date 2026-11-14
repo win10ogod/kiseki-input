@@ -108,6 +108,19 @@ int main() {
         require(sent.size() == 1 && (sent.front().mi.dwFlags & MOUSEEVENTF_MOVE_NOCOALESCE),
                 "explicit path points must not use default WM_MOUSEMOVE coalescing");
     }
+
+    // Diagnostics must describe the driver without ever claiming unproven delivery and
+    // without running the cursor-moving self-test (this is unattended CTest). driver_status()
+    // only loads the DLL and opens a device; whatever the host has, it must never report
+    // verified, and the state must be one of the init-only values.
+    {
+        const auto status = driver_status();
+        require(!status.verified && !status.verify_attempted,
+                "diagnostics must not verify delivery (no self-test, no cursor movement)");
+        require(status.state == "unavailable" || status.state == "misconfigured" ||
+                    status.state == "init-failed" || status.state == "unverified",
+                "driver status before first input must be an init-only state, never verified");
+    }
     std::cout << "Win32 boundary failures=" << failures << '\n';
     return failures ? 2 : 0;
 }

@@ -7,7 +7,7 @@ Use the selected executable with `<family> --help` and the concrete subcommand's
 | Version, modes, detected backends | `--version` (build commit; `--version --json`), `modes --json`, `capabilities`, `doctor` |
 | Find windows / child receivers | `target list`, `target inspect` |
 | Structured controls/text | `observe ui` with `auto`, `window-tree`, `uia`, or `ax` |
-| Current-session input | `input key`, `combo`, `text`, `mouse`, `drag`, `sequence` |
+| Current-session input | `input key`, `combo`, `text`, `mouse`, `drag`, `sequence`; `--backend auto\|system\|driver`, global `--driver-type`/`--driver-arg` select and `--driver-reverify` re-checks the Windows driver |
 | Validate/replay a JSON sequence | `macro validate`, `macro run` |
 | Current-session capture | `screenshot desktop`, `window`, `burst`, `window-burst` |
 | Selected-window messages/capture | `background window text`, `key`, `mouse`, `drag`, `screenshot` |

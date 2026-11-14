@@ -7,9 +7,30 @@
 #include <set>
 
 #include "platform/result.hpp"
+#include "platform/input/driver_model.hpp"
 #include "platform/target/target.hpp"
 
 namespace kiseki::platform::input {
+
+// Human-readable state of the Windows driver-level backend for capabilities/doctor output.
+struct DriverStatus {
+    std::string requested_type; // type the configuration asked for (e.g. any, razer)
+    std::string selected_type;  // type actually initialized (any resolves to a concrete one)
+    std::string argument;       // dd DLL path or mouclass process id, when set
+    std::string source = "default"; // cli, env, config, or default
+    bool loaded = false;        // IbInputSimulator.dll present with expected exports
+    bool initialized = false;   // a driver type was opened
+    bool verified = false;      // delivery was proven this process
+    bool verify_attempted = false;
+    std::string state = "unavailable"; // unavailable, misconfigured, init-failed, unverified, undelivered, verified
+    std::string detail;
+};
+
+// Override the driver settings for this thread (CLI resolves config+env+flags and sets
+// this before input runs). Without an override the backend reads KISEKI_DRIVER[_ARG].
+void set_driver_settings(const driver::Settings &settings);
+// Reports the selected driver type and verification state; triggers lazy verification.
+DriverStatus driver_status();
 
 struct MouseOptions {
     int dx;
